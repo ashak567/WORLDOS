@@ -1,0 +1,363 @@
+# WORLDOS Engine Registry
+
+This registry is the durable record of all 26 first-class engine boundaries within WORLDOS, governed by the WORLDOS Architectural Constitution (`WORLDOS_ANTIGRAVITY_MASTER_PROMPT_LIBRARY_V2.md`).
+
+---
+
+## Status Classification
+- **`SPECIFIED`**: Engine boundary, inputs, outputs, and contracts documented; no code yet.
+- **`INTERFACE_ONLY`**: Abstract base classes or Pydantic/Protocol interfaces defined; no concrete implementation.
+- **`PARTIALLY_IMPLEMENTED`**: Initial implementation exists but lacks full contract coverage or automated tests.
+- **`IMPLEMENTED`**: Fully functional implementation conforming to architectural contracts.
+- **`VERIFIED`**: Proven end-to-end with container-backed integration tests and deterministic invariants.
+- **`DEPRECATED`**: Obsolete or superseded implementation.
+
+---
+
+## Core Engines (1 – 21)
+
+### 1. World Model Engine
+- **Purpose**: Authoritative entity, observation, event, relationship, and geometry representation.
+- **Status**: `VERIFIED`
+- **Inputs**: Validated `WorldBundle` payloads from Ingestion / Fusion.
+- **Outputs**: Canonical `Entity`, `Observation`, `Event`, `Relationship`, `Geometry`, `TimeInterval`.
+- **Dependencies**: PostgreSQL 16, PostGIS 3.4.
+- **Persistence**: Relational tables (`entities`, `entity_identifiers`, `geometries`, `observations`, `events`, `relationships`, `time_intervals`).
+- **Interface / API**: `backend/app/domain.py` Pydantic models; `WorldRepository` methods in `backend/app/storage.py`.
+- **Evidence Requirements**: Every persisted state must reference a registered `source_id` and immutable `evidence_id`.
+- **Test Contract**: `backend/tests/test_container_integration.py` validates CRUD and relational integrity.
+- **Current Implementation**: Fully operational in Docker container stack on port 5432.
+- **Next Milestone**: Support for versioned entity attribute histories and UUIDv7 indexing.
+
+### 2. Source Intelligence / Source Registry Engine
+- **Purpose**: Authoritative catalog of registered external data providers, licenses, publisher identities, and refresh policies.
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: Source registration metadata (slug, name, publisher, license, homepage, refresh policy).
+- **Outputs**: Unique `source_id` (UUID), registered metadata record.
+- **Dependencies**: PostGIS `sources` table.
+- **Persistence**: `sources` table in PostgreSQL.
+- **Interface / API**: `Source` model; `WorldRepository._connection()`.
+- **Evidence Requirements**: Immutable record of source registration.
+- **Test Contract**: Verified via adapter integration tests for World Bank, Natural Earth, USGS.
+- **Current Implementation**: `sources` table tracks registered slugs (`world-bank`, `natural-earth`, `usgs-earthquakes`).
+- **Next Milestone**: Add ingestion run lifecycle tracking, rate-limit policies, and source health metadata.
+
+### 3. Data Ingestion Engine
+- **Purpose**: Strongly-typed adapters that fetch, normalize, and hash external payloads into atomic `WorldBundle` units.
+- **Status**: `IMPLEMENTED`
+- **Inputs**: Raw external data (HTTP JSON, GeoJSON, CSV, REST APIs).
+- **Outputs**: Validated `WorldBundle` structures ready for atomic persistence.
+- **Dependencies**: `httpx`, `pydantic`, `WorldRepository`.
+- **Persistence**: PostGIS operational tables via atomic transactions.
+- **Interface / API**: Source adapter modules in `backend/app/ingestion/`.
+- **Evidence Requirements**: Every ingested item must produce an immutable `Evidence` record with a SHA-256 payload hash.
+- **Test Contract**: `test_world_bank_vertical_slice.py` and `test_container_integration.py`.
+- **Current Implementation**: World Bank (`SP.POP.TOTL`), Natural Earth Admin 0 Boundaries, USGS Earthquake Hazards.
+- **Next Milestone**: Standardize on `BaseSourceAdapter` abstract base class with backoff and retry decorators.
+
+### 4. Data Fusion / Entity Resolution Engine
+- **Purpose**: Cross-source entity reconciliation prioritizing publisher identifiers, strictly prohibiting name-only auto-merging.
+- **Status**: `VERIFIED`
+- **Inputs**: External identifiers, entity candidate names, spatial geometries.
+- **Outputs**: Canonical entity ID matching existing entities or creating a new isolated entity.
+- **Dependencies**: PostGIS `entity_identifiers` table, B-Tree index on `(scheme, value)`.
+- **Persistence**: `entity_identifiers` mapping table.
+- **Interface / API**: `backend/app/fusion.py`, `WorldRepository.ingest()`.
+- **Evidence Requirements**: Source identity scheme, value, and confidence must accompany resolution.
+- **Test Contract**: False-merge prevention verified in `test_container_integration.py::test_false_merge_prevented_without_matching_publisher_identifier`.
+- **Current Implementation**: Resolves ISO-3 codes across World Bank and Natural Earth; isolates USGS events.
+- **Next Milestone**: Implement an explicit `review_queue` table for uncertain matches requiring human review.
+
+### 5. Evidence & Provenance Engine
+- **Purpose**: Complete audit trail tracking raw data locators, retrieval timestamps, cryptographic hashes, pipeline versions, and transformation parameters.
+- **Status**: `VERIFIED`
+- **Inputs**: Ingestion metadata, raw content bytes.
+- **Outputs**: `evidence_id`, `provenance_id` foreign keys attached to all claims.
+- **Dependencies**: PostGIS `evidence` and `provenance` tables.
+- **Persistence**: Relational foreign-keyed tables with `ON DELETE RESTRICT`.
+- **Interface / API**: `Evidence` and `Provenance` models in `backend/app/domain.py`.
+- **Evidence Requirements**: Non-null `source_id`, `locator`, and `retrieved_at`.
+- **Test Contract**: Provenance traversal verified in `test_world_bank_vertical_slice.py`.
+- **Current Implementation**: Operational; all observations, events, and relationships link to evidence.
+- **Next Milestone**: Add cryptographic signature verification for high-integrity public feeds.
+
+### 6. Data Quality & Freshness Engine
+- **Purpose**: Track observation latency, completeness, schema validity, and source degradation.
+- **Status**: `SPECIFIED`
+- **Inputs**: Observation timestamps, ingestion attempt logs, schema validation metrics.
+- **Outputs**: Freshness scores, quality alerts, degradation indicators.
+- **Dependencies**: PostGIS, Source Registry.
+- **Persistence**: Planned `source_runs` and `data_quality_metrics` tables.
+- **Interface / API**: Planned `GET /api/v1/sources/{source_slug}/health`.
+- **Evidence Requirements**: Quality assessments must cite observed run statistics.
+- **Test Contract**: Deterministic scoring based on `now() - observed_at`.
+- **Current Implementation**: Conceptual; basic timestamps recorded.
+- **Next Milestone**: Implement ingestion run log and source freshness endpoint.
+
+### 7. Spatial Intelligence Engine
+- **Purpose**: Deterministic geospatial operations, topological containment, proximity joins, and CRS normalization in WGS 84 (SRID 4326).
+- **Status**: `VERIFIED`
+- **Inputs**: GeoJSON, coordinates, geometries, distance radii.
+- **Outputs**: Containing entities, intersecting boundaries, nearest neighbors.
+- **Dependencies**: PostGIS 3.4, GEOS, Shapely.
+- **Persistence**: `geometries` table with GiST indexing.
+- **Interface / API**: `WorldRepository.entities_containing()`, `WorldRepository.entities_within()`, `GET /api/v1/spatial/containing`, `GET /api/v1/spatial/nearest`.
+- **Evidence Requirements**: Every geometry must cite source, confidence, and validity interval.
+- **Test Contract**: Verified in `test_container_integration.py::test_postgis_containment_and_distance_queries`.
+- **Current Implementation**: Fully operational in container PostGIS.
+- **Next Milestone**: Add polygon clipping, antimeridian normalization, and buffered spatial cluster queries.
+
+### 8. Temporal Intelligence Engine
+- **Purpose**: Bi-temporal and valid-time modeling with precision tiers (`instant`, `day`, `month`, `year`).
+- **Status**: `IMPLEMENTED`
+- **Inputs**: Start timestamps, optional end timestamps, precision strings.
+- **Outputs**: Validated `TimeInterval` records, temporal slice filters.
+- **Dependencies**: PostgreSQL timestamp with time zone (`timestamptz`).
+- **Persistence**: `time_intervals` table in PostGIS.
+- **Interface / API**: `TimeInterval` model; `ordered` model validator; SQL range clauses in `WorldRepository`.
+- **Evidence Requirements**: Start timestamp cannot exceed end timestamp.
+- **Test Contract**: Interval validation tested in `test_world_bank_vertical_slice.py`.
+- **Current Implementation**: Operational across observations, events, and relationships.
+- **Next Milestone**: Add GiST temporal range indexing (`tstzrange`) for historical timeline replay.
+
+### 9. Relationship / Knowledge Graph Engine
+- **Purpose**: Directed entity-to-entity and event-to-entity topological and semantic graphs without a heavyweight graph DB.
+- **Status**: `IMPLEMENTED`
+- **Inputs**: `subject_entity_id`, `predicate`, `object_entity_id`, time interval, evidence.
+- **Outputs**: Directed graph edges, path traversal, connected components.
+- **Dependencies**: PostGIS `relationships` table.
+- **Persistence**: Relational `relationships` table with B-tree indexes on subject and object.
+- **Interface / API**: `Relationship` model; `WorldRepository.relationships()`.
+- **Evidence Requirements**: Every relationship must cite an `evidence_id` and confidence score.
+- **Test Contract**: Spatial relationship `occurred_in` verified in `test_container_integration.py`.
+- **Current Implementation**: Operational; links USGS earthquake events to containing country entities.
+- **Next Milestone**: Add recursive CTE graph traversal queries for multi-hop relationship exploration.
+
+### 10. Context Engine
+- **Purpose**: Assemble a coherent, evidence-backed spatio-temporal slice (entities, observations, events, relationships) for a given scope.
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: `entity_id`, bounding box, or time window.
+- **Outputs**: Aggregated JSON world context bundle citing all evidence IDs.
+- **Dependencies**: PostGIS, `WorldRepository`.
+- **Persistence**: In-memory ephemeral view over relational tables.
+- **Interface / API**: `GET /api/v1/context?entity_id=...` in `backend/app/main.py`.
+- **Evidence Requirements**: Context must preserve evidence references for every included claim.
+- **Test Contract**: Context endpoint verified in `test_container_integration.py`.
+- **Current Implementation**: Operational for entity-centric context slices.
+- **Next Milestone**: Expand context assembly to multi-entity bounding box and temporal replay scopes.
+
+### 11. Deterministic Analytics Engine
+- **Purpose**: High-performance columnar metrics, growth rates, and time-series rollups over Parquet snapshots.
+- **Status**: `VERIFIED`
+- **Inputs**: Operational PostGIS data, Parquet snapshot files.
+- **Outputs**: Summary statistics, percentage changes, analytical dataframes.
+- **Dependencies**: DuckDB, `pytz`, Parquet.
+- **Persistence**: Parquet snapshot files in `data/snapshots/`.
+- **Interface / API**: `backend/app/analytics.py`, `backend/app/export.py`, `GET /api/v1/analytics/population-change`.
+- **Evidence Requirements**: Read-only replica queries; zero mutation of operational world state.
+- **Test Contract**: Verified in `test_container_integration.py::test_duckdb_snapshot_query`.
+- **Current Implementation**: Operational; DuckDB executes analytical rollups without PostGIS locks.
+- **Next Milestone**: Automated snapshot rotation and partitioned Parquet datasets by year and entity type.
+
+### 12. Constraint Engine
+- **Purpose**: Validate physical invariants, spatial boundaries, and logical rules before accepting hypotheses.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: Proposed scenario modifications, constraint definitions.
+- **Outputs**: List of constraint violation strings.
+- **Dependencies**: `interfaces.py`.
+- **Persistence**: Ephemeral.
+- **Interface / API**: `ScenarioEngine.validate_constraints(scenario: dict) -> list[str]`.
+- **Evidence Requirements**: Violations must cite physical or regulatory limits.
+- **Test Contract**: Pending implementation.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Implement basic boundary constraints (e.g. population cannot be negative, coordinates must be in bounds).
+
+### 13. Decision Support Engine
+- **Purpose**: Multi-criteria trade-off ranking based on deterministic evidence and scenario constraints.
+- **Status**: `SPECIFIED`
+- **Inputs**: Objective functions, weighted criteria, candidate entities/actions.
+- **Outputs**: Ranked decisions with sensitivity analysis.
+- **Dependencies**: Deterministic Analytics, Constraint Engine.
+- **Persistence**: Ephemeral / query response.
+- **Interface / API**: Planned `backend/app/engines/decision.py`.
+- **Evidence Requirements**: Every score component must link to underlying observations.
+- **Test Contract**: Deterministic scoring invariants.
+- **Current Implementation**: Conceptual.
+- **Next Milestone**: Define decision evaluation schema.
+
+### 14. Event / Alert Engine
+- **Purpose**: Ingestion, spatio-temporal indexing, and condition-based alerting on real-world events (e.g. earthquakes, weather, alerts).
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: Event payloads, threshold criteria.
+- **Outputs**: Sourced `Event` records, triggered alerts.
+- **Dependencies**: PostGIS `events` table.
+- **Persistence**: `events` table in PostgreSQL.
+- **Interface / API**: `Event` model; `WorldRepository.events()`; `GET /api/v1/events`.
+- **Evidence Requirements**: Must cite publisher event ID, time interval, and location.
+- **Test Contract**: USGS earthquake event ingestion tested in `test_container_integration.py`.
+- **Current Implementation**: Ingests real USGS events; exposes REST query endpoint.
+- **Next Milestone**: Implement threshold alerting rules (e.g. magnitude >= 6.0 within country X).
+
+### 15. Anomaly Detection Engine
+- **Purpose**: Deterministic statistical outlier and change-point detection on historical observation series.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: Time-series observation values (`list[float]`), significance thresholds.
+- **Outputs**: Indices of anomalous observations (`list[int]`).
+- **Dependencies**: `interfaces.py`, `numpy`/`duckdb`.
+- **Persistence**: Ephemeral / derived observation tags.
+- **Interface / API**: `AnomalyEngine.detect(series: list[float]) -> list[int]`.
+- **Evidence Requirements**: Detected anomalies must cite the underlying series evidence IDs.
+- **Test Contract**: Verification against synthetic standard normal distribution with injected outliers.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Implement z-score and IQR-based anomaly detection over DuckDB series.
+
+### 16. Scenario Engine
+- **Purpose**: Sandboxed scenario definitions allowing hypothetical state changes without contaminating operational truth.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: Baseline world state, scenario delta parameters.
+- **Outputs**: Sandboxed scenario state tagged `SIMULATED`.
+- **Dependencies**: `interfaces.py`.
+- **Persistence**: In-memory or isolated scenario database branch.
+- **Interface / API**: `ScenarioEngine.run(scenario: dict) -> dict`.
+- **Evidence Requirements**: All outputs must carry epistemic tier `SIMULATED`.
+- **Test Contract**: Verify operational tables are unmodified after scenario execution.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Implement delta overlay pattern over DuckDB analytical snapshots.
+
+### 17. Simulation Engine
+- **Purpose**: Multi-step forward state evolution according to physical and heuristic models.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: Scenario state, time step count, transition rules.
+- **Outputs**: Time-stamped trajectory of simulated entity states.
+- **Dependencies**: `interfaces.py`.
+- **Persistence**: Sandboxed simulation run logs.
+- **Interface / API**: `SimulationEngine.run(scenario: dict) -> dict`.
+- **Evidence Requirements**: All generated values tagged `SIMULATED`.
+- **Test Contract**: Conservation of mass/population invariants during simulation.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Define state transition interface.
+
+### 18. Prediction Engine
+- **Purpose**: Forward-looking projection beyond observed time horizons with explicit assumptions.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: Target entity/metric, historical observation series, evidence IDs.
+- **Outputs**: Predicted values tagged `PREDICTED`, confidence intervals, model assumptions.
+- **Dependencies**: `interfaces.py`, Deterministic Analytics.
+- **Persistence**: Derived observation records with truth class `PREDICTED`.
+- **Interface / API**: `PredictionEngine.predict(target: str, evidence_ids: list[str]) -> dict`.
+- **Evidence Requirements**: Must cite all input evidence IDs and model version.
+- **Test Contract**: Prediction output must never be tagged `OBSERVED`.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Implement linear and polynomial trend extrapolation citing evidence.
+
+### 19. Multimodal Evidence Engine
+- **Purpose**: Ingestion, hashing, and retrieval of raster satellite imagery, documents, and sensory media.
+- **Status**: `SPECIFIED`
+- **Inputs**: Image/document URLs, binary blobs.
+- **Outputs**: Content-addressed storage hashes, bounding coordinates, acquisition timestamps.
+- **Dependencies**: Object storage (S3/GCS/local filesystem), `Evidence` table.
+- **Persistence**: `evidence` table with binary storage references.
+- **Interface / API**: Planned `backend/app/engines/multimodal.py`.
+- **Evidence Requirements**: SHA-256 cryptographic hash of raw media.
+- **Test Contract**: Hash verification on media upload.
+- **Current Implementation**: Locator strings stored in `evidence.locator`.
+- **Next Milestone**: Integrate raster metadata schemas for Earth observation products.
+
+### 20. Evaluation Engine
+- **Purpose**: Continuous verification of deterministic invariants, spatial accuracy, and fusion correctness.
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: Test suites, reference benchmarks, world state assertions.
+- **Outputs**: Pass/fail test reports, invariant violations.
+- **Dependencies**: `unittest`, `pytest`, Docker container stack.
+- **Persistence**: Test execution logs.
+- **Interface / API**: Pytest test suites in `backend/tests/`.
+- **Evidence Requirements**: Grounded in fixed recorded test fixtures.
+- **Test Contract**: Zero external network dependency during evaluation runs.
+- **Current Implementation**: 9 unit and container-backed integration tests executing in CI/container.
+- **Next Milestone**: Add property-based testing suites via Hypothesis.
+
+### 21. Intelligence / Reasoning Engine
+- **Purpose**: Downstream LLM explanation and synthesis strictly grounded in deterministic query results.
+- **Status**: `INTERFACE_ONLY`
+- **Inputs**: User question, deterministic engine result, cited evidence IDs.
+- **Outputs**: Synthesized natural language explanation citing exact evidence IDs.
+- **Dependencies**: `interfaces.py`, LLM API client.
+- **Persistence**: Ephemeral / query audit log.
+- **Interface / API**: `EvidenceBoundReasoner.answer(...)` in `backend/app/interfaces.py`.
+- **Evidence Requirements**: Prohibited from stating facts without back-referencing supplied evidence IDs.
+- **Test Contract**: Verifier checks that all stated entity facts map to input evidence IDs.
+- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
+- **Next Milestone**: Implement deterministic verification filter over LLM output.
+
+---
+
+## Platform & Presentation (22 – 25)
+
+### 22. API Platform
+- **Purpose**: REST and WebSocket interfaces exposing deterministic world model capabilities.
+- **Status**: `IMPLEMENTED`
+- **Inputs**: HTTP requests.
+- **Outputs**: RFC 7807 problem details or strongly-typed JSON responses.
+- **Dependencies**: FastAPI, Uvicorn, Pydantic.
+- **Persistence**: Stateless.
+- **Interface / API**: `backend/app/main.py`.
+- **Evidence Requirements**: Endpoints return `evidence_locator` and `confidence` fields.
+- **Test Contract**: Verified via `test_world_bank_vertical_slice.py` and `test_container_integration.py`.
+- **Current Implementation**: Operational on port 8000.
+- **Next Milestone**: Standardize error schemas and add OpenAPI documentation tags.
+
+### 23. Frontend / World Interface
+- **Purpose**: Interactive React presentation layer rendering 3D Cesium globe and data tables.
+- **Status**: `IMPLEMENTED`
+- **Inputs**: Backend REST API streams.
+- **Outputs**: Interactive WebGL 3D globe and HTML inspector cards.
+- **Dependencies**: React 18, TypeScript, Vite, CesiumJS, Resium.
+- **Persistence**: Browser localStorage for UI settings; all truth resides on backend.
+- **Interface / API**: `frontend/src/App.tsx`.
+- **Evidence Requirements**: UI displays Epistemic Badges and Evidence Drawers.
+- **Test Contract**: `npm run build` production asset compilation.
+- **Current Implementation**: Operational; renders country polygons and population series.
+- **Next Milestone**: Add 3D visualization of seismic event points and relationship arcs.
+
+### 24. Observability / Operations
+- **Purpose**: Container health monitoring, structured logging, and query performance telemetry.
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: Application events, container probes.
+- **Outputs**: Health status, structured logs.
+- **Dependencies**: Docker Compose health checks, Uvicorn logging.
+- **Persistence**: Container stdout/stderr logs.
+- **Interface / API**: `GET /health` endpoint; Docker healthcheck.
+- **Evidence Requirements**: Health checks test actual database connectivity.
+- **Test Contract**: Verified by Docker healthy status.
+- **Current Implementation**: Healthcheck endpoint operational; structured logging skill defined.
+- **Next Milestone**: Add Prometheus `/metrics` endpoint and structured JSON logger.
+
+### 25. Security / Privacy / Governance
+- **Purpose**: Enforce secure defaults, SSRF protection in adapters, least-privilege DB access, and data privacy.
+- **Status**: `PARTIALLY_IMPLEMENTED`
+- **Inputs**: Outbound HTTP requests, database credentials.
+- **Outputs**: Sanitized network calls, masked credentials.
+- **Dependencies**: Pydantic `SecretStr`, adapter allowlists.
+- **Persistence**: Configuration files (`.env`).
+- **Interface / API**: Security standards in `.agents/skills/worldos-security-threat-model/SKILL.md`.
+- **Evidence Requirements**: Audit trail for sensitive data access.
+- **Test Contract**: SSRF URL validation test.
+- **Current Implementation**: Container credentials isolated; security playbooks established.
+- **Next Milestone**: Implement runtime URL validator in `BaseSourceAdapter`.
+
+---
+
+## Last Layer (26)
+
+### 26. Agent Engine
+- **Purpose**: Goal-directed autonomous workflow orchestration invoking validated WORLDOS engine tools.
+- **Status**: `SPECIFIED` (Explicitly Last Layer)
+- **Inputs**: User goals, task constraints, verified world context.
+- **Outputs**: Multi-step plans, engine tool invocations, synthesized final report.
+- **Dependencies**: All preceding 25 engines.
+- **Persistence**: Task execution traces.
+- **Interface / API**: Planned `backend/app/engines/agent.py`.
+- **Evidence Requirements**: Agents may never mutate world state without verified source adapters and evidence hashing.
+- **Test Contract**: Invariant testing of agent action boundaries.
+- **Current Implementation**: Purely conceptual. Per architectural rules, implementation is deferred until all underlying data and reasoning engines are verified.
+- **Next Milestone**: Architectural readiness gate (Prompt 28) prior to any agent code.

@@ -1,11 +1,20 @@
 """Stable, evidence-first contracts shared by ingestion and query code."""
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
+from enum import Enum
 from typing import Any, Literal
 from uuid import UUID, uuid4
 
 from pydantic import BaseModel, Field, HttpUrl, model_validator
+
+
+class TruthClass(str, Enum):
+    OBSERVED = "OBSERVED"
+    DERIVED = "DERIVED"
+    INFERRED = "INFERRED"
+    PREDICTED = "PREDICTED"
+    SIMULATED = "SIMULATED"
 
 
 class Confidence(BaseModel):
@@ -88,11 +97,47 @@ class Observation(BaseModel):
     measure: str
     value: float
     unit: str
+    truth_class: Literal["OBSERVED"] = "OBSERVED"
     time_interval_id: UUID
     evidence_id: UUID
     provenance_id: UUID
     confidence: Confidence
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+
+class Claim(BaseModel):
+    """A factual, analytical, or model assertion with explicit truth class and derivation lineage."""
+
+    id: UUID = Field(default_factory=uuid4)
+    subject_entity_id: UUID
+    claim_type: str
+    truth_class: TruthClass
+    value: Any
+    unit: str | None = None
+    time_interval_id: UUID | None = None
+    spatial_scope: dict[str, Any] | None = None
+    method: str
+    computation_version: str
+    inputs: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: list[UUID] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    confidence: Confidence
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_derivation_contract(self) -> "Claim":
+        if self.truth_class == TruthClass.DERIVED:
+            if not self.inputs:
+                raise ValueError("Derived claims must preserve explicit inputs (e.g. input_entity_ids or observation_ids)")
+            if not self.method or not self.computation_version:
+                raise ValueError("Derived claims must record method and computation_version")
+        elif self.truth_class in (TruthClass.PREDICTED, TruthClass.SIMULATED):
+            if not self.assumptions:
+                raise ValueError(f"{self.truth_class.value} claims must document explicit assumptions")
+            if not self.method:
+                raise ValueError(f"{self.truth_class.value} claims must specify predictive or simulation method")
+        return self
+
 
 
 class Event(BaseModel):
@@ -137,4 +182,47 @@ class WorldBundle(BaseModel):
         if (self.observation or self.event) and not self.time_interval:
             raise ValueError("an observation or event requires a time interval")
         return self
+
+
+class IngestionRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    source_id: UUID
+    pipeline_version: str
+    status: Literal["started", "completed", "failed", "partial"]
+    started_at: datetime
+    completed_at: datetime | None = None
+    records_fetched: int = 0
+    records_persisted: int = 0
+    records_failed: int = 0
+    error_message: str | None = None
+    freshness_observed_at: datetime | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SourceHealth(BaseModel):
+    source_slug: str
+    source_name: str
+    publisher: str
+    last_run_status: str | None = None
+    last_successful_ingest: datetime | None = None
+    freshness_observed_at: datetime | None = None
+    total_runs: int = 0
+    total_records_persisted: int = 0
+    is_healthy: bool = True
+
+
+class EntityResolutionReview(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    candidate_entity_id: UUID
+    target_entity_id: UUID
+    match_reason: str
+    confidence: float = Field(ge=0.0, le=1.0)
+    status: Literal["pending", "approved", "rejected"] = "pending"
+    created_at: datetime
+    reviewed_at: datetime | None = None
+    reviewed_by: str | None = None
+    resolution_notes: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
 

@@ -4,10 +4,12 @@ from datetime import UTC, datetime
 from uuid import UUID, uuid5
 
 from fastapi import FastAPI, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
-from .domain import (Confidence, Entity, EntityIdentifier, Event, Evidence, Geometry, Observation, Provenance,
-                     Relationship, Source, TimeInterval, WorldBundle)
+from .domain import (Claim, Confidence, Entity, EntityIdentifier, Event, Evidence, Geometry, Observation, Provenance,
+                     Relationship, Source, TimeInterval, TruthClass, WorldBundle)
+from .analytics import DuckDbSpatialAnalytics
+from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
@@ -25,11 +27,13 @@ class IngestionResult(BaseModel):
     country_code: str
     observations_written: int
     observation_ids: list[UUID]
+    run_id: UUID | None = None
 
 
 class GeometryIngestionResult(BaseModel):
     country_code: str
     geometry_id: UUID
+    run_id: UUID | None = None
 
 
 class EarthquakeIngestionResult(BaseModel):
@@ -39,6 +43,8 @@ class EarthquakeIngestionResult(BaseModel):
     event_id_persisted: UUID
     containing_country_id: UUID | None = None
     relationships_written: int
+    run_id: UUID | None = None
+
 
 
 def world_bank_bundle(record, point, retrieved_at: datetime) -> WorldBundle:
@@ -239,44 +245,193 @@ def health() -> dict[str, str]:
 @app.post("/ingest/world-bank/population/{country_code}", response_model=IngestionResult)
 def ingest_world_bank_population(country_code: str, year: int | None = Query(default=None, ge=1960, le=2100)) -> IngestionResult:
     country_code = country_code.upper()
-    records = fetch_population(country_code, year=year)
-    if not records:
-        raise HTTPException(status_code=404, detail="World Bank returned no population observations")
-    point, now, repo = fetch_country_point(country_code), retrieved_now(), WorldRepository()
-    ids = [repo.ingest(world_bank_bundle(record, point, now)) for record in records]
-    return IngestionResult(country_code=country_code, observations_written=len(ids), observation_ids=ids)
+    repo = WorldRepository()
+    source_id = stable_id("source", "world-bank")
+    run_id = repo.record_ingestion_run(
+        source_id=source_id,
+        pipeline_version="world-bank-population-v1",
+        status="started",
+        metadata={"country_code": country_code, "year": year},
+    )
+    try:
+        records = fetch_population(country_code, year=year)
+        if not records:
+            repo.finish_ingestion_run(
+                run_id,
+                status="failed",
+                records_fetched=0,
+                records_persisted=0,
+                records_failed=1,
+                error_message="World Bank returned no population observations",
+            )
+            raise HTTPException(status_code=404, detail="World Bank returned no population observations")
+        point, now = fetch_country_point(country_code), retrieved_now()
+        ids = [repo.ingest(world_bank_bundle(record, point, now)) for record in records]
+        latest_year = max(record.year for record in records)
+        freshness_dt = datetime(latest_year, 12, 31, 23, 59, 59, tzinfo=UTC)
+        repo.finish_ingestion_run(
+            run_id,
+            status="completed",
+            records_fetched=len(records),
+            records_persisted=len(ids),
+            records_failed=0,
+            freshness_observed_at=freshness_dt,
+        )
+        return IngestionResult(country_code=country_code, observations_written=len(ids), observation_ids=ids, run_id=run_id)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
 
 
 @app.post("/ingest/natural-earth/country/{country_code}", response_model=GeometryIngestionResult)
 def ingest_natural_earth_country(country_code: str) -> GeometryIngestionResult:
     country_code = country_code.upper()
+    repo = WorldRepository()
+    source_id = stable_id("source", "natural-earth-admin-0")
+    run_id = repo.record_ingestion_run(
+        source_id=source_id,
+        pipeline_version="natural-earth-admin-0-v1",
+        status="started",
+        metadata={"country_code": country_code},
+    )
     try:
         boundary = fetch_country_boundary(country_code)
+        now = retrieved_now()
+        geometry_id = repo.ingest(natural_earth_bundle(boundary, now))
+        repo.finish_ingestion_run(
+            run_id,
+            status="completed",
+            records_fetched=1,
+            records_persisted=1,
+            records_failed=0,
+            freshness_observed_at=now,
+        )
+        return GeometryIngestionResult(country_code=country_code, geometry_id=geometry_id, run_id=run_id)
     except LookupError as error:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(error),
+        )
         raise HTTPException(status_code=404, detail=str(error)) from error
-    geometry_id = WorldRepository().ingest(natural_earth_bundle(boundary, retrieved_now()))
-    return GeometryIngestionResult(country_code=country_code, geometry_id=geometry_id)
+    except Exception as exc:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"Ingestion failed: {exc}") from exc
 
 
 @app.post("/ingest/usgs/earthquake/{event_id}", response_model=EarthquakeIngestionResult)
 def ingest_usgs_earthquake(event_id: str) -> EarthquakeIngestionResult:
+    repo = WorldRepository()
+    source_id = stable_id("source", "usgs-earthquakes")
+    run_id = repo.record_ingestion_run(
+        source_id=source_id,
+        pipeline_version="usgs-earthquake-v1",
+        status="started",
+        metadata={"event_id": event_id},
+    )
     try:
         record = fetch_earthquake(event_id)
     except Exception as error:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(error),
+        )
         raise HTTPException(status_code=404, detail=f"USGS earthquake {event_id} not found: {error}") from error
-    repo = WorldRepository()
-    containing_country = repo.find_containing_entity(record.longitude, record.latitude)
-    containing_id = containing_country["id"] if containing_country else None
-    bundle = usgs_earthquake_bundle(record, retrieved_now(), containing_entity_id=containing_id)
-    repo.ingest(bundle)
-    return EarthquakeIngestionResult(
-        event_id=record.event_id,
-        entity_id=bundle.entity.id,
-        observation_id=bundle.observation.id,
-        event_id_persisted=bundle.event.id,
-        containing_country_id=containing_id,
-        relationships_written=len(bundle.relationships),
-    )
+
+    try:
+        containing_country = repo.find_containing_entity(record.longitude, record.latitude)
+        containing_id = containing_country["id"] if containing_country else None
+        now = retrieved_now()
+        bundle = usgs_earthquake_bundle(record, now, containing_entity_id=containing_id)
+        repo.ingest(bundle)
+        repo.finish_ingestion_run(
+            run_id,
+            status="completed",
+            records_fetched=1,
+            records_persisted=1 + (1 if containing_id else 0),
+            records_failed=0,
+            freshness_observed_at=record.time,
+        )
+        return EarthquakeIngestionResult(
+            event_id=record.event_id,
+            entity_id=bundle.entity.id,
+            observation_id=bundle.observation.id,
+            event_id_persisted=bundle.event.id,
+            containing_country_id=containing_id,
+            relationships_written=len(bundle.relationships),
+            run_id=run_id,
+        )
+    except Exception as exc:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=1,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"Persistence failed: {exc}") from exc
+
+
+@app.get("/sources/health")
+def source_health(source: str | None = None):
+    return WorldRepository().source_health(source_slug=source)
+
+
+@app.get("/ingestion/runs")
+def ingestion_runs(source: str | None = None, limit: int = Query(default=50, ge=1, le=500)):
+    return WorldRepository().ingestion_runs(source_slug=source, limit=limit)
+
+
+class ReviewActionRequest(BaseModel):
+    reviewed_by: str = Field(..., min_length=1)
+    notes: str | None = None
+
+
+@app.get("/resolution/reviews")
+def list_resolution_reviews(status: str | None = Query(default=None, pattern=r"^(pending|approved|rejected)$")):
+    return WorldRepository().resolution_reviews(status=status)
+
+
+@app.post("/resolution/reviews/{review_id}/approve")
+def approve_resolution_review(review_id: UUID, req: ReviewActionRequest):
+    success = WorldRepository().approve_resolution_review(review_id, reviewed_by=req.reviewed_by, notes=req.notes)
+    if not success:
+        raise HTTPException(status_code=404, detail="Review not found or not in pending status")
+    return {"status": "approved", "review_id": review_id}
+
+
+@app.post("/resolution/reviews/{review_id}/reject")
+def reject_resolution_review(review_id: UUID, req: ReviewActionRequest):
+    success = WorldRepository().reject_resolution_review(review_id, reviewed_by=req.reviewed_by, notes=req.notes)
+    if not success:
+        raise HTTPException(status_code=404, detail="Review not found or not in pending status")
+    return {"status": "rejected", "review_id": review_id}
+
+
 
 
 @app.get("/observations")
@@ -308,7 +463,34 @@ def geometries():
     return WorldRepository().geometries()
 
 
-@app.get("/analytics/population/{entity_id}/change")
-def population_change(entity_id: UUID):
-    return WorldRepository().population_change(entity_id)
+@app.get("/claims")
+def list_claims(
+    subject_entity_id: UUID | None = None,
+    truth_class: str | None = None,
+    claim_type: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    return WorldRepository().claims(
+        subject_entity_id=subject_entity_id,
+        truth_class=truth_class,
+        claim_type=claim_type,
+        limit=limit,
+    )
+
+
+@app.post("/analytics/population/{entity_id}/growth")
+def derive_population_growth(entity_id: UUID):
+    import os
+    from pathlib import Path
+    repo = WorldRepository()
+    db_url = repo.database_url
+    duckdb_path = Path(os.environ.get("WORLDOS_DUCKDB_PATH", "/tmp/worldos-analytics.duckdb"))
+    export_observations(db_url, duckdb_path)
+    analytics = DuckDbSpatialAnalytics(duckdb_path)
+    claim = analytics.derive_population_growth(entity_id)
+    if not claim:
+        raise HTTPException(status_code=400, detail="insufficient population observations to compute growth rate")
+    claim_id = repo.record_claim(claim)
+    return {"status": "derived", "claim_id": claim_id, "claim": claim.model_dump()}
+
 

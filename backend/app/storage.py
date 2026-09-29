@@ -11,7 +11,7 @@ from uuid import UUID
 import psycopg
 from psycopg.rows import dict_row
 
-from .domain import WorldBundle
+from .domain import Claim, WorldBundle
 
 
 class WorldRepository:
@@ -54,6 +54,25 @@ class WorldRepository:
                      json.dumps(b.entity.attributes), b.entity.confidence.value),
                 )
                 entity_id = cur.fetchone()["id"]
+                cur.execute(
+                    "SELECT id, canonical_name FROM entities WHERE LOWER(canonical_name) = LOWER(%s) AND id <> %s LIMIT 1",
+                    (b.entity.canonical_name, entity_id),
+                )
+                name_match = cur.fetchone()
+                if name_match:
+                    cur.execute(
+                        """INSERT INTO entity_resolution_reviews
+                           (candidate_entity_id, target_entity_id, match_reason, confidence, status, metadata)
+                           VALUES (%s, %s, %s, %s, 'pending', %s)
+                           ON CONFLICT (candidate_entity_id, target_entity_id, match_reason) DO NOTHING""",
+                        (
+                            entity_id,
+                            name_match["id"],
+                            "normalized_name_exact_match_unconfirmed",
+                            0.70,
+                            json.dumps({"candidate_source": b.source.slug, "target_name": name_match["canonical_name"]}),
+                        ),
+                    )
             for identifier in b.identifiers:
                 cur.execute(
                     """INSERT INTO entity_identifiers (entity_id,source_id,source_key,scheme,value,confidence)
@@ -61,6 +80,7 @@ class WorldRepository:
                     (entity_id, source_id, identifier.source_key, identifier.scheme, identifier.value,
                      identifier.confidence.value),
                 )
+
             if b.time_interval:
                 cur.execute(
                     """INSERT INTO time_intervals (id,starts_at,ends_at,precision) VALUES (%s,%s,%s,%s)
@@ -133,7 +153,7 @@ class WorldRepository:
             clauses.append("t.starts_at <= %s")
             values.append(end)
         sql = f"""SELECT o.id, e.id AS entity_id, e.canonical_name, o.measure, o.value, o.unit,
-                         t.starts_at, t.ends_at, ev.locator AS evidence_locator, o.confidence
+                         o.truth_class, t.starts_at, t.ends_at, ev.locator AS evidence_locator, o.confidence
                   FROM observations o JOIN entities e ON e.id=o.subject_entity_id
                   JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence ev ON ev.id=o.evidence_id
                   WHERE {' AND '.join(clauses)} ORDER BY t.starts_at DESC"""
@@ -167,10 +187,17 @@ class WorldRepository:
                          UNION ALL SELECT predicate, subject_entity_id, confidence FROM relationships WHERE object_entity_id=%s""",
                         (entity_id, entity_id))
             entity["relationships"] = list(cur.fetchall())
-            cur.execute("""SELECT measure,value,unit,t.starts_at,e.locator FROM observations o
+            cur.execute("""SELECT measure,value,unit,truth_class,t.starts_at,e.locator FROM observations o
                          JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence e ON e.id=o.evidence_id
                          WHERE subject_entity_id=%s ORDER BY t.starts_at DESC LIMIT 100""", (entity_id,))
             entity["observations"] = list(cur.fetchall())
+            cur.execute("""SELECT id, claim_type, truth_class, value, unit, method,
+                                  computation_version, inputs, evidence_ids, assumptions,
+                                  confidence, created_at
+                           FROM claims
+                           WHERE subject_entity_id = %s
+                           ORDER BY created_at DESC LIMIT 100""", (entity_id,))
+            entity["claims"] = list(cur.fetchall())
             return entity
 
     def near(self, longitude: float, latitude: float, radius_km: float) -> list[dict[str, Any]]:
@@ -216,4 +243,292 @@ class WorldRepository:
                 (entity_id,),
             )
             return list(cur.fetchall())
+
+    def record_ingestion_run(
+        self,
+        source_id: UUID,
+        pipeline_version: str,
+        status: str = "started",
+        metadata: dict[str, Any] | None = None,
+        started_at: datetime | None = None,
+    ) -> UUID:
+        from datetime import UTC
+        start_time = started_at or datetime.now(UTC)
+        meta = metadata or {}
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO ingestion_runs (source_id, pipeline_version, status, started_at, metadata)
+                   VALUES (%s, %s, %s, %s, %s)
+                   RETURNING id""",
+                (source_id, pipeline_version, status, start_time, json.dumps(meta)),
+            )
+            return cur.fetchone()["id"]
+
+    def finish_ingestion_run(
+        self,
+        run_id: UUID,
+        *,
+        status: str,
+        records_fetched: int = 0,
+        records_persisted: int = 0,
+        records_failed: int = 0,
+        error_message: str | None = None,
+        freshness_observed_at: datetime | None = None,
+        completed_at: datetime | None = None,
+    ) -> None:
+        from datetime import UTC
+        end_time = completed_at or datetime.now(UTC)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE ingestion_runs
+                   SET status = %s,
+                       completed_at = %s,
+                       records_fetched = %s,
+                       records_persisted = %s,
+                       records_failed = %s,
+                       error_message = %s,
+                       freshness_observed_at = %s
+                   WHERE id = %s""",
+                (
+                    status,
+                    end_time,
+                    records_fetched,
+                    records_persisted,
+                    records_failed,
+                    error_message,
+                    freshness_observed_at,
+                    run_id,
+                ),
+            )
+
+    def source_health(self, source_slug: str | None = None) -> list[dict[str, Any]]:
+        clauses, values = [], []
+        if source_slug:
+            clauses.append("s.slug = %s")
+            values.append(source_slug)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                s.slug AS source_slug,
+                s.name AS source_name,
+                s.publisher,
+                recent.status AS last_run_status,
+                recent.completed_at AS last_successful_ingest,
+                recent.freshness_observed_at,
+                COALESCE(stats.total_runs, 0) AS total_runs,
+                COALESCE(stats.total_records_persisted, 0) AS total_records_persisted,
+                CASE WHEN recent.status = 'completed' OR recent.status IS NULL THEN true ELSE false END AS is_healthy
+            FROM sources s
+            LEFT JOIN LATERAL (
+                SELECT status, completed_at, freshness_observed_at
+                FROM ingestion_runs r
+                WHERE r.source_id = s.id
+                ORDER BY r.started_at DESC
+                LIMIT 1
+            ) recent ON true
+            LEFT JOIN LATERAL (
+                SELECT
+                    count(*)::int AS total_runs,
+                    sum(records_persisted)::int AS total_records_persisted
+                FROM ingestion_runs r
+                WHERE r.source_id = s.id
+            ) stats ON true
+            {where_clause}
+            ORDER BY s.slug
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def ingestion_runs(self, source_slug: str | None = None, limit: int = 50) -> list[dict[str, Any]]:
+        clauses, values = [], []
+        if source_slug:
+            clauses.append("s.slug = %s")
+            values.append(source_slug)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                r.id,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                r.pipeline_version,
+                r.status,
+                r.started_at,
+                r.completed_at,
+                r.records_fetched,
+                r.records_persisted,
+                r.records_failed,
+                r.error_message,
+                r.freshness_observed_at,
+                r.metadata
+            FROM ingestion_runs r
+            JOIN sources s ON s.id = r.source_id
+            {where_clause}
+            ORDER BY r.started_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def resolution_reviews(self, status: str | None = None) -> list[dict[str, Any]]:
+        clauses, values = [], []
+        if status:
+            clauses.append("r.status = %s")
+            values.append(status)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                r.id,
+                r.candidate_entity_id,
+                c.canonical_name AS candidate_name,
+                c.source_key AS candidate_source_key,
+                r.target_entity_id,
+                t.canonical_name AS target_name,
+                t.source_key AS target_source_key,
+                r.match_reason,
+                r.confidence,
+                r.status,
+                r.created_at,
+                r.reviewed_at,
+                r.reviewed_by,
+                r.resolution_notes,
+                r.metadata
+            FROM entity_resolution_reviews r
+            JOIN entities c ON c.id = r.candidate_entity_id
+            JOIN entities t ON t.id = r.target_entity_id
+            {where_clause}
+            ORDER BY r.created_at DESC
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def approve_resolution_review(self, review_id: UUID, reviewed_by: str, notes: str | None = None) -> bool:
+        from datetime import UTC
+        now = datetime.now(UTC)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT * FROM entity_resolution_reviews WHERE id = %s", (review_id,))
+            review = cur.fetchone()
+            if not review or review["status"] != "pending":
+                return False
+            cand_id = review["candidate_entity_id"]
+            tgt_id = review["target_entity_id"]
+            cur.execute("UPDATE observations SET subject_entity_id = %s WHERE subject_entity_id = %s", (tgt_id, cand_id))
+            cur.execute("UPDATE geometries SET entity_id = %s WHERE entity_id = %s", (tgt_id, cand_id))
+            cur.execute("UPDATE events SET subject_entity_id = %s WHERE subject_entity_id = %s", (tgt_id, cand_id))
+            cur.execute("UPDATE relationships SET subject_entity_id = %s WHERE subject_entity_id = %s", (tgt_id, cand_id))
+            cur.execute("UPDATE relationships SET object_entity_id = %s WHERE object_entity_id = %s", (tgt_id, cand_id))
+            cur.execute(
+                """INSERT INTO entity_identifiers (entity_id, source_id, source_key, scheme, value, confidence)
+                   SELECT %s, source_id, source_key, scheme, value, confidence
+                   FROM entity_identifiers WHERE entity_id = %s
+                   ON CONFLICT DO NOTHING""",
+                (tgt_id, cand_id),
+            )
+            cur.execute(
+                """UPDATE entity_resolution_reviews
+                   SET status = 'approved', reviewed_at = %s, reviewed_by = %s, resolution_notes = %s
+                   WHERE id = %s""",
+                (now, reviewed_by, notes, review_id),
+            )
+            return True
+
+    def reject_resolution_review(self, review_id: UUID, reviewed_by: str, notes: str | None = None) -> bool:
+        from datetime import UTC
+        now = datetime.now(UTC)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """UPDATE entity_resolution_reviews
+                   SET status = 'rejected', reviewed_at = %s, reviewed_by = %s, resolution_notes = %s
+                   WHERE id = %s AND status = 'pending'""",
+                (now, reviewed_by, notes, review_id),
+            )
+            return cur.rowcount > 0
+
+    def record_claim(self, claim: Claim) -> UUID:
+        with self._connection() as conn, conn.cursor() as cur:
+            evidence_ids_str = [str(eid) for eid in claim.evidence_ids]
+            cur.execute(
+                """INSERT INTO claims (
+                    id, subject_entity_id, claim_type, truth_class, value, unit,
+                    time_interval_id, spatial_scope, method, computation_version,
+                    inputs, evidence_ids, assumptions, confidence, created_at
+                ) VALUES (
+                    %s, %s, %s, %s, %s, %s,
+                    %s, %s, %s, %s,
+                    %s, %s, %s, %s, %s
+                ) ON CONFLICT (id) DO NOTHING
+                RETURNING id""",
+                (
+                    claim.id,
+                    claim.subject_entity_id,
+                    claim.claim_type,
+                    claim.truth_class.value if hasattr(claim.truth_class, "value") else str(claim.truth_class),
+                    json.dumps(claim.value),
+                    claim.unit,
+                    claim.time_interval_id,
+                    json.dumps(claim.spatial_scope) if claim.spatial_scope else None,
+                    claim.method,
+                    claim.computation_version,
+                    json.dumps(claim.inputs),
+                    evidence_ids_str,
+                    json.dumps(claim.assumptions),
+                    claim.confidence.value,
+                    claim.created_at,
+                ),
+            )
+            row = cur.fetchone()
+            return row["id"] if row else claim.id
+
+    def claims(
+        self,
+        subject_entity_id: UUID | None = None,
+        truth_class: str | None = None,
+        claim_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        clauses, values = [], []
+        if subject_entity_id:
+            clauses.append("c.subject_entity_id = %s")
+            values.append(subject_entity_id)
+        if truth_class:
+            clauses.append("c.truth_class = %s")
+            values.append(truth_class)
+        if claim_type:
+            clauses.append("c.claim_type = %s")
+            values.append(claim_type)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                c.id,
+                c.subject_entity_id,
+                e.canonical_name AS subject_name,
+                c.claim_type,
+                c.truth_class,
+                c.value,
+                c.unit,
+                c.time_interval_id,
+                c.spatial_scope,
+                c.method,
+                c.computation_version,
+                c.inputs,
+                c.evidence_ids,
+                c.assumptions,
+                c.confidence,
+                c.created_at
+            FROM claims c
+            LEFT JOIN entities e ON e.id = c.subject_entity_id
+            {where_clause}
+            ORDER BY c.created_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+
+
 

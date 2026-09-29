@@ -51,9 +51,27 @@ The first adapter is World Bank indicator `SP.POP.TOTL`. It uses the publisher's
 
 Scenario constraints, prediction, simulation, anomaly detection, and evidence-bound AI reasoning are contracts in `backend/app/interfaces.py`, not fake implementations. An implementation must accept a deterministic input/result and return cited evidence IDs, assumptions, and a model/version. Agents come after those capability contracts and may only call them.
 
+## Truth classes and claim contract
+
+WORLDOS strictly segregates empirical source facts from computed or modeled assertions. Every assertion carries an explicit `TruthClass`:
+
+- **OBSERVED:** Direct empirical measurement from a verified source (e.g. World Bank census, USGS seismograph). Strictly enforced on the `observations` table via a PostgreSQL check constraint (`CHECK (truth_class = 'OBSERVED')`) and Pydantic validator. An observation cannot be created with a derived or predicted truth class.
+- **DERIVED:** Deterministically computed from observed facts (e.g., percentage growth rate, density, anomaly scores). Preserves explicit `inputs`, `method`, `computation_version`, and underlying `evidence_ids`.
+- **INFERRED:** Rule-based or probabilistic derivations consistent with observed data.
+- **PREDICTED:** Future or unobserved state projections under documented `assumptions` and model specifications.
+- **SIMULATED:** Counterfactual or hypothetical projections under explicitly altered constraints.
+
+All non-observation assertions reside in the `claims` table and preserve full lineage back to the empirical inputs and evidence IDs that produced them.
+
+## Source lifecycle, health, and reviewable entity resolution
+
+Ingestion runs are tracked in `ingestion_runs` with start/completion timestamps, records counts, error messages, and observed freshness. Source operational health is exposed via `/sources/health`.
+
+Entity reconciliation follows a strict conservative rule: entities are auto-merged only when matching explicit publisher keys (`entity_identifiers`). Name-only collisions are never silently merged; they are recorded as `pending` entries in `entity_resolution_reviews` for audit and manual review (`/resolution/reviews`).
+
 ## Operational path
 
-`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023`, `POST /ingest/natural-earth/country/IND`, and `POST /ingest/usgs/earthquake/us6000m0xm`; countries reconcile through ISO-3 while earthquakes resolve through USGS event IDs and spatial containment. Use `/observations`, `/events`, `/geometries`, `/spatial/entities`, `/entities/{id}/context`, and `/analytics/population/{id}/change`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
+`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023`, `POST /ingest/natural-earth/country/IND`, and `POST /ingest/usgs/earthquake/us6000m0xm`; countries reconcile through ISO-3 while earthquakes resolve through USGS event IDs and spatial containment. Use `/observations`, `/events`, `/geometries`, `/spatial/entities`, `/entities/{id}/context`, `/claims`, and `/analytics/population/{id}/growth`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
 
 ## Decisions and consequences
 

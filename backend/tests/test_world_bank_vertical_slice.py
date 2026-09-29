@@ -72,3 +72,100 @@ class WorldBankVerticalSliceTests(unittest.TestCase):
         self.assertEqual(len(bundle.relationships), 1)
         self.assertEqual(bundle.relationships[0].predicate, "occurred_in")
         self.assertEqual(bundle.relationships[0].object_entity_id, country_id)
+
+    def test_observation_refuses_non_observed_truth_class(self) -> None:
+        from uuid import uuid4
+        from pydantic import ValidationError
+        from app.domain import Confidence, Observation
+
+        # 1. Observation defaults to OBSERVED
+        obs = Observation(
+            subject_entity_id=uuid4(),
+            measure="test.measure",
+            value=42.0,
+            unit="units",
+            time_interval_id=uuid4(),
+            evidence_id=uuid4(),
+            provenance_id=uuid4(),
+            confidence=Confidence(value=1.0),
+        )
+        self.assertEqual(obs.truth_class, "OBSERVED")
+
+        # 2. Observation strictly rejects any non-OBSERVED truth_class
+        with self.assertRaises(ValidationError):
+            Observation(
+                subject_entity_id=uuid4(),
+                measure="test.derived",
+                value=42.0,
+                unit="units",
+                truth_class="DERIVED",  # type: ignore[arg-type]
+                time_interval_id=uuid4(),
+                evidence_id=uuid4(),
+                provenance_id=uuid4(),
+                confidence=Confidence(value=1.0),
+            )
+
+        with self.assertRaises(ValidationError):
+            Observation(
+                subject_entity_id=uuid4(),
+                measure="test.predicted",
+                value=42.0,
+                unit="units",
+                truth_class="PREDICTED",  # type: ignore[arg-type]
+                time_interval_id=uuid4(),
+                evidence_id=uuid4(),
+                provenance_id=uuid4(),
+                confidence=Confidence(value=1.0),
+            )
+
+    def test_claim_derivation_contract_enforcement(self) -> None:
+        from uuid import uuid4
+        from pydantic import ValidationError
+        from app.domain import Claim, Confidence, TruthClass
+
+        entity_id = uuid4()
+        ev_id = uuid4()
+
+        # 1. DERIVED claim must preserve inputs and method
+        with self.assertRaises(ValidationError):
+            Claim(
+                subject_entity_id=entity_id,
+                claim_type="growth_rate",
+                truth_class=TruthClass.DERIVED,
+                value=12.5,
+                method="rate_calc_v1",
+                computation_version="v1",
+                inputs={},  # Empty inputs must fail validation!
+                confidence=Confidence(value=0.9),
+            )
+
+        # 2. PREDICTED claim must document explicit assumptions
+        with self.assertRaises(ValidationError):
+            Claim(
+                subject_entity_id=entity_id,
+                claim_type="projected_gdp",
+                truth_class=TruthClass.PREDICTED,
+                value=500.0,
+                method="arima_forecast_v1",
+                computation_version="v1",
+                assumptions=[],  # Missing assumptions must fail!
+                confidence=Confidence(value=0.6),
+            )
+
+        # 3. Valid DERIVED claim succeeds and preserves full derivation lineage
+        valid_claim = Claim(
+            subject_entity_id=entity_id,
+            claim_type="growth_rate",
+            truth_class=TruthClass.DERIVED,
+            value={"percentage": 5.4},
+            unit="percent",
+            method="two_point_pct_v1",
+            computation_version="worldos-v1",
+            inputs={"obs_1": "100", "obs_2": "105.4"},
+            evidence_ids=[ev_id],
+            confidence=Confidence(value=0.95),
+        )
+        self.assertEqual(valid_claim.truth_class, TruthClass.DERIVED)
+        self.assertEqual(valid_claim.evidence_ids, [ev_id])
+        self.assertEqual(valid_claim.method, "two_point_pct_v1")
+
