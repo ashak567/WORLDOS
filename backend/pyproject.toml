@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "worldos-api"
+version = "0.1.0"
+description = "Evidence-first world model API"
+requires-python = ">=3.12"
+dependencies = [
+  "fastapi>=0.115,<1",
+  "psycopg[binary]>=3.2,<4",
+  "pydantic>=2.9,<3",
+  "uvicorn[standard]>=0.32,<1",
+  "duckdb>=1.1,<2",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
