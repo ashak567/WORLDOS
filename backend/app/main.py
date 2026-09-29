@@ -6,7 +6,9 @@ from uuid import UUID, uuid5
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from .domain import Confidence, Entity, Evidence, Geometry, Observation, Provenance, Source, TimeInterval, WorldBundle
+from .domain import (Confidence, Entity, EntityIdentifier, Evidence, Geometry, Observation, Provenance, Source,
+                     TimeInterval, WorldBundle)
+from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
 from .storage import WorldRepository
 
@@ -22,6 +24,11 @@ class IngestionResult(BaseModel):
     country_code: str
     observations_written: int
     observation_ids: list[UUID]
+
+
+class GeometryIngestionResult(BaseModel):
+    country_code: str
+    geometry_id: UUID
 
 
 def world_bank_bundle(record, point, retrieved_at: datetime) -> WorldBundle:
@@ -70,8 +77,36 @@ def world_bank_bundle(record, point, retrieved_at: datetime) -> WorldBundle:
                               evidence_id=evidence_id, provenance_id=provenance_id,
                               confidence=Confidence(value=1, method="publisher_asserted"),
                               attributes={"indicator": "SP.POP.TOTL"})
-    return WorldBundle(source=source, entity=entity, time_interval=interval, evidence=evidence,
+    identifier = EntityIdentifier(source_id=source_id, source_key=record.country_code,
+                                  scheme="iso_3166_1_alpha_3", value=record.country_code,
+                                  confidence=Confidence(value=1, method="publisher_identifier"))
+    return WorldBundle(source=source, entity=entity, identifiers=[identifier], time_interval=interval, evidence=evidence,
                        provenance=provenance, observation=observation, geometry=geometry)
+
+
+def natural_earth_bundle(boundary, retrieved_at: datetime) -> WorldBundle:
+    source_id = stable_id("source", "natural-earth-admin-0")
+    entity_id = stable_id("entity", "natural-earth", boundary.iso3)
+    evidence_id = stable_id("evidence", "natural-earth-admin-0", boundary.locator)
+    provenance_id = stable_id("provenance", "natural-earth-admin-0-v1", boundary.locator)
+    source = Source(id=source_id, slug="natural-earth-admin-0", name="Natural Earth Admin 0 Countries",
+                    publisher="Natural Earth", license="public domain", homepage="https://www.naturalearthdata.com/",
+                    refresh_policy="manual, source-versioned ingestion")
+    entity = Entity(id=entity_id, kind="place", canonical_name=boundary.name, source_id=source_id,
+                    source_key=boundary.iso3, attributes={"iso3": boundary.iso3},
+                    confidence=Confidence(value=1, method="publisher_identifier"))
+    identifier = EntityIdentifier(source_id=source_id, source_key=boundary.iso3,
+                                  scheme="iso_3166_1_alpha_3", value=boundary.iso3,
+                                  confidence=Confidence(value=1, method="publisher_identifier"))
+    evidence = Evidence(id=evidence_id, source_id=source_id, locator=boundary.locator,
+                        retrieved_at=retrieved_at, content_hash=boundary.content_hash)
+    provenance = Provenance(id=provenance_id, evidence_id=evidence_id, pipeline_version="natural-earth-admin-0-v1",
+                            transformation={"feature_filter": "ISO_A3", "geometry": "publisher_polygon"})
+    geometry = Geometry(id=stable_id("geometry", "natural-earth", boundary.iso3), entity_id=entity_id,
+                        geojson=boundary.geometry, geometry_kind="country_boundary", source_id=source_id,
+                        confidence=Confidence(value=1, method="publisher_asserted"))
+    return WorldBundle(source=source, entity=entity, identifiers=[identifier], evidence=evidence,
+                       provenance=provenance, geometry=geometry)
 
 
 @app.get("/health")
@@ -88,6 +123,17 @@ def ingest_world_bank_population(country_code: str, year: int | None = Query(def
     point, now, repo = fetch_country_point(country_code), retrieved_now(), WorldRepository()
     ids = [repo.ingest(world_bank_bundle(record, point, now)) for record in records]
     return IngestionResult(country_code=country_code, observations_written=len(ids), observation_ids=ids)
+
+
+@app.post("/ingest/natural-earth/country/{country_code}", response_model=GeometryIngestionResult)
+def ingest_natural_earth_country(country_code: str) -> GeometryIngestionResult:
+    country_code = country_code.upper()
+    try:
+        boundary = fetch_country_boundary(country_code)
+    except LookupError as error:
+        raise HTTPException(status_code=404, detail=str(error)) from error
+    geometry_id = WorldRepository().ingest(natural_earth_bundle(boundary, retrieved_now()))
+    return GeometryIngestionResult(country_code=country_code, geometry_id=geometry_id)
 
 
 @app.get("/observations")
@@ -107,6 +153,11 @@ def context(entity_id: UUID):
 def nearby_entities(longitude: float = Query(ge=-180, le=180), latitude: float = Query(ge=-90, le=90),
                     radius_km: float = Query(default=50, gt=0, le=20_000)):
     return WorldRepository().near(longitude, latitude, radius_km)
+
+
+@app.get("/geometries")
+def geometries():
+    return WorldRepository().geometries()
 
 
 @app.get("/analytics/population/{entity_id}/change")

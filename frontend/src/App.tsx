@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { Cartesian3, Ion, Viewer } from "cesium";
-import { Observation, populationObservations } from "./api";
+import { Cartesian3, GeoJsonDataSource, Ion, Viewer } from "cesium";
+import { GeometryFeature, Observation, geometryFeatures, populationObservations } from "./api";
 import "cesium/Build/Cesium/Widgets/widgets.css";
 import "./styles.css";
 
@@ -10,17 +10,32 @@ Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN ?? "";
 
 export default function App() {
   const globe = useRef<HTMLDivElement>(null);
+  const viewer = useRef<Viewer | null>(null);
   const [observations, setObservations] = useState<Observation[]>([]);
   const [error, setError] = useState<string>();
 
   useEffect(() => {
-    const viewer = new Viewer(globe.current!, { animation: false, timeline: false, baseLayerPicker: false });
-    viewer.camera.setView({ destination: Cartesian3.fromDegrees(78.9629, 20.5937, 8_000_000) });
-    return () => { viewer.destroy(); };
+    viewer.current = new Viewer(globe.current!, { animation: false, timeline: false, baseLayerPicker: false });
+    viewer.current.camera.setView({ destination: Cartesian3.fromDegrees(78.9629, 20.5937, 8_000_000) });
+    return () => { viewer.current?.destroy(); };
   }, []);
 
   useEffect(() => {
     populationObservations().then(setObservations).catch((reason: unknown) => setError(String(reason)));
+  }, []);
+
+  useEffect(() => {
+    let source: GeoJsonDataSource | undefined;
+    geometryFeatures().then((features: GeometryFeature[]) => GeoJsonDataSource.load({
+      type: "FeatureCollection",
+      features: features.map(feature => ({ type: "Feature", geometry: feature.geometry, properties: {
+        name: feature.canonical_name, geometry_kind: feature.geometry_kind,
+      }})),
+    })).then(loaded => {
+      source = loaded;
+      return viewer.current?.dataSources.add(loaded);
+    }).catch((reason: unknown) => setError(String(reason)));
+    return () => { if (source) viewer.current?.dataSources.remove(source, true); };
   }, []);
 
   return <main>

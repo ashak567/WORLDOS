@@ -36,20 +36,37 @@ class WorldRepository:
                  str(b.source.homepage) if b.source.homepage else None, b.source.refresh_policy),
             )
             source_id = cur.fetchone()["id"]
-            cur.execute(
-                """INSERT INTO entities (id,kind,canonical_name,source_id,source_key,attributes,confidence)
-                   VALUES (%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (source_id,source_key) DO UPDATE SET canonical_name=EXCLUDED.canonical_name,
-                       attributes=EXCLUDED.attributes, confidence=EXCLUDED.confidence RETURNING id""",
-                (b.entity.id, b.entity.kind, b.entity.canonical_name, source_id, b.entity.source_key,
-                 json.dumps(b.entity.attributes), b.entity.confidence.value),
-            )
-            entity_id = cur.fetchone()["id"]
-            cur.execute(
-                """INSERT INTO time_intervals (id,starts_at,ends_at,precision) VALUES (%s,%s,%s,%s)
-                   ON CONFLICT (id) DO NOTHING""",
-                (b.time_interval.id, b.time_interval.starts_at, b.time_interval.ends_at, b.time_interval.precision),
-            )
+            entity_id = None
+            for identifier in b.identifiers:
+                cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme=%s AND value=%s",
+                            (identifier.scheme, identifier.value))
+                match = cur.fetchone()
+                if match:
+                    entity_id = match["entity_id"]
+                    break
+            if entity_id is None:
+                cur.execute(
+                    """INSERT INTO entities (id,kind,canonical_name,source_id,source_key,attributes,confidence)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (source_id,source_key) DO UPDATE SET canonical_name=EXCLUDED.canonical_name,
+                           attributes=EXCLUDED.attributes, confidence=EXCLUDED.confidence RETURNING id""",
+                    (b.entity.id, b.entity.kind, b.entity.canonical_name, source_id, b.entity.source_key,
+                     json.dumps(b.entity.attributes), b.entity.confidence.value),
+                )
+                entity_id = cur.fetchone()["id"]
+            for identifier in b.identifiers:
+                cur.execute(
+                    """INSERT INTO entity_identifiers (entity_id,source_id,source_key,scheme,value,confidence)
+                       VALUES (%s,%s,%s,%s,%s,%s) ON CONFLICT DO NOTHING""",
+                    (entity_id, source_id, identifier.source_key, identifier.scheme, identifier.value,
+                     identifier.confidence.value),
+                )
+            if b.time_interval:
+                cur.execute(
+                    """INSERT INTO time_intervals (id,starts_at,ends_at,precision) VALUES (%s,%s,%s,%s)
+                       ON CONFLICT (id) DO NOTHING""",
+                    (b.time_interval.id, b.time_interval.starts_at, b.time_interval.ends_at, b.time_interval.precision),
+                )
             cur.execute(
                 """INSERT INTO evidence (id,source_id,locator,retrieved_at,content_hash,excerpt)
                    VALUES (%s,%s,%s,%s,%s,%s)
@@ -73,16 +90,18 @@ class WorldRepository:
                     (b.geometry.id, entity_id, json.dumps(b.geometry.geojson), b.geometry.geometry_kind,
                      source_id, b.geometry.confidence.value),
                 )
-            cur.execute(
-                """INSERT INTO observations (id,subject_entity_id,measure,value,unit,time_interval_id,evidence_id,
-                    provenance_id,confidence,attributes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                   ON CONFLICT (subject_entity_id,measure,time_interval_id,evidence_id) DO UPDATE SET value=EXCLUDED.value
-                   RETURNING id""",
-                (b.observation.id, entity_id, b.observation.measure, b.observation.value, b.observation.unit,
-                 b.time_interval.id, evidence_id, b.provenance.id, b.observation.confidence.value,
-                 json.dumps(b.observation.attributes)),
-            )
-            return cur.fetchone()["id"]
+            if b.observation:
+                cur.execute(
+                    """INSERT INTO observations (id,subject_entity_id,measure,value,unit,time_interval_id,evidence_id,
+                        provenance_id,confidence,attributes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
+                       ON CONFLICT (subject_entity_id,measure,time_interval_id,evidence_id) DO UPDATE SET value=EXCLUDED.value
+                       RETURNING id""",
+                    (b.observation.id, entity_id, b.observation.measure, b.observation.value, b.observation.unit,
+                     b.time_interval.id, evidence_id, b.provenance.id, b.observation.confidence.value,
+                     json.dumps(b.observation.attributes)),
+                )
+                return cur.fetchone()["id"]
+            return b.geometry.id  # geometry-only source bundles still have a stable ingestion result.
 
     def observations(self, measure: str, start: datetime | None, end: datetime | None) -> list[dict[str, Any]]:
         clauses, values = ["o.measure = %s"], [measure]
@@ -126,6 +145,15 @@ class WorldRepository:
                    WHERE ST_DWithin(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography, %s)
                    ORDER BY distance_km""",
                 (longitude, latitude, longitude, latitude, radius_km * 1000),
+            )
+            return list(cur.fetchall())
+
+    def geometries(self) -> list[dict[str, Any]]:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT g.id, e.id AS entity_id, e.canonical_name, g.geometry_kind,
+                         ST_AsGeoJSON(g.geometry)::json AS geometry
+                   FROM geometries g JOIN entities e ON e.id=g.entity_id ORDER BY e.canonical_name"""
             )
             return list(cur.fetchall())
 

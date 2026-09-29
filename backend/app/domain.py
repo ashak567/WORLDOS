@@ -62,6 +62,16 @@ class Entity(BaseModel):
     confidence: Confidence
 
 
+class EntityIdentifier(BaseModel):
+    """A publisher identifier used for safe cross-source entity reconciliation."""
+
+    source_id: UUID
+    source_key: str
+    scheme: str
+    value: str
+    confidence: Confidence
+
+
 class Geometry(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     entity_id: UUID
@@ -111,9 +121,18 @@ class WorldBundle(BaseModel):
 
     source: Source
     entity: Entity
-    time_interval: TimeInterval
     evidence: Evidence
     provenance: Provenance
-    observation: Observation
+    identifiers: list[EntityIdentifier] = Field(default_factory=list)
+    time_interval: TimeInterval | None = None
+    observation: Observation | None = None
     geometry: Geometry | None = None
+
+    @model_validator(mode="after")
+    def has_evidence_backed_fact(self) -> "WorldBundle":
+        if not self.observation and not self.geometry:
+            raise ValueError("a bundle must contain an observation or geometry")
+        if self.observation and not self.time_interval:
+            raise ValueError("an observation requires a time interval")
+        return self
 
