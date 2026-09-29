@@ -90,18 +90,39 @@ class WorldRepository:
                     (b.geometry.id, entity_id, json.dumps(b.geometry.geojson), b.geometry.geometry_kind,
                      source_id, b.geometry.confidence.value),
                 )
+            if b.event:
+                cur.execute(
+                    """INSERT INTO events (id,kind,subject_entity_id,time_interval_id,evidence_id,confidence,attributes)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""",
+                    (b.event.id, b.event.kind, entity_id, b.time_interval.id, evidence_id,
+                     b.event.confidence.value, json.dumps(b.event.attributes)),
+                )
+            for rel in b.relationships:
+                rel_interval_id = rel.time_interval_id or (b.time_interval.id if b.time_interval else None)
+                cur.execute(
+                    """INSERT INTO relationships (id,subject_entity_id,predicate,object_entity_id,time_interval_id,evidence_id,confidence,attributes)
+                       VALUES (%s,%s,%s,%s,%s,%s,%s,%s) ON CONFLICT (id) DO NOTHING""",
+                    (rel.id, rel.subject_entity_id, rel.predicate, rel.object_entity_id,
+                     rel_interval_id, evidence_id, rel.confidence.value, json.dumps(rel.attributes)),
+                )
             if b.observation:
                 cur.execute(
                     """INSERT INTO observations (id,subject_entity_id,measure,value,unit,time_interval_id,evidence_id,
                         provenance_id,confidence,attributes) VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
-                       ON CONFLICT (subject_entity_id,measure,time_interval_id,evidence_id) DO UPDATE SET value=EXCLUDED.value
+                       ON CONFLICT (id) DO UPDATE SET value=EXCLUDED.value, evidence_id=EXCLUDED.evidence_id,
+                           provenance_id=EXCLUDED.provenance_id, confidence=EXCLUDED.confidence,
+                           attributes=EXCLUDED.attributes
                        RETURNING id""",
                     (b.observation.id, entity_id, b.observation.measure, b.observation.value, b.observation.unit,
                      b.time_interval.id, evidence_id, b.provenance.id, b.observation.confidence.value,
                      json.dumps(b.observation.attributes)),
                 )
                 return cur.fetchone()["id"]
-            return b.geometry.id  # geometry-only source bundles still have a stable ingestion result.
+            if b.event:
+                return b.event.id
+            if b.geometry:
+                return b.geometry.id
+            return entity_id
 
     def observations(self, measure: str, start: datetime | None, end: datetime | None) -> list[dict[str, Any]]:
         clauses, values = ["o.measure = %s"], [measure]
@@ -116,6 +137,22 @@ class WorldRepository:
                   FROM observations o JOIN entities e ON e.id=o.subject_entity_id
                   JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence ev ON ev.id=o.evidence_id
                   WHERE {' AND '.join(clauses)} ORDER BY t.starts_at DESC"""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def events(self, kind: str | None = None) -> list[dict[str, Any]]:
+        clauses, values = [], []
+        if kind:
+            clauses.append("ev.kind = %s")
+            values.append(kind)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""SELECT ev.id, ev.kind, ev.subject_entity_id, e.canonical_name AS subject_name,
+                         t.starts_at, evi.locator AS evidence_locator, ev.confidence, ev.attributes
+                  FROM events ev LEFT JOIN entities e ON e.id=ev.subject_entity_id
+                  JOIN time_intervals t ON t.id=ev.time_interval_id
+                  JOIN evidence evi ON evi.id=ev.evidence_id
+                  {where_clause} ORDER BY t.starts_at DESC"""
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
             return list(cur.fetchall())
@@ -139,14 +176,27 @@ class WorldRepository:
     def near(self, longitude: float, latitude: float, radius_km: float) -> list[dict[str, Any]]:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT DISTINCT e.id, e.canonical_name, e.kind,
-                         ST_Distance(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography)/1000 AS distance_km
+                """SELECT e.id, e.canonical_name, e.kind,
+                         MIN(ST_Distance(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography)/1000) AS distance_km
                    FROM geometries g JOIN entities e ON e.id=g.entity_id
                    WHERE ST_DWithin(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography, %s)
+                   GROUP BY e.id, e.canonical_name, e.kind
                    ORDER BY distance_km""",
                 (longitude, latitude, longitude, latitude, radius_km * 1000),
             )
             return list(cur.fetchall())
+
+    def find_containing_entity(self, longitude: float, latitude: float, geometry_kind: str = "country_boundary") -> dict[str, Any] | None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """SELECT e.id, e.canonical_name, e.kind
+                   FROM geometries g JOIN entities e ON e.id=g.entity_id
+                   WHERE g.geometry_kind=%s
+                     AND ST_Contains(g.geometry, ST_SetSRID(ST_MakePoint(%s,%s), 4326))
+                   LIMIT 1""",
+                (geometry_kind, longitude, latitude),
+            )
+            return cur.fetchone()
 
     def geometries(self) -> list[dict[str, Any]]:
         with self._connection() as conn, conn.cursor() as cur:

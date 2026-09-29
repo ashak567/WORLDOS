@@ -127,12 +127,14 @@ class WorldBundle(BaseModel):
     time_interval: TimeInterval | None = None
     observation: Observation | None = None
     geometry: Geometry | None = None
+    event: Event | None = None
+    relationships: list[Relationship] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def has_evidence_backed_fact(self) -> "WorldBundle":
-        if not self.observation and not self.geometry:
-            raise ValueError("a bundle must contain an observation or geometry")
-        if self.observation and not self.time_interval:
-            raise ValueError("an observation requires a time interval")
+        if not self.observation and not self.geometry and not self.event and not self.relationships:
+            raise ValueError("a bundle must contain an observation, geometry, event, or relationship")
+        if (self.observation or self.event) and not self.time_interval:
+            raise ValueError("an observation or event requires a time interval")
         return self
 

@@ -6,9 +6,10 @@ from uuid import UUID, uuid5
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel
 
-from .domain import (Confidence, Entity, EntityIdentifier, Evidence, Geometry, Observation, Provenance, Source,
-                     TimeInterval, WorldBundle)
+from .domain import (Confidence, Entity, EntityIdentifier, Event, Evidence, Geometry, Observation, Provenance,
+                     Relationship, Source, TimeInterval, WorldBundle)
 from .ingestion.natural_earth import fetch_country_boundary
+from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
 from .storage import WorldRepository
 
@@ -29,6 +30,15 @@ class IngestionResult(BaseModel):
 class GeometryIngestionResult(BaseModel):
     country_code: str
     geometry_id: UUID
+
+
+class EarthquakeIngestionResult(BaseModel):
+    event_id: str
+    entity_id: UUID
+    observation_id: UUID
+    event_id_persisted: UUID
+    containing_country_id: UUID | None = None
+    relationships_written: int
 
 
 def world_bank_bundle(record, point, retrieved_at: datetime) -> WorldBundle:
@@ -109,6 +119,118 @@ def natural_earth_bundle(boundary, retrieved_at: datetime) -> WorldBundle:
                        provenance=provenance, geometry=geometry)
 
 
+def usgs_earthquake_bundle(
+    record: EarthquakeRecord, retrieved_at: datetime, containing_entity_id: UUID | None = None
+) -> WorldBundle:
+    source_id = stable_id("source", "usgs-earthquakes")
+    entity_id = stable_id("entity", "usgs", record.event_id)
+    interval_id = stable_id("time", "usgs", record.event_id)
+    evidence_id = stable_id("evidence", "usgs", record.locator)
+    provenance_id = stable_id("provenance", "usgs-earthquake-v1", record.locator)
+    observation_id = stable_id("observation", "usgs", record.event_id, "magnitude")
+    event_id = stable_id("event", "usgs", record.event_id)
+
+    source = Source(
+        id=source_id,
+        slug="usgs-earthquakes",
+        name="USGS Earthquake Hazards Program",
+        publisher="U.S. Geological Survey",
+        license="public domain",
+        homepage="https://earthquake.usgs.gov/",
+        refresh_policy="event-driven, source-versioned ingestion",
+    )
+    entity = Entity(
+        id=entity_id,
+        kind="other",
+        canonical_name=record.title,
+        source_id=source_id,
+        source_key=record.event_id,
+        attributes={"event_id": record.event_id, "place": record.place, "depth_km": record.depth_km},
+        confidence=Confidence(value=1.0, method="publisher_identifier"),
+    )
+    identifier = EntityIdentifier(
+        source_id=source_id,
+        source_key=record.event_id,
+        scheme="usgs_event_id",
+        value=record.event_id,
+        confidence=Confidence(value=1.0, method="publisher_identifier"),
+    )
+    interval = TimeInterval(
+        id=interval_id,
+        starts_at=record.time,
+        ends_at=record.time,
+        precision="instant",
+    )
+    evidence = Evidence(
+        id=evidence_id,
+        source_id=source_id,
+        locator=record.locator,
+        retrieved_at=retrieved_at,
+        content_hash=record.content_hash,
+    )
+    provenance = Provenance(
+        id=provenance_id,
+        evidence_id=evidence_id,
+        pipeline_version="usgs-earthquake-v1",
+        transformation={"publisher_event_id": record.event_id, "measure": "earthquake.magnitude"},
+    )
+    geometry = Geometry(
+        id=stable_id("geometry", "usgs", record.event_id),
+        entity_id=entity_id,
+        geojson={"type": "Point", "coordinates": [record.longitude, record.latitude]},
+        geometry_kind="epicenter",
+        source_id=source_id,
+        confidence=Confidence(value=1.0, method="publisher_asserted"),
+    )
+    observation = Observation(
+        id=observation_id,
+        subject_entity_id=entity_id,
+        measure="earthquake.magnitude",
+        value=record.mag,
+        unit="magnitude",
+        time_interval_id=interval_id,
+        evidence_id=evidence_id,
+        provenance_id=provenance_id,
+        confidence=Confidence(value=1.0, method="publisher_asserted"),
+        attributes={"place": record.place},
+    )
+    event = Event(
+        id=event_id,
+        kind="earthquake",
+        subject_entity_id=entity_id,
+        time_interval_id=interval_id,
+        evidence_id=evidence_id,
+        confidence=Confidence(value=1.0, method="publisher_asserted"),
+        attributes={"title": record.title, "place": record.place, "depth_km": record.depth_km, "mag": record.mag},
+    )
+    relationships = []
+    if containing_entity_id:
+        relationships.append(
+            Relationship(
+                id=stable_id("relationship", "usgs-occurred-in", record.event_id, str(containing_entity_id)),
+                subject_entity_id=entity_id,
+                predicate="occurred_in",
+                object_entity_id=containing_entity_id,
+                time_interval_id=interval_id,
+                evidence_id=evidence_id,
+                confidence=Confidence(value=0.95, method="postgis_st_contains"),
+                attributes={"method": "ST_Contains"},
+            )
+        )
+    return WorldBundle(
+        source=source,
+        entity=entity,
+        identifiers=[identifier],
+        time_interval=interval,
+        evidence=evidence,
+        provenance=provenance,
+        observation=observation,
+        geometry=geometry,
+        event=event,
+        relationships=relationships,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "system_of_record": "postgresql-postgis"}
@@ -136,9 +258,35 @@ def ingest_natural_earth_country(country_code: str) -> GeometryIngestionResult:
     return GeometryIngestionResult(country_code=country_code, geometry_id=geometry_id)
 
 
+@app.post("/ingest/usgs/earthquake/{event_id}", response_model=EarthquakeIngestionResult)
+def ingest_usgs_earthquake(event_id: str) -> EarthquakeIngestionResult:
+    try:
+        record = fetch_earthquake(event_id)
+    except Exception as error:
+        raise HTTPException(status_code=404, detail=f"USGS earthquake {event_id} not found: {error}") from error
+    repo = WorldRepository()
+    containing_country = repo.find_containing_entity(record.longitude, record.latitude)
+    containing_id = containing_country["id"] if containing_country else None
+    bundle = usgs_earthquake_bundle(record, retrieved_now(), containing_entity_id=containing_id)
+    repo.ingest(bundle)
+    return EarthquakeIngestionResult(
+        event_id=record.event_id,
+        entity_id=bundle.entity.id,
+        observation_id=bundle.observation.id,
+        event_id_persisted=bundle.event.id,
+        containing_country_id=containing_id,
+        relationships_written=len(bundle.relationships),
+    )
+
+
 @app.get("/observations")
 def observations(measure: str = "population.total", start: datetime | None = None, end: datetime | None = None):
     return WorldRepository().observations(measure, start, end)
+
+
+@app.get("/events")
+def events(kind: str | None = None):
+    return WorldRepository().events(kind=kind)
 
 
 @app.get("/entities/{entity_id}/context")

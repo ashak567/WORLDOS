@@ -37,12 +37,12 @@ public response -> Source -> Entity + Geometry -> TimeInterval
                 -> Provenance(pipeline/version/transformation) -> Observation
 ```
 
-The first adapter is World Bank indicator `SP.POP.TOTL`. It uses the publisher's country API for country metadata and its World Development Indicators endpoint for annual population. Natural Earth Admin 0 is the second adapter and contributes country polygons through the same ISO-3 identifier. Stable UUIDv5 values make a re-run idempotent for a country/year fact. Null source values are skipped and that transformation is recorded.
+The first adapter is World Bank indicator `SP.POP.TOTL`. It uses the publisher's country API for country metadata and its World Development Indicators endpoint for annual population. Natural Earth Admin 0 is the second adapter and contributes country polygons through the same ISO-3 identifier. The third adapter is the USGS Earthquake Hazards Program, contributing physical seismic events, epicenter point geometries, magnitude observations, and topological `occurred_in` relationships evaluated via PostGIS `ST_Contains` against country boundaries. Stable UUIDv5 values make a re-run idempotent for a country/year or event fact. Null source values are skipped and that transformation is recorded.
 
 ## Query engines
 
 - **Temporal engine:** filters `TimeInterval.starts_at` and records precision rather than treating a year as an unscoped timestamp.
-- **Spatial engine:** PostGIS `ST_DWithin` runs against evidence-backed geometry. Country points and boundary polygons remain distinct geometry kinds.
+- **Spatial engine:** PostGIS `ST_DWithin` and `ST_Contains` run against evidence-backed geometry. Country points, boundary polygons, and event epicenters remain distinct geometry kinds.
 - **Context engine:** returns one entity with observations, relationships, and their evidence locators.
 - **Knowledge graph:** `relationships` is a normal relational edge table with evidence and temporal validity. It can later be projected into a graph index without splitting truth ownership.
 - **Deterministic analytics:** window functions compute population changes from observations. DuckDB is available only for a versioned analytical export.
@@ -53,7 +53,7 @@ Scenario constraints, prediction, simulation, anomaly detection, and evidence-bo
 
 ## Operational path
 
-`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023` then `POST /ingest/natural-earth/country/IND`; both reconcile through ISO-3. Use `/observations`, `/geometries`, `/spatial/entities`, `/entities/{id}/context`, and `/analytics/population/{id}/change`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
+`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023`, `POST /ingest/natural-earth/country/IND`, and `POST /ingest/usgs/earthquake/us6000m0xm`; countries reconcile through ISO-3 while earthquakes resolve through USGS event IDs and spatial containment. Use `/observations`, `/events`, `/geometries`, `/spatial/entities`, `/entities/{id}/context`, and `/analytics/population/{id}/change`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
 
 ## Decisions and consequences
 
