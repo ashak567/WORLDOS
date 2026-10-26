@@ -1,49 +1,40 @@
 # WORLDOS progress
 
-## Checkpoint: Deterministic Analytics & Snapshot Automation (Engine 11 Deepening)
+## Checkpoint: Constraint Engine Implementation (Engine 12)
 
 **Date:** 2026-09-29
 **Branch:** `main`
-**Status:** implemented; live container integration and contract tests passed (36/36), benchmark suite verified, frontend production build passed
+**Status:** implemented; live container integration and contract tests passed (55/55), frontend production build passed
 
 ### Completed
 
-- **Hive-Partitioned Parquet Snapshot Automation (`SnapshotManager`):**
-  - Export engine transfers PostgreSQL/PostGIS data into partitioned Parquet files under `data/snapshots/{snapshot_id}/` using bounded memory and non-blocking read-only connections.
-  - Deterministic partitioning by calendar year (`year=YYYY`, `year=unknown`) and entity type (`entity_type=...`).
-  - Safe handling of missing timestamps and entity kinds; records are never silently dropped.
-  - Atomic staging via `.staging_{snapshot_id}/` and directory rename to prevent readers from discovering partial or corrupted exports.
-  - Safe retry semantics: cleans staging on failure, updates status to `failed`, and prevents overwriting existing completed snapshots.
-- **Snapshot Metadata & Run Tracking:**
-  - Database tracking via PostgreSQL table `snapshot_runs` (migration `007_snapshot_runs.sql`) capturing snapshot ID, schema version, export status (`in_progress`, `completed`, `failed`), timestamps, row counts, partition counts, and temporal boundaries.
-  - Persists JSON `manifest.json` in each snapshot directory capturing dataset schemas, row counts, and DuckDB version metadata.
-- **Snapshot Catalog & Validation (`SnapshotCatalog`):**
-  - Scans snapshot directory and database to discover available snapshots, distinguish complete vs in-progress vs failed, and track latest vs stale snapshots.
-  - `validate_snapshot()` verifies manifest schema version compatibility, physical file existence, DuckDB readability, and row count matches.
-- **DuckDB Analytical Boundary Expansion (`DuckDbSpatialAnalytics`):**
-  - In-process columnar query engine operating over Hive-partitioned Parquet files with zero locks on operational PostGIS tables.
-  - Supports multi-entity spatial rollups (`spatial_summaries`) grouping by country/entity and measure, distinguishing zero values from unavailable data.
-  - Supports multi-entity temporal aggregations and trends (`observation_counts_by_year_and_type`, `multi_entity_temporal_trends`) calculating historical percentages and preserving input evidence IDs.
-  - Computes comprehensive evidence coverage and freshness audits (`evidence_coverage_and_freshness`).
-  - Supports side-by-side spatial slice comparisons (`compare_spatial_slices`).
-  - Retains 100% backward compatibility for legacy `.duckdb` files and `derive_population_growth()`.
-- **Reproducible Analytical Benchmark Suite (`AnalyticalBenchmarkSuite`):**
-  - Implemented benchmark runner evaluating 6 core analytical workloads over snapshot Parquet data:
-    1. `snapshot_discovery_and_validation` (mean ~628ms)
-    2. `multi_entity_spatial_rollups` (mean ~885ms)
-    3. `temporal_aggregations_by_year` (mean ~877ms)
-    4. `multi_entity_temporal_trends` (mean ~894ms)
-    5. `evidence_coverage_and_freshness` (mean ~1128ms)
-    6. `multi_partition_predicate_scan` (mean ~834ms)
-  - Records iteration counts, mean/min/max durations, dataset size, and environment telemetry.
-- **API Endpoints:**
-  - Added REST endpoints: `POST /analytics/snapshots/export`, `GET /analytics/snapshots`, `GET /analytics/snapshots/{id}`, `GET /analytics/snapshots/{id}/validate`, `GET /analytics/rollups/spatial`, `GET /analytics/rollups/temporal`, `GET /analytics/coverage`, `GET /analytics/compare`, `GET /analytics/benchmarks`.
-  - Preserved backward compatibility for `POST /analytics/population/{id}/growth`.
+- **Typed Constraint Domain Model (`backend/app/domain.py`):**
+  - Implemented `ConstraintSeverity` (`BLOCKING`, `WARNING`, `REVIEW_REQUIRED`).
+  - Implemented `ConstraintCategory` (`PHYSICAL_COORDINATES`, `SPATIAL_CONSISTENCY`, `TEMPORAL_CONSISTENCY`, `ENTITY_RELATIONSHIP`, `CLAIM_EVIDENCE`, `SCENARIO_PROPOSAL`).
+  - Implemented `ConstraintStatus` (`VALID`, `VALID_WITH_WARNINGS`, `INVALID`).
+  - Implemented `ConstraintFinding` structured with deterministic error codes, field paths, actual/expected values, evidence ID citations, and persistence-blocking flags.
+  - Implemented `ConstraintValidationResult` with severity counters and status derivation.
+  - Implemented `ScenarioProposal` as a typed contract for evaluating hypothetical modifications prior to application.
+- **Deterministic Constraint Engine Core (`backend/app/constraints.py`):**
+  - *Physical & Coordinate Invariants*: finite numeric verification (rejects `NaN`, `Inf`), bounds checking (lat $[-90, 90]$, lon $[-180, 180]$), polygon ring closure and vertex count checks, and explicit antimeridian wrapping detection (valid global geometries crossing the 180th meridian are preserved rather than rejected).
+  - *Spatial Consistency*: PostGIS authoritative topology verification (`ST_IsValid`, `ST_IsValidReason`), spatial predicate enforcement (`located_in`, `adjacent_to`, `intersects`, `covers`, `part_of`) using `ST_Contains`, `ST_Covers`, and `ST_Disjoint`. Distinguishes genuine contradictions from missing evidence.
+  - *Temporal Consistency*: start/end ordering (`starts_at <= ends_at`), timezone-awareness enforcement (UTC), supported precision tier verification (`instant`, `day`, `month`, `year`, `unknown`), and year-precision preservation without fabricated timestamps.
+  - *Entity & Relationship Consistency*: referential integrity, anti-reflexivity (prohibits self-relationships where `subject == object`), predicate validation against `VALID_PREDICATES`, and conservative entity resolution checks preventing automated merge on unconfirmed name-only collisions.
+  - *Claims & Evidence Consistency*: enforces `truth_class = 'OBSERVED'` on all empirical observations, bounded confidence $\in [0.0, 1.0]$, physical measure domain sanity (non-negative population, magnitude $\in [-2.0, 12.0]$), and derived claim input/method tracing contracts.
+  - *Scenario & Proposed Modifications*: non-mutating dry-run validation interface via `validate_scenario_proposal()`, conforming directly to `ScenarioEngine.validate_constraints(scenario: dict) -> list[str]`.
+- **Authoritative Ingestion Integration (`backend/app/storage.py`):**
+  - Integrated `self.constraint_engine.validate_bundle(b, conn=conn)` into `WorldRepository.ingest()`.
+  - Blocking constraint findings raise `ConstraintViolationError`, rolling back transactions and preventing database corruption or dirty writes.
+  - Exposed `validate_bundle()` and `validate_scenario()` directly on `WorldRepository`.
+- **FastAPI Endpoint Contracts (`backend/app/main.py`):**
+  - Implemented `POST /constraints/validate` dry-run validation endpoint accepting typed assertions (`bundle`, `entity`, `geometry`, `observation`, `relationship`, `claim`, `time_interval`, `bounding_box`, `scenario_proposal`) and returning machine-readable findings without state mutation.
+  - Implemented `GET /constraints/rules` returning machine-readable catalog of active constraint rules and severity policies.
+  - Registered `ConstraintViolationError` exception handler returning HTTP 422 with structured validation findings.
 - **Verification Evidence:**
-  - Unit tests in `backend/tests/test_analytics_and_snapshots.py` (5 tests passing in 0.327s).
-  - Container integration tests in `backend/tests/test_container_integration.py` expanded to 22 tests (all 36 tests across the entire suite pass in container).
-  - Analytical benchmark suite executed and validated.
-  - Frontend production build verified (`npm --prefix frontend run build` completed with 0 errors).
+  - 15 unit tests in `backend/tests/test_constraints.py` covering all invariant categories, polygon rings, antimeridian spanning, temporal intervals, derived claims, warning vs blocking statuses, and scenario proposals.
+  - 4 container-backed integration tests in `backend/tests/test_container_integration.py` verifying PostGIS `ST_IsValid` topology, spatial containment consistency with PostGIS predicates, ingestion rejection with transactional rollback, and dry-run API endpoints.
+  - Complete container test suite passed: **55 tests passed in 68.51s** (`Ran 55 tests in 68.511s, OK`).
+  - Frontend production build verified (`npm --prefix frontend run build` built cleanly in 12.14s).
 
 ### Previous Checkpoints Reused
 
@@ -54,12 +45,13 @@
 5. `afb22ff — Engine registry, ingestion lifecycle, source health, resolution reviews, and claim/truth-class formalization`
 6. `46f7007 — Deepen temporal interval queries, spatial containment evidence, and knowledge graph traversal`
 7. `6873fbb — World Context Engine multi-entity spatial and temporal context assembly`
+8. `5347b1c — Deepen DuckDB analytical engine with Parquet snapshot automation, spatial rollups, and benchmark suite`
 
 ### Not claimed as complete
 
-- Advanced modeling engines (Simulation, Prediction, Scenario, Anomaly Detection) remain pure specification/interface boundaries pending further multi-source data depth.
-- Agent engine remains deferred behind deterministic query, evaluation, and constraint engine prerequisites.
+- Cross-temporal velocity checks (e.g. maximum rate of population change or spatial movement between consecutive timestamps) are deferred to future time-series constraint enhancements.
+- Advanced modeling engines (Simulation, Prediction, Scenario Engine execution) remain behind contracts in `backend/app/interfaces.py`.
 
 ### Next task
 
-Step 14: Constraint Engine Implementation (Engine 12) — validate physical invariants, spatial boundaries, and logical consistency rules before accepting state assertions, derived claims, or proposed scenario modifications.
+Engine 14: Event / Alert Engine Deepening — condition-based alerting, threshold evaluation against real-time seismic and spatial events, and alert dispatch contracts.

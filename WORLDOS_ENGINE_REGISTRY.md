@@ -157,20 +157,20 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Evidence Requirements**: Read-only replica queries; zero mutation of operational world state; strict evidence citation lineage and input tracing preserved in derived claims.
 - **Test Contract**: Verified in `test_analytics_and_snapshots.py` (5 unit tests: partition naming, temporal bucketing, unknown values, catalog discovery, staleness, validation, and spatial rollups) and `test_container_integration.py` (snapshot export lifecycle, PostgreSQL `snapshot_runs` tracking, DuckDB multi-entity rollups, analytical benchmarks, and FastAPI endpoints).
 - **Current Implementation**: Fully operational in container stack; DuckDB executes analytical rollups over partitioned Parquet files with zero locks on operational PostGIS tables.
-- **Next Milestone**: Constraint Engine implementation (Engine 12) to validate physical invariants, spatial boundaries, and logical rules.
+- **Next Milestone**: Decision Support Engine (Engine 13) and Event Alert Engine (Engine 14) thresholds.
 
 ### 12. Constraint Engine
-- **Purpose**: Validate physical invariants, spatial boundaries, and logical rules before accepting hypotheses.
-- **Status**: `INTERFACE_ONLY`
-- **Inputs**: Proposed scenario modifications, constraint definitions.
-- **Outputs**: List of constraint violation strings.
-- **Dependencies**: `interfaces.py`.
-- **Persistence**: Ephemeral.
-- **Interface / API**: `ScenarioEngine.validate_constraints(scenario: dict) -> list[str]`.
-- **Evidence Requirements**: Violations must cite physical or regulatory limits.
-- **Test Contract**: Pending implementation.
-- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
-- **Next Milestone**: Implement basic boundary constraints (e.g. population cannot be negative, coordinates must be in bounds).
+- **Purpose**: Deterministic validation layer enforcing physical coordinate invariants, PostGIS geometry topology, spatial consistency, temporal ordering, entity relationships, truth classes, evidence completeness, and scenario modifications.
+- **Status**: `VERIFIED`
+- **Inputs**: `WorldBundle`, `Entity`, `Geometry`, `Observation`, `Relationship`, `Claim`, `TimeInterval`, `BoundingBox`, and `ScenarioProposal`.
+- **Outputs**: Typed `ConstraintValidationResult` with `status` (`VALID`, `VALID_WITH_WARNINGS`, `INVALID`), `findings` (`ConstraintFinding`), and severity counters (`blocking_count`, `warning_count`, `review_required_count`).
+- **Dependencies**: PostGIS 3.4 (`ST_IsValid`, `ST_IsValidReason`, `ST_Contains`, `ST_Intersects`, `ST_Disjoint`), `psycopg`, `pydantic`.
+- **Persistence**: Pre-persistence gate in `WorldRepository.ingest()`; dry-run ephemeral evaluation via REST endpoint. Does not mutate database during validation.
+- **Interface / API**: `backend/app/constraints.py` (`ConstraintEngine`, `ConstraintViolationError`), `WorldRepository.validate_bundle()`, `WorldRepository.validate_scenario()`, REST endpoints: `POST /constraints/validate`, `GET /constraints/rules`, and protocol compatibility `ScenarioEngine.validate_constraints(scenario: dict) -> list[str]`.
+- **Evidence Requirements**: Every finding preserves underlying evidence references without fabricating evidence. Distinguishes missing evidence (`WARNING`) from invalid references (`BLOCKING`).
+- **Test Contract**: Verified by 15 unit tests in `backend/tests/test_constraints.py` (coordinates, non-finite values, polygon closure, antimeridian wrapping, temporal intervals, anti-reflexivity, truth class invariants, derived claims, scenario proposals) and 4 container-backed integration tests in `backend/tests/test_container_integration.py` (authoritative PostGIS topology, spatial containment consistency, pre-persistence ingestion blocking with rollback, and dry-run validation REST endpoints).
+- **Current Implementation**: Fully operational in container stack; protects `WorldRepository.ingest()` from dirty writes; provides deterministic dry-run evaluation.
+- **Next Milestone**: Implement cross-temporal velocity constraints (maximum rate of change between successive observations) and polygon simplification checks.
 
 ### 13. Decision Support Engine
 - **Purpose**: Multi-criteria trade-off ranking based on deterministic evidence and scenario constraints.

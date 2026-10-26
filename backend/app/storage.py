@@ -15,14 +15,21 @@ from psycopg.rows import dict_row
 from .domain import (
     BoundingBox,
     Claim,
+    ConstraintCategory,
+    ConstraintFinding,
+    ConstraintSeverity,
+    ConstraintStatus,
+    ConstraintValidationResult,
     ContextQueryScope,
     EvidenceCitation,
     Relationship,
+    ScenarioProposal,
     SpatialScope,
     TemporalScope,
     WorldBundle,
     WorldContext,
 )
+from .constraints import ConstraintEngine, ConstraintViolationError
 
 
 def _extract_int(val: Any, default: int = 100) -> int:
@@ -49,16 +56,31 @@ def _clean_record(d: dict[str, Any]) -> dict[str, Any]:
 class WorldRepository:
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = database_url or os.environ["WORLDOS_DATABASE_URL"]
+        self.constraint_engine = ConstraintEngine(repository=self)
 
     @contextmanager
     def _connection(self) -> Iterator[psycopg.Connection]:
         with psycopg.connect(self.database_url, row_factory=dict_row) as connection:
             yield connection
 
-    def ingest(self, bundle: WorldBundle) -> UUID:
-        """Idempotently persist one fact and every piece of its provenance."""
+    def validate_bundle(self, bundle: WorldBundle) -> ConstraintValidationResult:
+        """Validate a bundle against physical, spatial, temporal, and referential constraints."""
+        with self._connection() as conn:
+            return self.constraint_engine.validate_bundle(bundle, conn=conn)
+
+    def validate_scenario(self, proposal: ScenarioProposal) -> ConstraintValidationResult:
+        """Validate proposed scenario modifications without mutating authoritative world state."""
+        with self._connection() as conn:
+            return self.constraint_engine.validate_scenario_proposal(proposal, conn=conn)
+
+    def ingest(self, bundle: WorldBundle, enforce_constraints: bool = True) -> UUID:
+        """Idempotently persist one fact and every piece of its provenance after constraint validation."""
         b = bundle
         with self._connection() as conn, conn.cursor() as cur:
+            if enforce_constraints:
+                validation = self.constraint_engine.validate_bundle(b, conn=conn)
+                if validation.status == ConstraintStatus.INVALID:
+                    raise ConstraintViolationError(validation)
             cur.execute(
                 """INSERT INTO sources (id,slug,name,publisher,license,homepage,refresh_policy)
                    VALUES (%s,%s,%s,%s,%s,%s,%s)

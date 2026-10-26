@@ -10,6 +10,11 @@ from .domain import (
     BoundingBox,
     Claim,
     Confidence,
+    ConstraintCategory,
+    ConstraintFinding,
+    ConstraintSeverity,
+    ConstraintStatus,
+    ConstraintValidationResult,
     CoverageSummary,
     Entity,
     EntityIdentifier,
@@ -19,6 +24,7 @@ from .domain import (
     Observation,
     Provenance,
     Relationship,
+    ScenarioProposal,
     SnapshotManifest,
     Source,
     SpatialRollupItem,
@@ -31,6 +37,7 @@ from .domain import (
 )
 from .analytics import DuckDbSpatialAnalytics
 from .benchmarks import AnalyticalBenchmarkSuite
+from .constraints import ConstraintEngine, ConstraintViolationError
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
@@ -39,7 +46,22 @@ from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
 
 app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API")
+
+
+@app.exception_handler(ConstraintViolationError)
+def constraint_violation_handler(request, exc: ConstraintViolationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": str(exc),
+            "validation": exc.result.model_dump(mode="json"),
+        },
+    )
+
+
 NAMESPACE = UUID("b0dcd802-3c40-4b12-99d5-3707d5a07603")
+
 
 
 def stable_id(*parts: str) -> UUID:
@@ -881,3 +903,121 @@ def run_benchmarks_endpoint(
     return suite.run_all(iterations=iterations_v)
 
 
+# -----------------------------------------------------------------------------
+# Engine 12: Constraint Engine Endpoints
+# -----------------------------------------------------------------------------
+
+
+class ValidationRequest(BaseModel):
+    bundle: WorldBundle | None = None
+    entity: Entity | None = None
+    geometry: Geometry | None = None
+    observation: Observation | None = None
+    relationship: Relationship | None = None
+    claim: Claim | None = None
+    time_interval: TimeInterval | None = None
+    bounding_box: BoundingBox | None = None
+    scenario_proposal: ScenarioProposal | None = None
+
+
+@app.post("/constraints/validate", response_model=ConstraintValidationResult)
+def validate_constraints_endpoint(payload: ValidationRequest):
+    """Deterministic, dry-run validation endpoint evaluating physical, spatial, temporal, entity, claim, and scenario constraints without state mutation."""
+    findings: list[ConstraintFinding] = []
+    repo = WorldRepository()
+
+    with repo._connection() as conn:
+        engine = repo.constraint_engine
+
+        if payload.bundle:
+            return engine.validate_bundle(payload.bundle, conn=conn)
+
+        if payload.scenario_proposal:
+            return engine.validate_scenario_proposal(payload.scenario_proposal, conn=conn)
+
+        if payload.entity:
+            findings.extend(engine.validate_entity(payload.entity, conn=conn))
+
+        if payload.geometry:
+            findings.extend(engine.validate_geometry(payload.geometry, conn=conn))
+
+        if payload.observation:
+            findings.extend(engine.validate_observation(payload.observation, conn=conn))
+
+        if payload.relationship:
+            findings.extend(engine.validate_relationship(payload.relationship, conn=conn))
+
+        if payload.claim:
+            findings.extend(engine.validate_claim(payload.claim, conn=conn))
+
+        if payload.time_interval:
+            findings.extend(engine.validate_temporal(payload.time_interval))
+
+        if payload.bounding_box:
+            findings.extend(engine.validate_bounding_box(payload.bounding_box))
+
+    if not any([
+        payload.bundle, payload.scenario_proposal, payload.entity, payload.geometry,
+        payload.observation, payload.relationship, payload.claim, payload.time_interval,
+        payload.bounding_box
+    ]):
+        raise HTTPException(
+            status_code=422,
+            detail="At least one validatable payload object must be provided (bundle, scenario_proposal, entity, geometry, observation, relationship, claim, time_interval, or bounding_box)"
+        )
+
+    return ConstraintValidationResult.from_findings(findings)
+
+
+@app.get("/constraints/rules")
+def list_constraint_rules():
+    """Return active deterministic constraint categories, error codes, and policy tiers."""
+    return {
+        "engine": "Engine 12: Constraint Engine",
+        "status": "IMPLEMENTED",
+        "severity_tiers": {
+            "BLOCKING": "Prohibits persistence or scenario application; deterministic invariant violation.",
+            "WARNING": "Persistence permitted; highlights non-fatal advisories or incomplete evidence.",
+            "REVIEW_REQUIRED": "Human resolution or conservative quarantine required before automated merge."
+        },
+        "categories": {
+            "PHYSICAL_COORDINATES": [
+                {"code": "COORD_NON_NUMERIC", "severity": "BLOCKING", "description": "Coordinates must be numeric."},
+                {"code": "COORD_NON_FINITE", "severity": "BLOCKING", "description": "Coordinates must be finite (no NaN/Inf)."},
+                {"code": "COORD_LON_OUT_OF_BOUNDS", "severity": "BLOCKING", "description": "Longitude must be in [-180, 180]."},
+                {"code": "COORD_LAT_OUT_OF_BOUNDS", "severity": "BLOCKING", "description": "Latitude must be in [-90, 90]."},
+                {"code": "BBOX_LATITUDE_INVERTED", "severity": "BLOCKING", "description": "min_latitude must be <= max_latitude."},
+                {"code": "BBOX_LONGITUDE_INVERTED", "severity": "BLOCKING", "description": "min_longitude must be <= max_longitude unless anti-meridian."},
+                {"code": "BBOX_ANTIMERIDIAN_SPAN", "severity": "WARNING", "description": "Bounding box spans the 180th anti-meridian."},
+                {"code": "GEOM_INVALID_TOPOLOGY", "severity": "BLOCKING", "description": "PostGIS geometry topology failure (self-intersection, invalid rings)."},
+                {"code": "GEOM_POLYGON_RING_NOT_CLOSED", "severity": "BLOCKING", "description": "Polygon ring first vertex must equal last vertex."}
+            ],
+            "SPATIAL_CONSISTENCY": [
+                {"code": "SPATIAL_RELATION_CONTRADICTION", "severity": "BLOCKING", "description": "Entities asserted in spatial relationship are geographically disjoint."},
+                {"code": "SPATIAL_RELATION_PARTIAL_OVERLAP", "severity": "WARNING", "description": "Entities partially overlap for strict containment predicate."},
+                {"code": "SPATIAL_EVIDENCE_MISSING", "severity": "WARNING", "description": "Cannot verify spatial relationship due to missing geometry."}
+            ],
+            "TEMPORAL_CONSISTENCY": [
+                {"code": "TEMPORAL_TIMEZONE_MISSING", "severity": "BLOCKING", "description": "Timestamps must be timezone-aware (UTC)."},
+                {"code": "TEMPORAL_INVERTED", "severity": "BLOCKING", "description": "Interval starts_at must be <= ends_at."},
+                {"code": "TEMPORAL_PRECISION_INVALID", "severity": "BLOCKING", "description": "Precision must be instant, day, month, year, or unknown."}
+            ],
+            "ENTITY_RELATIONSHIP": [
+                {"code": "REL_SELF_RELATIONSHIP", "severity": "BLOCKING", "description": "Self-referencing relationships are prohibited."},
+                {"code": "REL_INVALID_PREDICATE", "severity": "BLOCKING", "description": "Predicate must be in VALID_PREDICATES."},
+                {"code": "ENTITY_RESOLUTION_UNVERIFIED_MATCH", "severity": "REVIEW_REQUIRED", "description": "Name matches existing entity without publisher identifier."}
+            ],
+            "CLAIM_EVIDENCE": [
+                {"code": "TRUTH_CLASS_INVALID", "severity": "BLOCKING", "description": "Observations must be OBSERVED."},
+                {"code": "CONFIDENCE_OUT_OF_BOUNDS", "severity": "BLOCKING", "description": "Confidence must be within [0.0, 1.0]."},
+                {"code": "MEASURE_VALUE_NEGATIVE", "severity": "BLOCKING", "description": "Population values cannot be negative."},
+                {"code": "DERIVED_CLAIM_INPUTS_MISSING", "severity": "BLOCKING", "description": "Derived claims must record explicit inputs."},
+                {"code": "HYPOTHESIS_ASSUMPTIONS_MISSING", "severity": "BLOCKING", "description": "Predicted/simulated claims must document assumptions."}
+            ],
+            "SCENARIO_PROPOSAL": [
+                {"code": "SCENARIO_NAME_EMPTY", "severity": "BLOCKING", "description": "Scenario must provide a valid name."},
+                {"code": "SCENARIO_PARAMETER_NON_FINITE", "severity": "BLOCKING", "description": "Parameters must be finite numbers."},
+                {"code": "SCENARIO_PARAMETER_NEGATIVE_POPULATION", "severity": "BLOCKING", "description": "Population parameter delta cannot be negative."}
+            ]
+        }
+    }

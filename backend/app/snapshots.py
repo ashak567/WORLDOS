@@ -363,7 +363,7 @@ class SnapshotManager:
             SELECT
                 g.id::text AS id,
                 g.entity_id::text AS entity_id,
-                COALESCE(g.geometry_kind, 'unknown') AS geometry_kind,
+                LOWER(COALESCE(g.geometry_kind, 'unknown')) AS geometry_kind,
                 ST_AsGeoJSON(g.geometry) AS geometry_geojson,
                 g.source_id::text AS source_id,
                 g.evidence_id::text AS evidence_id,

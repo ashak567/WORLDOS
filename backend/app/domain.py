@@ -379,5 +379,86 @@ class SpatialSliceComparison(BaseModel):
     larger_entity: str | None
 
 
+class ConstraintSeverity(str, Enum):
+    BLOCKING = "BLOCKING"
+    WARNING = "WARNING"
+    REVIEW_REQUIRED = "REVIEW_REQUIRED"
 
 
+class ConstraintCategory(str, Enum):
+    PHYSICAL_COORDINATES = "PHYSICAL_COORDINATES"
+    SPATIAL_CONSISTENCY = "SPATIAL_CONSISTENCY"
+    TEMPORAL_CONSISTENCY = "TEMPORAL_CONSISTENCY"
+    ENTITY_RELATIONSHIP = "ENTITY_RELATIONSHIP"
+    CLAIM_EVIDENCE = "CLAIM_EVIDENCE"
+    SCENARIO_PROPOSAL = "SCENARIO_PROPOSAL"
+
+
+class ConstraintStatus(str, Enum):
+    VALID = "VALID"
+    VALID_WITH_WARNINGS = "VALID_WITH_WARNINGS"
+    INVALID = "INVALID"
+
+
+class ConstraintFinding(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    code: str
+    category: ConstraintCategory
+    severity: ConstraintSeverity
+    message: str
+    field: str | None = None
+    actual_value: Any | None = None
+    expected_value: Any | None = None
+    evidence_ids: list[UUID] = Field(default_factory=list)
+    blocks_persistence: bool = False
+
+    @model_validator(mode="after")
+    def sync_blocking(self) -> "ConstraintFinding":
+        if self.severity == ConstraintSeverity.BLOCKING:
+            self.blocks_persistence = True
+        return self
+
+
+class ConstraintValidationResult(BaseModel):
+    status: ConstraintStatus
+    findings: list[ConstraintFinding] = Field(default_factory=list)
+    total_findings: int = 0
+    blocking_count: int = 0
+    warning_count: int = 0
+    review_required_count: int = 0
+    checked_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @classmethod
+    def from_findings(cls, findings: list[ConstraintFinding]) -> "ConstraintValidationResult":
+        blocking = sum(1 for f in findings if f.severity == ConstraintSeverity.BLOCKING)
+        warning = sum(1 for f in findings if f.severity == ConstraintSeverity.WARNING)
+        review = sum(1 for f in findings if f.severity == ConstraintSeverity.REVIEW_REQUIRED)
+
+        if blocking > 0:
+            status = ConstraintStatus.INVALID
+        elif warning > 0 or review > 0:
+            status = ConstraintStatus.VALID_WITH_WARNINGS
+        else:
+            status = ConstraintStatus.VALID
+
+        return cls(
+            status=status,
+            findings=findings,
+            total_findings=len(findings),
+            blocking_count=blocking,
+            warning_count=warning,
+            review_required_count=review,
+        )
+
+
+class ScenarioProposal(BaseModel):
+    """Reusable specification for proposed scenario modifications validated prior to application."""
+
+    scenario_id: UUID = Field(default_factory=uuid4)
+    name: str
+    description: str | None = None
+    target_entity_ids: list[UUID] = Field(default_factory=list)
+    proposed_observations: list[Observation] = Field(default_factory=list)
+    proposed_geometries: list[Geometry] = Field(default_factory=list)
+    proposed_relationships: list[Relationship] = Field(default_factory=list)
+    parameters: dict[str, Any] = Field(default_factory=dict)

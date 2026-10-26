@@ -12,15 +12,51 @@ from psycopg.rows import dict_row
 
 from app.analytics import DuckDbSpatialAnalytics
 from app.benchmarks import AnalyticalBenchmarkSuite
-from app.domain import (BoundingBox, Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, SnapshotManifest, Source,
-                        TimeInterval, TruthClass, WorldBundle, WorldContext)
+from app.domain import (
+    BoundingBox,
+    Claim,
+    Confidence,
+    ConstraintCategory,
+    ConstraintFinding,
+    ConstraintSeverity,
+    ConstraintStatus,
+    ConstraintValidationResult,
+    Entity,
+    Evidence,
+    Geometry,
+    Observation,
+    Provenance,
+    Relationship,
+    ScenarioProposal,
+    SnapshotManifest,
+    Source,
+    TimeInterval,
+    TruthClass,
+    WorldBundle,
+    WorldContext,
+)
+from app.constraints import ConstraintEngine, ConstraintViolationError
 from app.export import export_observations
 from app.ingestion.natural_earth import parse_country_boundary
 from app.ingestion.usgs import parse_earthquake_feature
 from app.ingestion.world_bank import parse_population
-from app.main import (compare_spatial_slices_endpoint, coverage_summary_endpoint, export_snapshot_endpoint, get_snapshot_endpoint,
-                      list_snapshots_endpoint, natural_earth_bundle, run_benchmarks_endpoint, spatial_rollups_endpoint,
-                      temporal_rollups_endpoint, usgs_earthquake_bundle, validate_snapshot_endpoint, world_bank_bundle)
+from app.main import (
+    ValidationRequest,
+    compare_spatial_slices_endpoint,
+    coverage_summary_endpoint,
+    export_snapshot_endpoint,
+    get_snapshot_endpoint,
+    list_constraint_rules,
+    list_snapshots_endpoint,
+    natural_earth_bundle,
+    run_benchmarks_endpoint,
+    spatial_rollups_endpoint,
+    temporal_rollups_endpoint,
+    usgs_earthquake_bundle,
+    validate_constraints_endpoint,
+    validate_snapshot_endpoint,
+    world_bank_bundle,
+)
 from app.snapshots import SnapshotCatalog, SnapshotManager
 from app.storage import WorldRepository
 
@@ -958,6 +994,291 @@ class ContainerIntegrationTests(unittest.TestCase):
                 os.environ.pop("WORLDOS_SNAPSHOT_DIR", None)
             shutil.rmtree(temp_snapshots, ignore_errors=True)
 
+    # -------------------------------------------------------------------------
+    # Engine 12: Constraint Engine Integration Tests
+    # -------------------------------------------------------------------------
 
+    def test_postgis_geometry_topology_authoritative_validation(self) -> None:
+        """Verify PostGIS ST_IsValid and ST_IsValidReason authoritative topology validation."""
+        engine = self.repo.constraint_engine
 
+        # 1. Valid geometry
+        valid_geojson = {"type": "Point", "coordinates": [77.2090, 28.6139]}
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn:
+            valid_findings = engine.validate_geometry_with_postgis(valid_geojson, conn)
+            self.assertEqual(len(valid_findings), 0)
 
+            # 2. Self-intersecting polygon (bowtie - invalid topology)
+            bowtie_geojson = {
+                "type": "Polygon",
+                "coordinates": [[[0.0, 0.0], [10.0, 10.0], [0.0, 10.0], [10.0, 0.0], [0.0, 0.0]]],
+            }
+            invalid_findings = engine.validate_geometry_with_postgis(bowtie_geojson, conn)
+            self.assertEqual(len(invalid_findings), 1)
+            self.assertEqual(invalid_findings[0].code, "GEOM_INVALID_TOPOLOGY")
+            self.assertEqual(invalid_findings[0].severity, ConstraintSeverity.BLOCKING)
+            self.assertIn("Self-intersection", str(invalid_findings[0].actual_value))
+
+    def test_postgis_spatial_predicate_and_containment_consistency(self) -> None:
+        """Verify spatial consistency between entity geometries using PostGIS spatial predicates."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(
+            id=uuid4(),
+            slug=f"spatial-source-{uuid4().hex[:6]}",
+            name="Spatial Invariant Test Source",
+            publisher="Test Publisher",
+        )
+        evidence = Evidence(
+            id=uuid4(),
+            source_id=source.id,
+            locator="https://test.worldos.internal/spatial",
+            retrieved_at=now,
+        )
+        provenance = Provenance(id=uuid4(), evidence_id=evidence.id, pipeline_version="test-v1")
+        time_int = TimeInterval(starts_at=now, ends_at=now, precision="day")
+
+        # Entity A: Delhi (Point)
+        entity_a = Entity(
+            id=uuid4(),
+            kind="place",
+            canonical_name="Delhi Point",
+            source_id=source.id,
+            source_key=f"delhi-{uuid4().hex[:6]}",
+            confidence=Confidence(value=1.0),
+        )
+        geom_a = Geometry(
+            id=uuid4(),
+            entity_id=entity_a.id,
+            geometry_kind="point",
+            geojson={"type": "Point", "coordinates": [77.2090, 28.6139]},
+            source_id=source.id,
+            confidence=Confidence(value=1.0),
+        )
+        bundle_a = WorldBundle(
+            source=source,
+            entity=entity_a,
+            evidence=evidence,
+            provenance=provenance,
+            time_interval=time_int,
+            geometry=geom_a,
+        )
+        self.repo.ingest(bundle_a)
+
+        # Entity B: India (Bounding polygon covering Delhi)
+        entity_b = Entity(
+            id=uuid4(),
+            kind="place",
+            canonical_name="India Region",
+            source_id=source.id,
+            source_key=f"india-{uuid4().hex[:6]}",
+            confidence=Confidence(value=1.0),
+        )
+        geom_b = Geometry(
+            id=uuid4(),
+            entity_id=entity_b.id,
+            geometry_kind="polygon",
+            geojson={
+                "type": "Polygon",
+                "coordinates": [[[68.0, 8.0], [97.0, 8.0], [97.0, 35.0], [68.0, 35.0], [68.0, 8.0]]],
+            },
+            source_id=source.id,
+            confidence=Confidence(value=1.0),
+        )
+        bundle_b = WorldBundle(
+            source=source,
+            entity=entity_b,
+            evidence=evidence,
+            provenance=provenance,
+            time_interval=time_int,
+            geometry=geom_b,
+        )
+        self.repo.ingest(bundle_b)
+
+        # Entity C: Iceland (Disjoint polygon)
+        entity_c = Entity(
+            id=uuid4(),
+            kind="place",
+            canonical_name="Iceland Region",
+            source_id=source.id,
+            source_key=f"iceland-{uuid4().hex[:6]}",
+            confidence=Confidence(value=1.0),
+        )
+        geom_c = Geometry(
+            id=uuid4(),
+            entity_id=entity_c.id,
+            geometry_kind="polygon",
+            geojson={
+                "type": "Polygon",
+                "coordinates": [[[-25.0, 63.0], [-13.0, 63.0], [-13.0, 67.0], [-25.0, 67.0], [-25.0, 63.0]]],
+            },
+            source_id=source.id,
+            confidence=Confidence(value=1.0),
+        )
+        bundle_c = WorldBundle(
+            source=source,
+            entity=entity_c,
+            evidence=evidence,
+            provenance=provenance,
+            time_interval=time_int,
+            geometry=geom_c,
+        )
+        self.repo.ingest(bundle_c)
+
+        try:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn:
+                # 1. Consistent spatial containment: Delhi located_in India
+                rel_valid = Relationship(
+                    subject_entity_id=entity_a.id,
+                    predicate="located_in",
+                    object_entity_id=entity_b.id,
+                    evidence_id=evidence.id,
+                    confidence=Confidence(value=1.0),
+                )
+                findings_valid = self.repo.constraint_engine.validate_spatial_relationship(rel_valid, conn=conn)
+                self.assertEqual(len(findings_valid), 0)
+
+                # 2. Contradictory spatial containment: Delhi located_in Iceland (Disjoint!)
+                rel_contradiction = Relationship(
+                    subject_entity_id=entity_a.id,
+                    predicate="located_in",
+                    object_entity_id=entity_c.id,
+                    evidence_id=evidence.id,
+                    confidence=Confidence(value=1.0),
+                )
+                findings_contra = self.repo.constraint_engine.validate_spatial_relationship(rel_contradiction, conn=conn)
+                self.assertEqual(len(findings_contra), 1)
+                self.assertEqual(findings_contra[0].code, "SPATIAL_RELATION_CONTRADICTION")
+                self.assertEqual(findings_contra[0].severity, ConstraintSeverity.BLOCKING)
+
+                # 3. Missing spatial evidence: Delhi located_in NonExistentEntity
+                rel_missing = Relationship(
+                    subject_entity_id=entity_a.id,
+                    predicate="located_in",
+                    object_entity_id=uuid4(),
+                    evidence_id=evidence.id,
+                    confidence=Confidence(value=1.0),
+                )
+                findings_missing = self.repo.constraint_engine.validate_spatial_relationship(rel_missing, conn=conn)
+                self.assertEqual(len(findings_missing), 1)
+                self.assertEqual(findings_missing[0].code, "SPATIAL_EVIDENCE_MISSING")
+                self.assertEqual(findings_missing[0].severity, ConstraintSeverity.WARNING)
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM geometries WHERE entity_id IN (%s, %s, %s)", (entity_a.id, entity_b.id, entity_c.id))
+                cur.execute("DELETE FROM entities WHERE id IN (%s, %s, %s)", (entity_a.id, entity_b.id, entity_c.id))
+                conn.commit()
+
+    def test_ingestion_blocks_constraint_violations_without_mutating_state(self) -> None:
+        """Verify that WorldRepository.ingest blocks invalid data deterministically without persisting dirty records."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(
+            id=uuid4(),
+            slug=f"rejection-source-{uuid4().hex[:6]}",
+            name="Constraint Rejection Test Source",
+            publisher="Test Publisher",
+        )
+        evidence = Evidence(
+            id=uuid4(),
+            source_id=source.id,
+            locator="https://test.worldos.internal/rejection",
+            retrieved_at=now,
+        )
+        provenance = Provenance(id=uuid4(), evidence_id=evidence.id, pipeline_version="test-v1")
+        time_int = TimeInterval(starts_at=now, ends_at=now, precision="day")
+
+        entity_id = uuid4()
+        entity = Entity(
+            id=entity_id,
+            kind="place",
+            canonical_name="Dirty Record City",
+            source_id=source.id,
+            source_key=f"dirty-{uuid4().hex[:6]}",
+            confidence=Confidence(value=1.0),
+        )
+
+        # Observation with negative population -> BLOCKING constraint
+        invalid_obs = Observation(
+            subject_entity_id=entity_id,
+            measure="population.total",
+            value=-100000.0,
+            unit="people",
+            truth_class="OBSERVED",
+            time_interval_id=time_int.id,
+            evidence_id=evidence.id,
+            provenance_id=provenance.id,
+            confidence=Confidence(value=1.0),
+        )
+        invalid_bundle = WorldBundle(
+            source=source,
+            entity=entity,
+            evidence=evidence,
+            provenance=provenance,
+            time_interval=time_int,
+            observation=invalid_obs,
+        )
+
+        # Ingestion must raise ConstraintViolationError
+        with self.assertRaises(ConstraintViolationError) as ctx:
+            self.repo.ingest(invalid_bundle, enforce_constraints=True)
+
+        self.assertIn("MEASURE_VALUE_NEGATIVE", [f.code for f in ctx.exception.result.findings])
+
+        # Verify that entity was NOT persisted into database (rollback ensured)
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT 1 FROM entities WHERE id = %s", (entity_id,))
+            self.assertIsNone(cur.fetchone())
+
+    def test_constraint_engine_api_dry_run_and_rules_endpoints(self) -> None:
+        """Verify POST /constraints/validate dry-run endpoint and GET /constraints/rules."""
+        # 1. Rules listing endpoint
+        rules_res = list_constraint_rules()
+        self.assertIn("severity_tiers", rules_res)
+        self.assertIn("categories", rules_res)
+        self.assertIn("PHYSICAL_COORDINATES", rules_res["categories"])
+        self.assertIn("SPATIAL_CONSISTENCY", rules_res["categories"])
+
+        # 2. Dry-run validation of valid geometry
+        valid_req = ValidationRequest(
+            geometry=Geometry(
+                id=uuid4(),
+                entity_id=uuid4(),
+                geometry_kind="Point",
+                geojson={"type": "Point", "coordinates": [72.8777, 19.0760]},
+                source_id=uuid4(),
+                confidence=Confidence(value=1.0),
+            )
+        )
+        val_res = validate_constraints_endpoint(valid_req)
+        self.assertEqual(val_res.status, ConstraintStatus.VALID)
+        self.assertEqual(val_res.blocking_count, 0)
+
+        # 3. Dry-run validation of invalid coordinate geometry (lat > 90)
+        invalid_req = ValidationRequest(
+            geometry=Geometry.model_construct(
+                id=uuid4(),
+                entity_id=uuid4(),
+                geometry_kind="Point",
+                geojson={"type": "Point", "coordinates": [0.0, 99.0]},
+                source_id=uuid4(),
+                confidence=Confidence(value=1.0),
+            )
+        )
+        inv_res = validate_constraints_endpoint(invalid_req)
+        self.assertEqual(inv_res.status, ConstraintStatus.INVALID)
+        self.assertIn("COORD_LAT_OUT_OF_BOUNDS", [f.code for f in inv_res.findings])
+
+        # 4. Dry-run validation of scenario proposal
+        scenario_req = ValidationRequest(
+            scenario_proposal=ScenarioProposal(
+                name="Hypothetical Port Expansion",
+                parameters={"dredging_depth_meters": 15.0, "projected_vessels": 1200},
+            )
+        )
+        scen_res = validate_constraints_endpoint(scenario_req)
+        self.assertEqual(scen_res.status, ConstraintStatus.VALID)
+
+        # 5. Empty request raises HTTPException 422
+        from fastapi import HTTPException
+        with self.assertRaises(HTTPException) as ctx:
+            validate_constraints_endpoint(ValidationRequest())
+        self.assertEqual(ctx.exception.status_code, 422)
