@@ -1,15 +1,16 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from uuid import UUID, uuid5
+from uuid import UUID, uuid4, uuid5
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .domain import (
     BoundingBox,
     Claim,
     Confidence,
+    CoverageSummary,
     Entity,
     EntityIdentifier,
     Event,
@@ -18,17 +19,23 @@ from .domain import (
     Observation,
     Provenance,
     Relationship,
+    SnapshotManifest,
     Source,
+    SpatialRollupItem,
+    SpatialSliceComparison,
+    TemporalTrendItem,
     TimeInterval,
     TruthClass,
     WorldBundle,
     WorldContext,
 )
 from .analytics import DuckDbSpatialAnalytics
+from .benchmarks import AnalyticalBenchmarkSuite
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
+from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
 
 app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API")
@@ -710,5 +717,167 @@ def derive_population_growth(entity_id: UUID):
         raise HTTPException(status_code=400, detail="insufficient population observations to compute growth rate")
     claim_id = repo.record_claim(claim)
     return {"status": "derived", "claim_id": claim_id, "claim": claim.model_dump()}
+
+
+@app.post("/analytics/snapshots/export")
+def export_snapshot_endpoint(
+    background: bool = Query(default=False),
+    datasets: list[str] | None = Query(default=None),
+    background_tasks: BackgroundTasks = None,  # type: ignore
+):
+    manager = SnapshotManager()
+    datasets_v = _clean_param(datasets)
+    background_v = bool(_clean_param(background, False))
+    if background_v and background_tasks is not None:
+        sid = uuid4()
+        background_tasks.add_task(manager.export_snapshot, datasets=datasets_v, snapshot_id=sid)
+        return {
+            "status": "in_progress",
+            "snapshot_id": sid,
+            "message": "Snapshot export job started in background",
+        }
+    manifest = manager.export_snapshot(datasets=datasets_v)
+    return manifest
+
+
+@app.get("/analytics/snapshots")
+def list_snapshots_endpoint(
+    status: str | None = Query(default=None),
+):
+    status_v = _clean_param(status)
+    catalog = SnapshotCatalog()
+    return catalog.list_snapshots(status_filter=status_v)
+
+
+@app.get("/analytics/snapshots/{snapshot_id}")
+def get_snapshot_endpoint(snapshot_id: UUID):
+    catalog = SnapshotCatalog()
+    manifest = catalog.get_snapshot(snapshot_id)
+    if not manifest:
+        raise HTTPException(status_code=404, detail="Snapshot not found")
+    return manifest
+
+
+@app.get("/analytics/snapshots/{snapshot_id}/validate")
+def validate_snapshot_endpoint(snapshot_id: UUID):
+    catalog = SnapshotCatalog()
+    res = catalog.validate_snapshot(snapshot_id)
+    if not res.get("valid"):
+        raise HTTPException(status_code=400, detail=res)
+    return res
+
+
+@app.get("/analytics/rollups/spatial")
+def spatial_rollups_endpoint(
+    snapshot_id: UUID | None = Query(default=None),
+    measure: str = Query(default="population.total"),
+    year: str | None = Query(default=None),
+    entity_type: str | None = Query(default=None),
+):
+    snapshot_id_v = _clean_param(snapshot_id)
+    measure_v = str(_clean_param(measure, "population.total"))
+    year_v = _clean_param(year)
+    entity_type_v = _clean_param(entity_type)
+
+    catalog = SnapshotCatalog()
+    if snapshot_id_v:
+        manifest = catalog.get_snapshot(snapshot_id_v)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Specified snapshot not found")
+        analytics = DuckDbSpatialAnalytics(manifest.storage_path)
+    else:
+        latest = catalog.get_latest_completed_snapshot()
+        analytics = DuckDbSpatialAnalytics(latest.storage_path if latest else None)
+
+    return analytics.spatial_summaries(measure=measure_v, year=year_v, entity_type=entity_type_v)
+
+
+@app.get("/analytics/rollups/temporal")
+def temporal_rollups_endpoint(
+    snapshot_id: UUID | None = Query(default=None),
+    measure: str = Query(default="population.total"),
+    entity_ids: list[UUID] | None = Query(default=None),
+):
+    snapshot_id_v = _clean_param(snapshot_id)
+    measure_v = str(_clean_param(measure, "population.total"))
+    entity_ids_v = _clean_param(entity_ids)
+
+    catalog = SnapshotCatalog()
+    if snapshot_id_v:
+        manifest = catalog.get_snapshot(snapshot_id_v)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Specified snapshot not found")
+        analytics = DuckDbSpatialAnalytics(manifest.storage_path)
+    else:
+        latest = catalog.get_latest_completed_snapshot()
+        analytics = DuckDbSpatialAnalytics(latest.storage_path if latest else None)
+
+    return analytics.multi_entity_temporal_trends(
+        entity_ids=[str(e) for e in entity_ids_v] if entity_ids_v else None,
+        measure=measure_v,
+    )
+
+
+@app.get("/analytics/coverage")
+def coverage_summary_endpoint(
+    snapshot_id: UUID | None = Query(default=None),
+):
+    snapshot_id_v = _clean_param(snapshot_id)
+    catalog = SnapshotCatalog()
+    if snapshot_id_v:
+        manifest = catalog.get_snapshot(snapshot_id_v)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Specified snapshot not found")
+        analytics = DuckDbSpatialAnalytics(manifest.storage_path)
+    else:
+        latest = catalog.get_latest_completed_snapshot()
+        analytics = DuckDbSpatialAnalytics(latest.storage_path if latest else None)
+
+    return analytics.evidence_coverage_and_freshness()
+
+
+@app.get("/analytics/compare")
+def compare_spatial_slices_endpoint(
+    entity_a_id: UUID = Query(...),
+    entity_b_id: UUID = Query(...),
+    snapshot_id: UUID | None = Query(default=None),
+    measure: str = Query(default="population.total"),
+    year: str | None = Query(default=None),
+):
+    entity_a_id_v = _clean_param(entity_a_id)
+    entity_b_id_v = _clean_param(entity_b_id)
+    snapshot_id_v = _clean_param(snapshot_id)
+    measure_v = str(_clean_param(measure, "population.total"))
+    year_v = _clean_param(year)
+
+    catalog = SnapshotCatalog()
+    if snapshot_id_v:
+        manifest = catalog.get_snapshot(snapshot_id_v)
+        if not manifest:
+            raise HTTPException(status_code=404, detail="Specified snapshot not found")
+        analytics = DuckDbSpatialAnalytics(manifest.storage_path)
+    else:
+        latest = catalog.get_latest_completed_snapshot()
+        analytics = DuckDbSpatialAnalytics(latest.storage_path if latest else None)
+
+    return analytics.compare_spatial_slices(
+        entity_a_id=entity_a_id_v,
+        entity_b_id=entity_b_id_v,
+        measure=measure_v,
+        year=year_v,
+    )
+
+
+@app.get("/analytics/benchmarks")
+def run_benchmarks_endpoint(
+    iterations: int = Query(default=3, ge=1, le=20),
+):
+    iterations_v = int(_clean_param(iterations, 3))
+    catalog = SnapshotCatalog()
+    latest = catalog.get_latest_completed_snapshot()
+    if not latest:
+        raise HTTPException(status_code=404, detail="No completed snapshot available to benchmark")
+    suite = AnalyticalBenchmarkSuite(latest.storage_path)
+    return suite.run_all(iterations=iterations_v)
 
 

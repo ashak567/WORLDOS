@@ -22,6 +22,8 @@ services:
       WORLDOS_DATABASE_URL: postgresql://worldos:worldos_dev_only@postgres:5432/worldos
     ports:
       - "8000:8000"
+    volumes:
+      - ./backend:/app
     depends_on:
       postgres:
         condition: service_healthy

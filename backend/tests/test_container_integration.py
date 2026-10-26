@@ -11,13 +11,17 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.analytics import DuckDbSpatialAnalytics
-from app.domain import (BoundingBox, Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, Source,
+from app.benchmarks import AnalyticalBenchmarkSuite
+from app.domain import (BoundingBox, Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, SnapshotManifest, Source,
                         TimeInterval, TruthClass, WorldBundle, WorldContext)
 from app.export import export_observations
 from app.ingestion.natural_earth import parse_country_boundary
 from app.ingestion.usgs import parse_earthquake_feature
 from app.ingestion.world_bank import parse_population
-from app.main import natural_earth_bundle, usgs_earthquake_bundle, world_bank_bundle
+from app.main import (compare_spatial_slices_endpoint, coverage_summary_endpoint, export_snapshot_endpoint, get_snapshot_endpoint,
+                      list_snapshots_endpoint, natural_earth_bundle, run_benchmarks_endpoint, spatial_rollups_endpoint,
+                      temporal_rollups_endpoint, usgs_earthquake_bundle, validate_snapshot_endpoint, world_bank_bundle)
+from app.snapshots import SnapshotCatalog, SnapshotManager
 from app.storage import WorldRepository
 
 
@@ -774,6 +778,185 @@ class ContainerIntegrationTests(unittest.TestCase):
         self.assertIn("observations", single_ctx)
         self.assertIn("relationships", single_ctx)
         self.assertIn("claims", single_ctx)
+
+    def test_parquet_snapshot_export_lifecycle_and_catalog(self) -> None:
+        import tempfile
+        import shutil
+
+        temp_snapshots = Path(tempfile.mkdtemp())
+        try:
+            manager = SnapshotManager(database_url=self.db_url, snapshots_dir=temp_snapshots)
+            manifest = manager.export_snapshot()
+
+            # 1. Manifest structure and status
+            self.assertEqual(manifest.status, "completed")
+            self.assertGreater(manifest.total_records, 0)
+            self.assertIn("observations", manifest.row_counts)
+            self.assertGreater(manifest.row_counts["observations"], 0)
+            self.assertTrue(Path(manifest.storage_path).exists())
+
+            # 2. Hive partitioned directory check
+            obs_dir = Path(manifest.storage_path) / "observations"
+            self.assertTrue(obs_dir.exists())
+            parquet_files = list(obs_dir.rglob("*.parquet"))
+            self.assertGreater(len(parquet_files), 0)
+            for pf in parquet_files:
+                self.assertIn("year=", str(pf))
+                self.assertIn("entity_type=", str(pf))
+
+            # 3. PostgreSQL snapshot_runs record
+            run_records = self.repo.get_snapshot_runs(status="completed")
+            self.assertGreater(len(run_records), 0)
+            matched = next((r for r in run_records if str(r["id"]) == str(manifest.snapshot_id)), None)
+            self.assertIsNotNone(matched)
+            self.assertEqual(matched["status"], "completed")
+            self.assertEqual(matched["total_records"], manifest.total_records)
+
+            # 4. SnapshotCatalog discovery and validation
+            catalog = SnapshotCatalog(snapshots_dir=temp_snapshots)
+            snapshots = catalog.list_snapshots(status_filter="completed")
+            self.assertEqual(len(snapshots), 1)
+            self.assertTrue(snapshots[0].metadata.get("is_latest"))
+
+            val = catalog.validate_snapshot(manifest.snapshot_id)
+            self.assertTrue(val["valid"])
+            self.assertEqual(len(val["errors"]), 0)
+            self.assertEqual(val["datasets"]["observations"]["actual_rows"], manifest.row_counts["observations"])
+        finally:
+            shutil.rmtree(temp_snapshots, ignore_errors=True)
+
+    def test_duckdb_spatial_rollups_and_multi_entity_analytics(self) -> None:
+        import tempfile
+        import shutil
+
+        temp_snapshots = Path(tempfile.mkdtemp())
+        try:
+            manager = SnapshotManager(database_url=self.db_url, snapshots_dir=temp_snapshots)
+            manifest = manager.export_snapshot()
+
+            analytics = DuckDbSpatialAnalytics(replica_path=manifest.storage_path)
+
+            # 1. Multi-entity spatial rollups
+            summaries = analytics.spatial_summaries(measure="population.total")
+            self.assertGreater(len(summaries), 0)
+            first_summary = summaries[0]
+            self.assertIn("entity_canonical_name", first_summary)
+            self.assertIn("total_value", first_summary)
+            self.assertGreater(first_summary["total_value"], 0)
+            self.assertTrue(first_summary["has_data"])
+
+            # 2. Multi-entity temporal trends
+            trends = analytics.multi_entity_temporal_trends(measure="population.total")
+            self.assertGreater(len(trends), 0)
+            first_trend = trends[0]
+            self.assertIn("series", first_trend)
+            self.assertIn("evidence_ids", first_trend)
+
+            # 3. Evidence coverage and freshness
+            coverage = analytics.evidence_coverage_and_freshness()
+            self.assertGreater(coverage["total_observations"], 0)
+            self.assertGreater(coverage["total_entities"], 0)
+            self.assertGreater(coverage["total_evidence_citations"], 0)
+            self.assertGreater(coverage["distinct_sources"], 0)
+            self.assertIsNotNone(coverage["earliest_observation"])
+            self.assertIsNotNone(coverage["latest_observation"])
+
+            # 4. Compare spatial slices between entities if at least 2 entities exist
+            if len(summaries) >= 2:
+                eid_a = summaries[0]["entity_id"]
+                eid_b = summaries[1]["entity_id"]
+                comp = analytics.compare_spatial_slices(entity_a_id=eid_a, entity_b_id=eid_b, measure="population.total")
+                self.assertIsNotNone(comp["absolute_difference"])
+                self.assertIsNotNone(comp["larger_entity"])
+
+            # 5. Backward compatible population growth derivation
+            ind_summary = next((s for s in summaries if "India" in s["entity_canonical_name"]), None)
+            if ind_summary:
+                growth_claim = analytics.derive_population_growth(ind_summary["entity_id"])
+                # If India has >= 2 population points, growth claim is produced
+                if growth_claim:
+                    self.assertEqual(growth_claim.truth_class, TruthClass.DERIVED)
+                    self.assertEqual(growth_claim.claim_type, "population_growth_percentage")
+        finally:
+            shutil.rmtree(temp_snapshots, ignore_errors=True)
+
+    def test_analytical_benchmarks_runner(self) -> None:
+        import tempfile
+        import shutil
+
+        temp_snapshots = Path(tempfile.mkdtemp())
+        try:
+            manager = SnapshotManager(database_url=self.db_url, snapshots_dir=temp_snapshots)
+            manifest = manager.export_snapshot()
+
+            suite = AnalyticalBenchmarkSuite(snapshot_path=manifest.storage_path)
+            report = suite.run_all(iterations=2)
+
+            self.assertEqual(report["snapshot_id"], str(manifest.snapshot_id))
+            self.assertGreater(report["total_records"], 0)
+            self.assertEqual(len(report["benchmarks"]), 6)
+
+            for b in report["benchmarks"]:
+                self.assertIn("name", b)
+                self.assertIn("mean_duration_ms", b)
+                self.assertGreaterEqual(b["mean_duration_ms"], 0.0)
+                self.assertEqual(b["iterations"], 2)
+        finally:
+            shutil.rmtree(temp_snapshots, ignore_errors=True)
+
+    def test_analytics_and_snapshot_api_endpoints(self) -> None:
+        import tempfile
+        import shutil
+
+        temp_snapshots = Path(tempfile.mkdtemp())
+        try:
+            # Point SNAPSHOT_DIR to temp location for API test
+            old_snap_dir = os.environ.get("WORLDOS_SNAPSHOT_DIR")
+            os.environ["WORLDOS_SNAPSHOT_DIR"] = str(temp_snapshots)
+
+            # 1. Trigger export via endpoint
+            manifest_resp = export_snapshot_endpoint(background=False)
+            self.assertIsInstance(manifest_resp, SnapshotManifest)
+            self.assertEqual(manifest_resp.status, "completed")
+            sid = manifest_resp.snapshot_id
+
+            # 2. List snapshots endpoint
+            snaps_list = list_snapshots_endpoint()
+            self.assertGreater(len(snaps_list), 0)
+            self.assertEqual(snaps_list[0].snapshot_id, sid)
+
+            # 3. Get snapshot endpoint
+            snap_detail = get_snapshot_endpoint(snapshot_id=sid)
+            self.assertEqual(snap_detail.snapshot_id, sid)
+
+            # 4. Validate snapshot endpoint
+            val_res = validate_snapshot_endpoint(snapshot_id=sid)
+            self.assertTrue(val_res["valid"])
+
+            # 5. Spatial rollups endpoint
+            spatial_res = spatial_rollups_endpoint(snapshot_id=sid, measure="population.total")
+            self.assertIsInstance(spatial_res, list)
+
+            # 6. Temporal rollups endpoint
+            temporal_res = temporal_rollups_endpoint(snapshot_id=sid, measure="population.total")
+            self.assertIsInstance(temporal_res, list)
+
+            # 7. Coverage endpoint
+            cov_res = coverage_summary_endpoint(snapshot_id=sid)
+            self.assertIsInstance(cov_res, dict)
+            self.assertIn("total_observations", cov_res)
+
+            # 8. Benchmarks endpoint
+            bench_res = run_benchmarks_endpoint(iterations=1)
+            self.assertIn("benchmarks", bench_res)
+            self.assertEqual(len(bench_res["benchmarks"]), 6)
+
+        finally:
+            if old_snap_dir:
+                os.environ["WORLDOS_SNAPSHOT_DIR"] = old_snap_dir
+            else:
+                os.environ.pop("WORLDOS_SNAPSHOT_DIR", None)
+            shutil.rmtree(temp_snapshots, ignore_errors=True)
 
 
 

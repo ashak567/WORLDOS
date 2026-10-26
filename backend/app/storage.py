@@ -1281,6 +1281,114 @@ class WorldRepository:
             cur.execute(sql, values)
             return list(cur.fetchall())
 
+    def record_snapshot_run(
+        self,
+        snapshot_id: UUID,
+        schema_version: str,
+        status: str,
+        storage_path: str,
+        datasets: list[str],
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO snapshot_runs (id, schema_version, status, storage_path, datasets, metadata)
+                VALUES (%s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    status = EXCLUDED.status,
+                    storage_path = EXCLUDED.storage_path,
+                    metadata = EXCLUDED.metadata
+                """,
+                (
+                    snapshot_id,
+                    schema_version,
+                    status,
+                    storage_path,
+                    datasets,
+                    json.dumps(metadata or {}),
+                ),
+            )
+            conn.commit()
+
+    def update_snapshot_run(
+        self,
+        snapshot_id: UUID,
+        status: str,
+        completed_at: datetime | None = None,
+        total_records: int = 0,
+        row_counts: dict[str, int] | None = None,
+        partition_counts: dict[str, int] | None = None,
+        min_year: int | None = None,
+        max_year: int | None = None,
+        error_message: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """
+                UPDATE snapshot_runs
+                SET
+                    status = %s,
+                    completed_at = %s,
+                    total_records = %s,
+                    row_counts = %s,
+                    partition_counts = %s,
+                    min_year = %s,
+                    max_year = %s,
+                    error_message = %s,
+                    metadata = COALESCE(%s, metadata)
+                WHERE id = %s
+                """,
+                (
+                    status,
+                    completed_at,
+                    total_records,
+                    json.dumps(row_counts or {}),
+                    json.dumps(partition_counts or {}),
+                    min_year,
+                    max_year,
+                    error_message,
+                    json.dumps(metadata) if metadata is not None else None,
+                    snapshot_id,
+                ),
+            )
+            conn.commit()
+
+    def get_snapshot_runs(self, status: str | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        clauses = []
+        values: list[Any] = []
+        if status:
+            clauses.append("status = %s")
+            values.append(status)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT id, schema_version, status, started_at, completed_at, datasets,
+                   total_records, row_counts, partition_counts, min_year, max_year,
+                   storage_path, error_message, metadata
+            FROM snapshot_runs
+            {where}
+            ORDER BY started_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def get_snapshot_run(self, snapshot_id: UUID) -> dict[str, Any] | None:
+        sql = """
+            SELECT id, schema_version, status, started_at, completed_at, datasets,
+                   total_records, row_counts, partition_counts, min_year, max_year,
+                   storage_path, error_message, metadata
+            FROM snapshot_runs
+            WHERE id = %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (snapshot_id,))
+            row = cur.fetchone()
+            return _clean_record(row) if row else None
+
 
 
 

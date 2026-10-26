@@ -311,5 +311,73 @@ class WorldContext(BaseModel):
     assumptions_or_limitations: list[str] = Field(default_factory=list)
 
 
+class SnapshotManifest(BaseModel):
+    snapshot_id: UUID = Field(default_factory=uuid4)
+    schema_version: str = "worldos-snapshot-v1"
+    status: Literal["in_progress", "completed", "failed"] = "in_progress"
+    started_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+    datasets: list[str] = Field(default_factory=lambda: ["observations", "entities", "geometries", "events"])
+    total_records: int = 0
+    row_counts: dict[str, int] = Field(default_factory=dict)
+    partition_counts: dict[str, int] = Field(default_factory=dict)
+    min_year: int | None = None
+    max_year: int | None = None
+    storage_path: str = ""
+    error_message: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class SpatialRollupItem(BaseModel):
+    entity_id: UUID | str
+    entity_canonical_name: str
+    entity_type: str
+    measure: str
+    year: str | int | None
+    observation_count: int
+    total_value: float
+    mean_value: float
+    min_value: float
+    max_value: float
+    evidence_count: int
+    has_data: bool
+
+
+class TemporalTrendItem(BaseModel):
+    entity_id: UUID | str
+    entity_canonical_name: str
+    measure: str
+    earliest_year: str | int | None
+    latest_year: str | int | None
+    earliest_value: float | None
+    latest_value: float | None
+    percentage_change: float | None
+    observation_count: int
+    series: list[dict[str, Any]] = Field(default_factory=list)
+    evidence_ids: list[UUID | str] = Field(default_factory=list)
+
+
+class CoverageSummary(BaseModel):
+    total_observations: int
+    total_entities: int
+    total_evidence_citations: int
+    distinct_sources: int
+    source_breakdown: list[dict[str, Any]] = Field(default_factory=list)
+    earliest_observation: str | None = None
+    latest_observation: str | None = None
+    entities_with_observations: int = 0
+    entities_with_geometry: int = 0
+
+
+class SpatialSliceComparison(BaseModel):
+    measure: str
+    year: str | int | None
+    entity_a: dict[str, Any]
+    entity_b: dict[str, Any]
+    absolute_difference: float | None
+    ratio: float | None
+    larger_entity: str | None
+
+
 
 

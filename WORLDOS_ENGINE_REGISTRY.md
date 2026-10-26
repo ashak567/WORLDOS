@@ -147,17 +147,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Automated context caching with change-data-capture (CDC) invalidation and temporal replay diff streams.
 
 ### 11. Deterministic Analytics Engine
-- **Purpose**: High-performance columnar metrics, growth rates, and time-series rollups over Parquet snapshots.
+- **Purpose**: High-performance in-process columnar metrics, Hive-partitioned Parquet snapshots, multi-entity spatial rollups, temporal aggregations, evidence freshness auditing, and reproducible benchmarks.
 - **Status**: `VERIFIED`
-- **Inputs**: Operational PostGIS data, Parquet snapshot files.
-- **Outputs**: Summary statistics, percentage changes, analytical dataframes.
-- **Dependencies**: DuckDB, `pytz`, Parquet.
-- **Persistence**: Parquet snapshot files in `data/snapshots/`.
-- **Interface / API**: `backend/app/analytics.py`, `backend/app/export.py`, `GET /api/v1/analytics/population-change`.
-- **Evidence Requirements**: Read-only replica queries; zero mutation of operational world state.
-- **Test Contract**: Verified in `test_container_integration.py::test_duckdb_snapshot_query`.
-- **Current Implementation**: Operational; DuckDB executes analytical rollups without PostGIS locks.
-- **Next Milestone**: Automated snapshot rotation and partitioned Parquet datasets by year and entity type.
+- **Inputs**: Operational PostGIS data, partitioned Parquet snapshots in `data/snapshots/{snapshot_id}/`.
+- **Outputs**: Spatial summary rollups, multi-entity temporal trends, evidence coverage/freshness metrics, spatial slice comparisons, derived claims with `TruthClass.DERIVED`, analytical benchmark telemetry.
+- **Dependencies**: DuckDB, `psycopg`, Parquet.
+- **Persistence**: Hive-partitioned Parquet files organized by `year={year}/entity_type={entity_type}/` under `data/snapshots/{snapshot_id}/`, metadata in `manifest.json`, and database run tracking in `snapshot_runs` table.
+- **Interface / API**: `backend/app/analytics.py` (`DuckDbSpatialAnalytics`), `backend/app/snapshots.py` (`SnapshotManager`, `SnapshotCatalog`), `backend/app/benchmarks.py` (`AnalyticalBenchmarkSuite`), REST endpoints: `POST /analytics/snapshots/export`, `GET /analytics/snapshots`, `GET /analytics/snapshots/{id}`, `GET /analytics/snapshots/{id}/validate`, `GET /analytics/rollups/spatial`, `GET /analytics/rollups/temporal`, `GET /analytics/coverage`, `GET /analytics/compare`, `GET /analytics/benchmarks`, and `POST /analytics/population/{id}/growth`.
+- **Evidence Requirements**: Read-only replica queries; zero mutation of operational world state; strict evidence citation lineage and input tracing preserved in derived claims.
+- **Test Contract**: Verified in `test_analytics_and_snapshots.py` (5 unit tests: partition naming, temporal bucketing, unknown values, catalog discovery, staleness, validation, and spatial rollups) and `test_container_integration.py` (snapshot export lifecycle, PostgreSQL `snapshot_runs` tracking, DuckDB multi-entity rollups, analytical benchmarks, and FastAPI endpoints).
+- **Current Implementation**: Fully operational in container stack; DuckDB executes analytical rollups over partitioned Parquet files with zero locks on operational PostGIS tables.
+- **Next Milestone**: Constraint Engine implementation (Engine 12) to validate physical invariants, spatial boundaries, and logical rules.
 
 ### 12. Constraint Engine
 - **Purpose**: Validate physical invariants, spatial boundaries, and logical rules before accepting hypotheses.

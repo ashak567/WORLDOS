@@ -31,6 +31,14 @@ def export_observations(database_url: str, output_path: Path) -> int:
     return len(rows)
 
 
+from .snapshots import SnapshotCatalog, SnapshotManager
+
+
+def export_snapshot(database_url: str | None = None, output_dir: Path | str | None = None, datasets: list[str] | None = None):
+    manager = SnapshotManager(database_url=database_url, snapshots_dir=output_dir)
+    return manager.export_snapshot(datasets=datasets)
+
+
 if __name__ == "__main__":
     destination = Path(os.environ.get("WORLDOS_DUCKDB_PATH", "worldos-analytics.duckdb"))
     print(f"exported {export_observations(os.environ['WORLDOS_DATABASE_URL'], destination)} observations to {destination}")

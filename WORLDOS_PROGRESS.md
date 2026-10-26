@@ -1,44 +1,49 @@
 # WORLDOS progress
 
-## Checkpoint: World Context Engine multi-entity spatial and temporal context assembly
+## Checkpoint: Deterministic Analytics & Snapshot Automation (Engine 11 Deepening)
 
 **Date:** 2026-09-29
 **Branch:** `main`
-**Status:** implemented; live container integration and contract tests passed (27/27), unit tests passed (9/9), frontend production build passed
+**Status:** implemented; live container integration and contract tests passed (36/36), benchmark suite verified, frontend production build passed
 
 ### Completed
 
-- **Spatially Scoped Context (Prompt 19 & Engine 10):**
-  - Added `BoundingBox` and `SpatialScope` models with coordinate validation: bounds $[-180, 180]$ and $[-90, 90]$, ensuring `min_lon <= max_lon` and `min_lat <= max_lat`.
-  - Implemented spatial filtering directly via PostGIS `ST_Intersects` and `ST_MakeEnvelope(min_lon, min_lat, max_lon, max_lat, 4326)` accelerated by existing GiST spatial indexes.
-  - Preserves geometry kinds (`country_boundary`, `city_point`, `point`, `epicenter`); representative points are never conflated with polygon boundaries.
-- **Temporally Scoped Context:**
-  - Added `TemporalScope` model with interval validation (`starts_at <= ends_at`) and precision tiers (`instant`, `day`, `month`, `year`, `unknown`).
-  - Evaluates point-in-time (`valid_at`), interval overlap (`[start, end]`), and temporal precision filtering natively in SQL.
-  - Preserves year-level data semantics without flattening into artificial timestamps.
-- **Multi-Entity Context Assembly:**
-  - Implemented `WorldRepository.scoped_context()` assembling a deterministic world context across entities, geometries, observations, events, relationships, claims, and evidence citations.
-  - All facts are queried from PostgreSQL/PostGIS operational world-state tables without duplicating engine logic or creating a secondary truth store.
-- **Evidence Lineage & Provenance:**
-  - Every returned observation, event, geometry, relationship, and claim retains its underlying `evidence_id` and `evidence_locator`.
-  - Missing evidence is represented explicitly (`None`); no artificial citations or false provenance claims are invented.
-  - Populates a deduplicated list of `EvidenceCitation` records with source slug, name, locator, and retrieval timestamps.
-- **Deterministic Response Contract:**
-  - Defined typed `WorldContext` and `ContextQueryScope` Pydantic models.
-  - Returns query scope, spatial bounds (if supplied), temporal scope (if supplied), deduplicated entities, observations, events, geometries, relationships, claims, evidence citations, and documented assumptions/limitations.
-  - Output is strictly deterministic and stable across repeated queries on unchanged data.
-- **API Endpoints & Backward Compatibility:**
-  - Added FastAPI endpoint `GET /context` supporting optional bounding box coordinates (`min_lon`, `min_lat`, `max_lon`, `max_lat`), temporal parameters (`valid_at`, `start`, `end`, `precision`), `entity_id`, `entity_ids`, `entity_kind`, and `limit`.
-  - Parameter validation returns clear HTTP 400 errors for partial bounding boxes, inverted bounding boxes, or inverted temporal intervals.
-  - Preserved 100% backward compatibility for single-entity context queries via `GET /entities/{entity_id}/context`.
-- **Entity Ingestion Idempotency Fix:**
-  - Enhanced `WorldRepository.ingest()` to check existing entities by primary key `id` before inserting, ensuring seamless reuse of entity instances across multiple fact bundles without primary key collisions.
-- **Engine Registry Upgrade:**
-  - Promoted Context Engine (Engine 10) status from `PARTIALLY_IMPLEMENTED` to `VERIFIED` in `WORLDOS_ENGINE_REGISTRY.md`.
+- **Hive-Partitioned Parquet Snapshot Automation (`SnapshotManager`):**
+  - Export engine transfers PostgreSQL/PostGIS data into partitioned Parquet files under `data/snapshots/{snapshot_id}/` using bounded memory and non-blocking read-only connections.
+  - Deterministic partitioning by calendar year (`year=YYYY`, `year=unknown`) and entity type (`entity_type=...`).
+  - Safe handling of missing timestamps and entity kinds; records are never silently dropped.
+  - Atomic staging via `.staging_{snapshot_id}/` and directory rename to prevent readers from discovering partial or corrupted exports.
+  - Safe retry semantics: cleans staging on failure, updates status to `failed`, and prevents overwriting existing completed snapshots.
+- **Snapshot Metadata & Run Tracking:**
+  - Database tracking via PostgreSQL table `snapshot_runs` (migration `007_snapshot_runs.sql`) capturing snapshot ID, schema version, export status (`in_progress`, `completed`, `failed`), timestamps, row counts, partition counts, and temporal boundaries.
+  - Persists JSON `manifest.json` in each snapshot directory capturing dataset schemas, row counts, and DuckDB version metadata.
+- **Snapshot Catalog & Validation (`SnapshotCatalog`):**
+  - Scans snapshot directory and database to discover available snapshots, distinguish complete vs in-progress vs failed, and track latest vs stale snapshots.
+  - `validate_snapshot()` verifies manifest schema version compatibility, physical file existence, DuckDB readability, and row count matches.
+- **DuckDB Analytical Boundary Expansion (`DuckDbSpatialAnalytics`):**
+  - In-process columnar query engine operating over Hive-partitioned Parquet files with zero locks on operational PostGIS tables.
+  - Supports multi-entity spatial rollups (`spatial_summaries`) grouping by country/entity and measure, distinguishing zero values from unavailable data.
+  - Supports multi-entity temporal aggregations and trends (`observation_counts_by_year_and_type`, `multi_entity_temporal_trends`) calculating historical percentages and preserving input evidence IDs.
+  - Computes comprehensive evidence coverage and freshness audits (`evidence_coverage_and_freshness`).
+  - Supports side-by-side spatial slice comparisons (`compare_spatial_slices`).
+  - Retains 100% backward compatibility for legacy `.duckdb` files and `derive_population_growth()`.
+- **Reproducible Analytical Benchmark Suite (`AnalyticalBenchmarkSuite`):**
+  - Implemented benchmark runner evaluating 6 core analytical workloads over snapshot Parquet data:
+    1. `snapshot_discovery_and_validation` (mean ~628ms)
+    2. `multi_entity_spatial_rollups` (mean ~885ms)
+    3. `temporal_aggregations_by_year` (mean ~877ms)
+    4. `multi_entity_temporal_trends` (mean ~894ms)
+    5. `evidence_coverage_and_freshness` (mean ~1128ms)
+    6. `multi_partition_predicate_scan` (mean ~834ms)
+  - Records iteration counts, mean/min/max durations, dataset size, and environment telemetry.
+- **API Endpoints:**
+  - Added REST endpoints: `POST /analytics/snapshots/export`, `GET /analytics/snapshots`, `GET /analytics/snapshots/{id}`, `GET /analytics/snapshots/{id}/validate`, `GET /analytics/rollups/spatial`, `GET /analytics/rollups/temporal`, `GET /analytics/coverage`, `GET /analytics/compare`, `GET /analytics/benchmarks`.
+  - Preserved backward compatibility for `POST /analytics/population/{id}/growth`.
 - **Verification Evidence:**
-  - Expanded unit test suite in `backend/tests/test_world_bank_vertical_slice.py` to 9 tests (100% pass rate).
-  - Expanded container integration test suite in `backend/tests/test_container_integration.py` to 27 tests covering spatial bounding box filtering, temporal precision, point-in-time matching, interval overlap, evidence deduplication, empty scope handling, API parameter validation, and backward compatibility. All 27 tests pass against the live PostGIS container stack.
-  - Verified frontend production build passes cleanly (`npm --prefix frontend run build` completed with 0 errors).
+  - Unit tests in `backend/tests/test_analytics_and_snapshots.py` (5 tests passing in 0.327s).
+  - Container integration tests in `backend/tests/test_container_integration.py` expanded to 22 tests (all 36 tests across the entire suite pass in container).
+  - Analytical benchmark suite executed and validated.
+  - Frontend production build verified (`npm --prefix frontend run build` completed with 0 errors).
 
 ### Previous Checkpoints Reused
 
@@ -48,12 +53,13 @@
 4. `963f33b — WORLDOS engineering discipline and project skills`
 5. `afb22ff — Engine registry, ingestion lifecycle, source health, resolution reviews, and claim/truth-class formalization`
 6. `46f7007 — Deepen temporal interval queries, spatial containment evidence, and knowledge graph traversal`
+7. `6873fbb — World Context Engine multi-entity spatial and temporal context assembly`
 
 ### Not claimed as complete
 
 - Advanced modeling engines (Simulation, Prediction, Scenario, Anomaly Detection) remain pure specification/interface boundaries pending further multi-source data depth.
-- Agent engine remains deferred behind deterministic query and evaluation prerequisites.
+- Agent engine remains deferred behind deterministic query, evaluation, and constraint engine prerequisites.
 
 ### Next task
 
-Step 13: Deterministic Analytics & Snapshot Automation (Prompt 9 & Engine 11 deepening) — automated DuckDB snapshot rotation and analytical rollups over versioned Parquet data exports without operational database locks.
+Step 14: Constraint Engine Implementation (Engine 12) — validate physical invariants, spatial boundaries, and logical consistency rules before accepting state assertions, derived claims, or proposed scenario modifications.
