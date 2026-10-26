@@ -1,6 +1,7 @@
 """Stable, evidence-first contracts shared by ingestion and query code."""
 from __future__ import annotations
 
+import math
 from datetime import UTC, datetime
 from enum import Enum
 from typing import Any, Literal
@@ -462,3 +463,106 @@ class ScenarioProposal(BaseModel):
     proposed_geometries: list[Geometry] = Field(default_factory=list)
     proposed_relationships: list[Relationship] = Field(default_factory=list)
     parameters: dict[str, Any] = Field(default_factory=dict)
+
+
+class AlertSeverity(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    CRITICAL = "CRITICAL"
+
+
+class AlertLifecycleStatus(str, Enum):
+    RECEIVED = "RECEIVED"
+    VALIDATED = "VALIDATED"
+    EVALUATED = "EVALUATED"
+    ALERTED = "ALERTED"
+    SUPPRESSED = "SUPPRESSED"
+    FAILED = "FAILED"
+
+
+class AlertStatus(str, Enum):
+    ACTIVE = "active"
+    ACKNOWLEDGED = "acknowledged"
+    RESOLVED = "resolved"
+
+
+class AlertComparisonOperator(str, Enum):
+    GT = ">"
+    GTE = ">="
+    LT = "<"
+    LTE = "<="
+    EQ = "=="
+    NEQ = "!="
+
+
+class AlertRule(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    description: str | None = None
+    event_kind: str
+    operator: Literal[">", ">=", "<", "<=", "==", "!="]
+    metric_field: str
+    threshold: float
+    severity: AlertSeverity = AlertSeverity.WARNING
+    spatial_scope: dict[str, Any] | None = None
+    temporal_window_seconds: int | None = None
+    cluster_threshold: int | None = None
+    cooldown_seconds: int = Field(default=300, ge=0)
+    is_enabled: bool = True
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_rule(self) -> "AlertRule":
+        if not self.metric_field or not self.metric_field.strip():
+            raise ValueError("metric_field cannot be empty")
+        if math.isnan(self.threshold) or math.isinf(self.threshold):
+            raise ValueError("threshold must be a finite number")
+        if self.cluster_threshold is not None:
+            if self.cluster_threshold < 1:
+                raise ValueError("cluster_threshold must be >= 1")
+            if not self.temporal_window_seconds or self.temporal_window_seconds <= 0:
+                raise ValueError("cluster_threshold requires a positive temporal_window_seconds")
+        if self.spatial_scope:
+            scope_type = self.spatial_scope.get("type")
+            if scope_type == "bbox":
+                min_lon = self.spatial_scope.get("min_lon")
+                max_lon = self.spatial_scope.get("max_lon")
+                min_lat = self.spatial_scope.get("min_lat")
+                max_lat = self.spatial_scope.get("max_lat")
+                if None in (min_lon, max_lon, min_lat, max_lat):
+                    raise ValueError("spatial_scope bbox requires min_lon, max_lon, min_lat, max_lat")
+                if min_lon < -180 or max_lon > 180 or min_lon > max_lon:
+                    raise ValueError(f"Invalid longitude bounds: [{min_lon}, {max_lon}]")
+                if min_lat < -90 or max_lat > 90 or min_lat > max_lat:
+                    raise ValueError(f"Invalid latitude bounds: [{min_lat}, {max_lat}]")
+        return self
+
+
+class AlertEvaluation(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    event_id: UUID
+    status: AlertLifecycleStatus
+    matched_rule_ids: list[UUID] = Field(default_factory=list)
+    alerts_generated: int = 0
+    reason: str | None = None
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class Alert(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    rule_id: UUID
+    event_id: UUID
+    severity: AlertSeverity
+    title: str
+    message: str
+    dedup_key: str
+    status: AlertStatus = AlertStatus.ACTIVE
+    evidence_id: UUID
+    context_summary: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    acknowledged_at: datetime | None = None
+    acknowledged_by: str | None = None
+    resolved_at: datetime | None = None
+    resolution_notes: str | None = None

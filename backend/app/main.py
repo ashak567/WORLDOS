@@ -1,12 +1,19 @@
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from .domain import (
+    Alert,
+    AlertEvaluation,
+    AlertLifecycleStatus,
+    AlertRule,
+    AlertSeverity,
+    AlertStatus,
     BoundingBox,
     Claim,
     Confidence,
@@ -416,6 +423,10 @@ def ingest_usgs_earthquake(event_id: str) -> EarthquakeIngestionResult:
         now = retrieved_now()
         bundle = usgs_earthquake_bundle(record, now, containing_entity_id=containing_id)
         repo.ingest(bundle)
+        try:
+            repo.evaluate_event_alerts(bundle.event.id)
+        except Exception:
+            pass  # Event persistence must survive alert evaluation or dispatch failure
         repo.finish_ingestion_run(
             run_id,
             status="completed",
@@ -1021,3 +1032,170 @@ def list_constraint_rules():
             ]
         }
     }
+
+
+# =============================================================================
+# Alert Engine Endpoints (Engine 14)
+# =============================================================================
+
+
+class CreateAlertRuleRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=200)
+    description: str | None = None
+    event_kind: str = Field(min_length=1, max_length=100)
+    operator: str = Field(pattern=r"^(>|>=|<|<=|==|!=)$")
+    metric_field: str = Field(min_length=1, max_length=100)
+    threshold: float
+    severity: AlertSeverity = AlertSeverity.WARNING
+    spatial_scope: dict[str, Any] | None = None
+    temporal_window_seconds: int | None = Field(default=None, ge=1)
+    cluster_threshold: int | None = Field(default=None, ge=1)
+    cooldown_seconds: int = Field(default=300, ge=0)
+    is_enabled: bool = True
+
+
+CreateAlertRuleRequest.model_rebuild()
+
+
+class UpdateAlertRuleRequest(BaseModel):
+    is_enabled: bool | None = None
+    threshold: float | None = None
+
+
+class AcknowledgeAlertRequest(BaseModel):
+    acknowledged_by: str = Field(default="operator", min_length=1, max_length=100)
+
+
+class ResolveAlertRequest(BaseModel):
+    resolution_notes: str = Field(default="Resolved by operator", min_length=1, max_length=500)
+
+
+@app.get("/alerts/rules", response_model=list[AlertRule])
+def list_alert_rules(
+    event_kind: str | None = None,
+    is_enabled: bool | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    event_kind = _clean_param(event_kind)
+    is_enabled = _clean_param(is_enabled)
+    limit = _clean_param(limit, 100)
+    return WorldRepository().list_alert_rules(event_kind=event_kind, is_enabled=is_enabled, limit=limit)
+
+
+@app.post("/alerts/rules", response_model=AlertRule, status_code=201)
+def create_alert_rule(req: CreateAlertRuleRequest):
+    repo = WorldRepository()
+    rule = AlertRule(
+        name=req.name,
+        description=req.description,
+        event_kind=req.event_kind,
+        operator=req.operator,  # type: ignore[arg-type]
+        metric_field=req.metric_field,
+        threshold=req.threshold,
+        severity=req.severity,
+        spatial_scope=req.spatial_scope,
+        temporal_window_seconds=req.temporal_window_seconds,
+        cluster_threshold=req.cluster_threshold,
+        cooldown_seconds=req.cooldown_seconds,
+        is_enabled=req.is_enabled,
+    )
+    try:
+        rule_id = repo.create_alert_rule(rule)
+        created = repo.get_alert_rule(rule_id)
+        if not created:
+            raise HTTPException(status_code=500, detail="Failed to retrieve created alert rule")
+        return created
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err)) from val_err
+
+
+@app.get("/alerts/rules/{rule_id}", response_model=AlertRule)
+def get_alert_rule(rule_id: UUID):
+    rule = WorldRepository().get_alert_rule(rule_id)
+    if not rule:
+        raise HTTPException(status_code=404, detail=f"Alert rule {rule_id} not found")
+    return rule
+
+
+@app.patch("/alerts/rules/{rule_id}", response_model=AlertRule)
+def update_alert_rule(rule_id: UUID, req: UpdateAlertRuleRequest):
+    repo = WorldRepository()
+    if req.is_enabled is None and req.threshold is None:
+        raise HTTPException(status_code=400, detail="Must provide is_enabled or threshold to update")
+    updated = repo.update_alert_rule(rule_id, is_enabled=req.is_enabled, threshold=req.threshold)
+    if not updated:
+        raise HTTPException(status_code=404, detail=f"Alert rule {rule_id} not found")
+    rule = repo.get_alert_rule(rule_id)
+    return rule
+
+
+@app.delete("/alerts/rules/{rule_id}")
+def delete_alert_rule(rule_id: UUID):
+    deleted = WorldRepository().delete_alert_rule(rule_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail=f"Alert rule {rule_id} not found")
+    return {"deleted": True, "rule_id": rule_id}
+
+
+@app.post("/alerts/events/{event_id}/evaluate", response_model=AlertEvaluation)
+def evaluate_event_alerts(event_id: UUID, rule_ids: list[UUID] | None = None):
+    evaluation = WorldRepository().evaluate_event_alerts(event_id, rule_ids=rule_ids)
+    return evaluation
+
+
+@app.get("/alerts/evaluations")
+def list_alert_evaluations(
+    event_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    event_id = _clean_param(event_id)
+    limit = _clean_param(limit, 100)
+    return WorldRepository().list_alert_evaluations(event_id=event_id, limit=limit)
+
+
+@app.get("/alerts")
+def list_alerts(
+    status: str | None = None,
+    severity: str | None = None,
+    event_id: UUID | None = None,
+    rule_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    status = _clean_param(status)
+    severity = _clean_param(severity)
+    event_id = _clean_param(event_id)
+    rule_id = _clean_param(rule_id)
+    limit = _clean_param(limit, 100)
+    return WorldRepository().list_alerts(
+        status=status,
+        severity=severity,
+        event_id=event_id,
+        rule_id=rule_id,
+        limit=limit,
+    )
+
+
+@app.get("/alerts/{alert_id}")
+def get_alert(alert_id: UUID):
+    alert = WorldRepository().get_alert(alert_id)
+    if not alert:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found")
+    return alert
+
+
+@app.post("/alerts/{alert_id}/acknowledge")
+def acknowledge_alert(alert_id: UUID, req: AcknowledgeAlertRequest = AcknowledgeAlertRequest()):
+    ack_by = _clean_param(req.acknowledged_by, "operator")
+    acknowledged = WorldRepository().acknowledge_alert(alert_id, acknowledged_by=ack_by)
+    if not acknowledged:
+        raise HTTPException(status_code=404, detail=f"Active alert {alert_id} not found or already acknowledged/resolved")
+    return {"acknowledged": True, "alert_id": alert_id}
+
+
+@app.post("/alerts/{alert_id}/resolve")
+def resolve_alert(alert_id: UUID, req: ResolveAlertRequest = ResolveAlertRequest()):
+    notes = _clean_param(req.resolution_notes, "Resolved by operator")
+    resolved = WorldRepository().resolve_alert(alert_id, resolution_notes=notes)
+    if not resolved:
+        raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found or already resolved")
+    return {"resolved": True, "alert_id": alert_id}

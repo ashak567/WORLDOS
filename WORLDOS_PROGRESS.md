@@ -1,40 +1,42 @@
 # WORLDOS progress
 
-## Checkpoint: Constraint Engine Implementation (Engine 12)
+## Checkpoint: Event / Alert Engine Deepening (Engine 14)
 
-**Date:** 2026-09-29
+**Date:** 2026-10-26
 **Branch:** `main`
-**Status:** implemented; live container integration and contract tests passed (55/55), frontend production build passed
+**Status:** implemented; live container integration and contract tests passed (71/71), frontend production build passed
 
 ### Completed
 
-- **Typed Constraint Domain Model (`backend/app/domain.py`):**
-  - Implemented `ConstraintSeverity` (`BLOCKING`, `WARNING`, `REVIEW_REQUIRED`).
-  - Implemented `ConstraintCategory` (`PHYSICAL_COORDINATES`, `SPATIAL_CONSISTENCY`, `TEMPORAL_CONSISTENCY`, `ENTITY_RELATIONSHIP`, `CLAIM_EVIDENCE`, `SCENARIO_PROPOSAL`).
-  - Implemented `ConstraintStatus` (`VALID`, `VALID_WITH_WARNINGS`, `INVALID`).
-  - Implemented `ConstraintFinding` structured with deterministic error codes, field paths, actual/expected values, evidence ID citations, and persistence-blocking flags.
-  - Implemented `ConstraintValidationResult` with severity counters and status derivation.
-  - Implemented `ScenarioProposal` as a typed contract for evaluating hypothetical modifications prior to application.
-- **Deterministic Constraint Engine Core (`backend/app/constraints.py`):**
-  - *Physical & Coordinate Invariants*: finite numeric verification (rejects `NaN`, `Inf`), bounds checking (lat $[-90, 90]$, lon $[-180, 180]$), polygon ring closure and vertex count checks, and explicit antimeridian wrapping detection (valid global geometries crossing the 180th meridian are preserved rather than rejected).
-  - *Spatial Consistency*: PostGIS authoritative topology verification (`ST_IsValid`, `ST_IsValidReason`), spatial predicate enforcement (`located_in`, `adjacent_to`, `intersects`, `covers`, `part_of`) using `ST_Contains`, `ST_Covers`, and `ST_Disjoint`. Distinguishes genuine contradictions from missing evidence.
-  - *Temporal Consistency*: start/end ordering (`starts_at <= ends_at`), timezone-awareness enforcement (UTC), supported precision tier verification (`instant`, `day`, `month`, `year`, `unknown`), and year-precision preservation without fabricated timestamps.
-  - *Entity & Relationship Consistency*: referential integrity, anti-reflexivity (prohibits self-relationships where `subject == object`), predicate validation against `VALID_PREDICATES`, and conservative entity resolution checks preventing automated merge on unconfirmed name-only collisions.
-  - *Claims & Evidence Consistency*: enforces `truth_class = 'OBSERVED'` on all empirical observations, bounded confidence $\in [0.0, 1.0]$, physical measure domain sanity (non-negative population, magnitude $\in [-2.0, 12.0]$), and derived claim input/method tracing contracts.
-  - *Scenario & Proposed Modifications*: non-mutating dry-run validation interface via `validate_scenario_proposal()`, conforming directly to `ScenarioEngine.validate_constraints(scenario: dict) -> list[str]`.
-- **Authoritative Ingestion Integration (`backend/app/storage.py`):**
-  - Integrated `self.constraint_engine.validate_bundle(b, conn=conn)` into `WorldRepository.ingest()`.
-  - Blocking constraint findings raise `ConstraintViolationError`, rolling back transactions and preventing database corruption or dirty writes.
-  - Exposed `validate_bundle()` and `validate_scenario()` directly on `WorldRepository`.
+- **Database Migration (`db/init/008_alerts.sql`):**
+  - Created relational tables: `alert_rules`, `alert_evaluations`, and `alerts` with strict foreign key constraints (`ON DELETE CASCADE` / `RESTRICT`).
+  - Added indexes on `event_kind`, `status`, `event_id`, `rule_id`, and `created_at DESC` for performant spatial-temporal lookups.
+  - Enforced check constraints on comparison operators (`>`, `>=`, `<`, `<=`, `==`, `!=`), severity tiers (`INFO`, `WARNING`, `CRITICAL`), lifecycle states, and unique deduplication keys.
+- **Typed Alert Domain Models (`backend/app/domain.py`):**
+  - Implemented `AlertSeverity` (`INFO`, `WARNING`, `CRITICAL`), `AlertLifecycleStatus` (`RECEIVED`, `VALIDATED`, `EVALUATED`, `ALERTED`, `SUPPRESSED`, `FAILED`), and `AlertStatus` (`active`, `acknowledged`, `resolved`).
+  - Implemented `AlertRule` with validation for metric fields, finite thresholds, bounding box coordinate ranges, positive temporal windows, and cluster counts.
+  - Implemented `AlertEvaluation` capturing exact rule matches, count of alerts generated, suppression rationale, and execution timestamps.
+  - Implemented `Alert` with immutable evidence citations (`evidence_id`), structured context summaries, deduplication keys, and operator lifecycle fields.
+- **Deterministic Event / Alert Engine Core (`backend/app/alerts.py`):**
+  - *Rule Validation*: Rejects empty metrics, unsupported operators, infinite thresholds, negative cooldowns, inverted bounding boxes, and invalid cluster parameters.
+  - *Deterministic Operator Evaluation*: Supports floating-point comparisons with $10^{-9}$ numerical tolerance.
+  - *PostGIS Spatial Scope Matching*: Evaluates WGS 84 bounding boxes, entity containment (`ST_Contains`), and arbitrary GeoJSON polygons.
+  - *Temporal Windows & Clustering*: PostGIS-backed queries calculating qualifying event frequency across sliding time windows and spatial envelopes.
+  - *Lifecycle State Machine*: Formally tracks transition through `RECEIVED` -> `VALIDATED` -> `EVALUATED` -> (`ALERTED` | `SUPPRESSED`) | `FAILED`.
+  - *Deduplication & Cooldown*: Idempotent deduplication keys (`rule_id:event_id`) and cooldown suppression window prevents alert flooding.
+  - *Evidence Lineage & Epistemic Guardrails*: Every alert cites underlying source evidence, publisher locators, observed metrics, and explicitly disclaims unmodeled secondary impacts (e.g. tsunami or structural damage).
+- **Authoritative Ingestion & Storage Integration (`backend/app/storage.py`):**
+  - Extended `WorldRepository` with `create_alert_rule`, `get_alert_rule`, `list_alert_rules`, `update_alert_rule`, `delete_alert_rule`, `evaluate_event_alerts`, `list_alerts`, `get_alert`, `acknowledge_alert`, `resolve_alert`, and `list_alert_evaluations`.
+  - Automated post-ingestion alert evaluation in `ingest_usgs_earthquake` with decoupled error handling ensuring event persistence survives evaluation failures.
 - **FastAPI Endpoint Contracts (`backend/app/main.py`):**
-  - Implemented `POST /constraints/validate` dry-run validation endpoint accepting typed assertions (`bundle`, `entity`, `geometry`, `observation`, `relationship`, `claim`, `time_interval`, `bounding_box`, `scenario_proposal`) and returning machine-readable findings without state mutation.
-  - Implemented `GET /constraints/rules` returning machine-readable catalog of active constraint rules and severity policies.
-  - Registered `ConstraintViolationError` exception handler returning HTTP 422 with structured validation findings.
+  - Added rule endpoints: `GET /alerts/rules`, `POST /alerts/rules` (HTTP 201), `GET /alerts/rules/{id}`, `PATCH /alerts/rules/{id}`, `DELETE /alerts/rules/{id}`.
+  - Added evaluation endpoints: `POST /alerts/events/{id}/evaluate`, `GET /alerts/evaluations`.
+  - Added alert lifecycle endpoints: `GET /alerts`, `GET /alerts/{id}`, `POST /alerts/{id}/acknowledge`, `POST /alerts/{id}/resolve`.
 - **Verification Evidence:**
-  - 15 unit tests in `backend/tests/test_constraints.py` covering all invariant categories, polygon rings, antimeridian spanning, temporal intervals, derived claims, warning vs blocking statuses, and scenario proposals.
-  - 4 container-backed integration tests in `backend/tests/test_container_integration.py` verifying PostGIS `ST_IsValid` topology, spatial containment consistency with PostGIS predicates, ingestion rejection with transactional rollback, and dry-run API endpoints.
-  - Complete container test suite passed: **55 tests passed in 68.51s** (`Ran 55 tests in 68.511s, OK`).
-  - Frontend production build verified (`npm --prefix frontend run build` built cleanly in 12.14s).
+  - 7 unit tests in `backend/tests/test_alerts.py` covering rule validation, comparison operators, spatial bounding box checks, cluster logic, and lifecycle enums.
+  - 8 container-backed integration tests in `backend/tests/test_container_integration.py` verifying rule CRUD, seismic threshold alerts, PostGIS spatial bbox filtering, sub-threshold rejection, cooldown suppression, acknowledgment/resolution lifecycle transitions, REST API endpoints, and persistence survival on evaluation failure.
+  - Complete container test suite passed: **71 tests passed in 83.48s** (`Ran 71 tests in 83.476s, OK`).
+  - Frontend production build verified (`npm --prefix frontend run build` built cleanly in 12.45s).
 
 ### Previous Checkpoints Reused
 
@@ -46,12 +48,13 @@
 6. `46f7007 — Deepen temporal interval queries, spatial containment evidence, and knowledge graph traversal`
 7. `6873fbb — World Context Engine multi-entity spatial and temporal context assembly`
 8. `5347b1c — Deepen DuckDB analytical engine with Parquet snapshot automation, spatial rollups, and benchmark suite`
+9. `f88fe35 — Deterministic constraint engine for spatial, temporal, relationship, and evidence validation`
 
 ### Not claimed as complete
 
-- Cross-temporal velocity checks (e.g. maximum rate of population change or spatial movement between consecutive timestamps) are deferred to future time-series constraint enhancements.
-- Advanced modeling engines (Simulation, Prediction, Scenario Engine execution) remain behind contracts in `backend/app/interfaces.py`.
+- External notification dispatchers (e.g. SMTP email, Webhooks, SMS, Slack integration) are decoupled and deferred as external integration work.
+- Multi-hazard secondary cascade modeling (e.g. tsunami simulation or infrastructure damage estimation) requires validated physical models and remains behind deferred contracts.
 
 ### Next task
 
-Engine 14: Event / Alert Engine Deepening — condition-based alerting, threshold evaluation against real-time seismic and spatial events, and alert dispatch contracts.
+Engine 13: Decision Support Engine — multi-criteria trade-off ranking based on deterministic evidence and scenario constraints.

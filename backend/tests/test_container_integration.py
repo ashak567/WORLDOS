@@ -13,6 +13,12 @@ from psycopg.rows import dict_row
 from app.analytics import DuckDbSpatialAnalytics
 from app.benchmarks import AnalyticalBenchmarkSuite
 from app.domain import (
+    Alert,
+    AlertEvaluation,
+    AlertLifecycleStatus,
+    AlertRule,
+    AlertSeverity,
+    AlertStatus,
     BoundingBox,
     Claim,
     Confidence,
@@ -22,6 +28,7 @@ from app.domain import (
     ConstraintStatus,
     ConstraintValidationResult,
     Entity,
+    Event,
     Evidence,
     Geometry,
     Observation,
@@ -41,22 +48,38 @@ from app.ingestion.natural_earth import parse_country_boundary
 from app.ingestion.usgs import parse_earthquake_feature
 from app.ingestion.world_bank import parse_population
 from app.main import (
+    AcknowledgeAlertRequest,
+    CreateAlertRuleRequest,
+    ResolveAlertRequest,
+    UpdateAlertRuleRequest,
     ValidationRequest,
+    acknowledge_alert as api_acknowledge_alert,
     compare_spatial_slices_endpoint,
     coverage_summary_endpoint,
+    create_alert_rule as api_create_alert_rule,
+    delete_alert_rule as api_delete_alert_rule,
+    evaluate_event_alerts as api_evaluate_event_alerts,
     export_snapshot_endpoint,
+    get_alert as api_get_alert,
+    get_alert_rule as api_get_alert_rule,
     get_snapshot_endpoint,
+    list_alert_evaluations as api_list_alert_evaluations,
+    list_alert_rules as api_list_alert_rules,
+    list_alerts as api_list_alerts,
     list_constraint_rules,
     list_snapshots_endpoint,
     natural_earth_bundle,
+    resolve_alert as api_resolve_alert,
     run_benchmarks_endpoint,
     spatial_rollups_endpoint,
     temporal_rollups_endpoint,
+    update_alert_rule as api_update_alert_rule,
     usgs_earthquake_bundle,
     validate_constraints_endpoint,
     validate_snapshot_endpoint,
     world_bank_bundle,
 )
+from app.ingestion.usgs import EarthquakeRecord
 from app.snapshots import SnapshotCatalog, SnapshotManager
 from app.storage import WorldRepository
 
@@ -75,6 +98,12 @@ class ContainerIntegrationTests(unittest.TestCase):
         except Exception as err:
             raise unittest.SkipTest(f"PostGIS database not available at {cls.db_url}: {err}")
         cls.repo = WorldRepository(cls.db_url)
+
+    def setUp(self) -> None:
+        with psycopg.connect(self.db_url) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM alerts")
+            cur.execute("DELETE FROM alert_evaluations")
+            cur.execute("DELETE FROM alert_rules")
 
     def test_reconciliation_of_world_bank_and_natural_earth(self) -> None:
         now = datetime(2026, 9, 29, tzinfo=UTC)
@@ -1282,3 +1311,360 @@ class ContainerIntegrationTests(unittest.TestCase):
         with self.assertRaises(HTTPException) as ctx:
             validate_constraints_endpoint(ValidationRequest())
         self.assertEqual(ctx.exception.status_code, 422)
+
+    # -------------------------------------------------------------------------
+    # Engine 14: Event / Alert Engine Integration Tests
+    # -------------------------------------------------------------------------
+
+    def test_alert_rule_crud_operations(self) -> None:
+        """Verify Alert Rule creation, retrieval, listing, updating, and deletion in PostgreSQL."""
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="Seismic Hazard Test Rule",
+            description="Integration test rule for earthquake magnitude",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.0,
+            severity=AlertSeverity.WARNING,
+            cooldown_seconds=300,
+        )
+        created_id = self.repo.create_alert_rule(rule)
+        self.assertEqual(created_id, rule_id)
+
+        # Retrieve rule
+        retrieved = self.repo.get_alert_rule(rule_id)
+        self.assertIsNotNone(retrieved)
+        self.assertEqual(retrieved.name, "Seismic Hazard Test Rule")
+        self.assertEqual(retrieved.threshold, 5.0)
+        self.assertTrue(retrieved.is_enabled)
+
+        # List rules
+        rules = self.repo.list_alert_rules(event_kind="earthquake")
+        self.assertTrue(any(r.id == rule_id for r in rules))
+
+        # Update rule
+        updated = self.repo.update_alert_rule(rule_id, is_enabled=False, threshold=6.0)
+        self.assertTrue(updated)
+        retrieved_updated = self.repo.get_alert_rule(rule_id)
+        self.assertFalse(retrieved_updated.is_enabled)
+        self.assertEqual(retrieved_updated.threshold, 6.0)
+
+        # Delete rule
+        deleted = self.repo.delete_alert_rule(rule_id)
+        self.assertTrue(deleted)
+        self.assertIsNone(self.repo.get_alert_rule(rule_id))
+
+    def test_seismic_event_alert_evaluation_pipeline(self) -> None:
+        """Verify full Event/Alert evaluation pipeline with PostGIS spatial bounding box."""
+        # 1. Create alert rule scoped to California Bbox
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="California Quake Warning",
+            description="Magnitude 5.0+ within California bounds",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.0,
+            severity=AlertSeverity.CRITICAL,
+            spatial_scope={"type": "bbox", "min_lon": -125.0, "max_lon": -114.0, "min_lat": 32.0, "max_lat": 42.0},
+            cooldown_seconds=600,
+            is_enabled=True,
+        )
+        self.repo.create_alert_rule(rule)
+
+        # 2. Ingest an earthquake event in California (Ridgecrest area: -117.5, 35.8, mag=5.8)
+        now = datetime(2026, 10, 26, 12, 0, 0, tzinfo=UTC)
+        eq_event_id = f"test-ca-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 5.8 - Ridgecrest, CA",
+            place="Ridgecrest, CA",
+            mag=5.8,
+            time=now,
+            longitude=-117.5,
+            latitude=35.8,
+            depth_km=7.5,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-ca",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+
+        # 3. Evaluate the event
+        eval_result = self.repo.evaluate_event_alerts(bundle.event.id)
+        self.assertEqual(eval_result.status, AlertLifecycleStatus.ALERTED)
+        self.assertEqual(eval_result.alerts_generated, 1)
+        self.assertIn(rule_id, eval_result.matched_rule_ids)
+
+        # 4. Verify Alert record in PostgreSQL
+        alerts = self.repo.list_alerts(event_id=bundle.event.id)
+        self.assertEqual(len(alerts), 1)
+        alert = alerts[0]
+        self.assertEqual(alert["severity"], "CRITICAL")
+        self.assertEqual(alert["status"], "active")
+        self.assertEqual(alert["evidence_id"], bundle.evidence.id)
+        self.assertIn("M 5.8", alert["message"])
+        self.assertIn("Does not assert secondary impacts without dedicated modeling", alert["message"])
+        self.assertEqual(alert["context_summary"]["metric_value"], 5.8)
+        self.assertEqual(alert["context_summary"]["threshold"], 5.0)
+
+    def test_seismic_event_spatial_filter_rejection(self) -> None:
+        """Verify that events outside configured spatial bounding box do not trigger alerts."""
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="California Only Rule",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.0,
+            severity=AlertSeverity.WARNING,
+            spatial_scope={"type": "bbox", "min_lon": -125.0, "max_lon": -114.0, "min_lat": 32.0, "max_lat": 42.0},
+            cooldown_seconds=300,
+            is_enabled=True,
+        )
+        self.repo.create_alert_rule(rule)
+
+        # Ingest earthquake in Tokyo, Japan (139.69, 35.68, mag=6.5)
+        now = datetime(2026, 10, 26, 12, 10, 0, tzinfo=UTC)
+        eq_event_id = f"test-tokyo-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 6.5 - Tokyo Region, Japan",
+            place="Near Tokyo, Japan",
+            mag=6.5,
+            time=now,
+            longitude=139.69,
+            latitude=35.68,
+            depth_km=40.0,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-tokyo",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+
+        # Evaluate: Tokyo event should NOT match California rule
+        eval_result = self.repo.evaluate_event_alerts(bundle.event.id)
+        self.assertEqual(eval_result.status, AlertLifecycleStatus.EVALUATED)
+        self.assertEqual(eval_result.alerts_generated, 0)
+        self.assertEqual(len(eval_result.matched_rule_ids), 0)
+
+        # Verify no alerts were created
+        alerts = self.repo.list_alerts(event_id=bundle.event.id)
+        self.assertEqual(len(alerts), 0)
+
+    def test_seismic_event_below_threshold(self) -> None:
+        """Verify that events below numeric threshold do not trigger alerts."""
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="Major Quake Only",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=6.5,
+            severity=AlertSeverity.CRITICAL,
+            cooldown_seconds=300,
+            is_enabled=True,
+        )
+        self.repo.create_alert_rule(rule)
+
+        now = datetime(2026, 10, 26, 12, 15, 0, tzinfo=UTC)
+        eq_event_id = f"test-minor-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 4.2 - Minor Quake",
+            place="Minor Fault",
+            mag=4.2,
+            time=now,
+            longitude=-118.0,
+            latitude=34.0,
+            depth_km=10.0,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-minor",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+
+        eval_result = self.repo.evaluate_event_alerts(bundle.event.id)
+        self.assertEqual(eval_result.status, AlertLifecycleStatus.EVALUATED)
+        self.assertEqual(eval_result.alerts_generated, 0)
+        self.assertEqual(len(eval_result.matched_rule_ids), 0)
+
+    def test_deduplication_and_cooldown_suppression(self) -> None:
+        """Verify that duplicate processing is idempotent and cooldown prevents alert flooding."""
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="Cooldown Test Rule",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.0,
+            severity=AlertSeverity.WARNING,
+            cooldown_seconds=3600,  # 1 hour cooldown
+            is_enabled=True,
+        )
+        self.repo.create_alert_rule(rule)
+
+        now = datetime(2026, 10, 26, 12, 20, 0, tzinfo=UTC)
+        eq_event_id = f"test-cd-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 5.5 - Cooldown Test",
+            place="San Andreas",
+            mag=5.5,
+            time=now,
+            longitude=-120.5,
+            latitude=36.2,
+            depth_km=8.0,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-cd",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+
+        # 1. First evaluation: ALERTED
+        eval_1 = self.repo.evaluate_event_alerts(bundle.event.id)
+        self.assertEqual(eval_1.status, AlertLifecycleStatus.ALERTED)
+        self.assertEqual(eval_1.alerts_generated, 1)
+
+        # 2. Second evaluation of the same event: Suppressed / Deduplicated (0 new alerts)
+        eval_2 = self.repo.evaluate_event_alerts(bundle.event.id)
+        self.assertIn(eval_2.status, (AlertLifecycleStatus.SUPPRESSED, AlertLifecycleStatus.EVALUATED))
+        self.assertEqual(eval_2.alerts_generated, 0)
+
+        # Alerts count for this event must remain exactly 1
+        alerts = self.repo.list_alerts(event_id=bundle.event.id)
+        self.assertEqual(len(alerts), 1)
+
+    def test_alert_lifecycle_acknowledgment_and_resolution(self) -> None:
+        """Verify alert state transitions: active -> acknowledged -> resolved."""
+        rule_id = uuid4()
+        rule = AlertRule(
+            id=rule_id,
+            name="Lifecycle Test Rule",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.0,
+            severity=AlertSeverity.CRITICAL,
+            cooldown_seconds=0,
+            is_enabled=True,
+        )
+        self.repo.create_alert_rule(rule)
+
+        now = datetime(2026, 10, 26, 12, 30, 0, tzinfo=UTC)
+        eq_event_id = f"test-life-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 6.0 - Lifecycle Event",
+            place="Test Region",
+            mag=6.0,
+            time=now,
+            longitude=-121.0,
+            latitude=37.0,
+            depth_km=12.0,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-life",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+        self.repo.evaluate_event_alerts(bundle.event.id)
+
+        alerts = self.repo.list_alerts(event_id=bundle.event.id)
+        self.assertEqual(len(alerts), 1)
+        alert_id = alerts[0]["id"]
+        self.assertEqual(alerts[0]["status"], "active")
+
+        # 1. Acknowledge alert
+        ack_success = self.repo.acknowledge_alert(alert_id, acknowledged_by="lead_analyst")
+        self.assertTrue(ack_success)
+        alert_ack = self.repo.get_alert(alert_id)
+        self.assertEqual(alert_ack["status"], "acknowledged")
+        self.assertEqual(alert_ack["acknowledged_by"], "lead_analyst")
+        self.assertIsNotNone(alert_ack["acknowledged_at"])
+
+        # 2. Resolve alert
+        res_success = self.repo.resolve_alert(alert_id, resolution_notes="False positive or impact mitigated")
+        self.assertTrue(res_success)
+        alert_res = self.repo.get_alert(alert_id)
+        self.assertEqual(alert_res["status"], "resolved")
+        self.assertEqual(alert_res["resolution_notes"], "False positive or impact mitigated")
+        self.assertIsNotNone(alert_res["resolved_at"])
+
+        # 3. Cannot acknowledge already resolved alert
+        ack_again = self.repo.acknowledge_alert(alert_id)
+        self.assertFalse(ack_again)
+
+    def test_alert_fastapi_endpoints(self) -> None:
+        """Verify REST API endpoints for alert rules, evaluations, and alerts."""
+        # 1. Create rule via API endpoint
+        req = CreateAlertRuleRequest(
+            name="API Test Rule",
+            description="Created via endpoint",
+            event_kind="earthquake",
+            operator=">=",
+            metric_field="mag",
+            threshold=5.2,
+            severity=AlertSeverity.WARNING,
+            cooldown_seconds=300,
+            is_enabled=True,
+        )
+        created_rule = api_create_alert_rule(req)
+        self.assertEqual(created_rule.name, "API Test Rule")
+        self.assertEqual(created_rule.threshold, 5.2)
+
+        # 2. List rules
+        rule_list = api_list_alert_rules(event_kind="earthquake")
+        self.assertTrue(any(r.id == created_rule.id for r in rule_list))
+
+        # 3. Get rule
+        retrieved_rule = api_get_alert_rule(created_rule.id)
+        self.assertEqual(retrieved_rule.id, created_rule.id)
+
+        # 4. Patch rule
+        patch_req = UpdateAlertRuleRequest(threshold=5.8, is_enabled=False)
+        updated_rule = api_update_alert_rule(created_rule.id, patch_req)
+        self.assertEqual(updated_rule.threshold, 5.8)
+        self.assertFalse(updated_rule.is_enabled)
+
+        # 5. Delete rule
+        del_res = api_delete_alert_rule(created_rule.id)
+        self.assertTrue(del_res["deleted"])
+
+    def test_event_persistence_survives_alert_evaluation_failure(self) -> None:
+        """Verify that alert evaluation failure does not compromise or delete the underlying event."""
+        # Provide non-existent event ID to evaluation
+        fake_id = uuid4()
+        eval_result = self.repo.evaluate_event_alerts(fake_id)
+        self.assertEqual(eval_result.status, AlertLifecycleStatus.FAILED)
+        self.assertIn("not found", eval_result.reason)
+
+        # Now create real event and verify that it remains in database regardless
+        now = datetime(2026, 10, 26, 12, 40, 0, tzinfo=UTC)
+        eq_event_id = f"test-survive-{uuid4()}"
+        record = EarthquakeRecord(
+            event_id=eq_event_id,
+            title="M 5.1 - Persistent Event",
+            place="Fault Line",
+            mag=5.1,
+            time=now,
+            longitude=-119.0,
+            latitude=35.0,
+            depth_km=10.0,
+            locator=f"https://earthquake.usgs.gov/earthquakes/feed/v1.0/detail/{eq_event_id}.geojson",
+            content_hash="test-hash-survive",
+        )
+        bundle = usgs_earthquake_bundle(record, now)
+        self.repo.ingest(bundle)
+
+        # Verify event exists in PostgreSQL
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, kind FROM events WHERE id = %s", (bundle.event.id,))
+            row = cur.fetchone()
+            self.assertIsNotNone(row)
+            self.assertEqual(row["kind"], "earthquake")

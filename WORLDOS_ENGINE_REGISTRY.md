@@ -186,17 +186,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Define decision evaluation schema.
 
 ### 14. Event / Alert Engine
-- **Purpose**: Ingestion, spatio-temporal indexing, and condition-based alerting on real-world events (e.g. earthquakes, weather, alerts).
-- **Status**: `PARTIALLY_IMPLEMENTED`
-- **Inputs**: Event payloads, threshold criteria.
-- **Outputs**: Sourced `Event` records, triggered alerts.
-- **Dependencies**: PostGIS `events` table.
-- **Persistence**: `events` table in PostgreSQL.
-- **Interface / API**: `Event` model; `WorldRepository.events()`; `GET /api/v1/events`.
-- **Evidence Requirements**: Must cite publisher event ID, time interval, and location.
-- **Test Contract**: USGS earthquake event ingestion tested in `test_container_integration.py`.
-- **Current Implementation**: Ingests real USGS events; exposes REST query endpoint.
-- **Next Milestone**: Implement threshold alerting rules (e.g. magnitude >= 6.0 within country X).
+- **Purpose**: Deterministic condition-based alerting on incoming world events, spatial-temporal correlation, PostGIS geometry filtering, clustering thresholds, deduplication/cooldown enforcement, and evidence-linked alert records.
+- **Status**: `VERIFIED`
+- **Inputs**: Sourced `Event` records, `AlertRule` definitions, PostGIS geometries, temporal sliding windows.
+- **Outputs**: `AlertEvaluation` records tracking lifecycle states (`RECEIVED`, `VALIDATED`, `EVALUATED`, `ALERTED`, `SUPPRESSED`, `FAILED`), deterministic `Alert` records citing evidence IDs, cooldown suppression logs.
+- **Dependencies**: PostGIS 3.4 (`ST_Contains`, `ST_Intersects`, `ST_MakeEnvelope`), `psycopg`, `pydantic`.
+- **Persistence**: Relational tables in PostgreSQL (`events`, `alert_rules`, `alert_evaluations`, `alerts`).
+- **Interface / API**: `backend/app/alerts.py` (`AlertEngine`), `backend/app/domain.py` (`AlertRule`, `AlertEvaluation`, `Alert`, `AlertSeverity`, `AlertStatus`, `AlertLifecycleStatus`), `WorldRepository` methods (`create_alert_rule`, `get_alert_rule`, `list_alert_rules`, `update_alert_rule`, `delete_alert_rule`, `evaluate_event_alerts`, `list_alerts`, `get_alert`, `acknowledge_alert`, `resolve_alert`), and REST endpoints: `GET /alerts/rules`, `POST /alerts/rules`, `GET /alerts/rules/{id}`, `PATCH /alerts/rules/{id}`, `DELETE /alerts/rules/{id}`, `POST /alerts/events/{id}/evaluate`, `GET /alerts/evaluations`, `GET /alerts`, `GET /alerts/{id}`, `POST /alerts/{id}/acknowledge`, `POST /alerts/{id}/resolve`.
+- **Evidence Requirements**: Every triggered alert preserves the immutable `evidence_id` of the underlying event; preserves context summary with observed coordinates, metric values, and operator thresholds; explicitly disclaims unmodeled secondary impacts.
+- **Test Contract**: Verified by 7 unit tests in `backend/tests/test_alerts.py` (rule validation, comparison operators, spatial bounding box checks, cluster logic, lifecycle states) and 8 container-backed integration tests in `backend/tests/test_container_integration.py` (CRUD operations, seismic threshold alerting, PostGIS spatial bounding box rejection, sub-threshold rejection, idempotency/cooldown deduplication, acknowledgment/resolution lifecycle transitions, REST API endpoints, and persistence survival on evaluation failure). Total test suite of 71 container tests passing.
+- **Current Implementation**: Fully operational in container stack; automated post-ingestion evaluation in USGS earthquake pipeline; decoupled alert records from external notification dispatch.
+- **Next Milestone**: External notification delivery channels (webhooks, email dispatchers) as deferred async tasks.
 
 ### 15. Anomaly Detection Engine
 - **Purpose**: Deterministic statistical outlier and change-point detection on historical observation series.

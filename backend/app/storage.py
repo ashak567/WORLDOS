@@ -13,6 +13,12 @@ import psycopg
 from psycopg.rows import dict_row
 
 from .domain import (
+    Alert,
+    AlertEvaluation,
+    AlertLifecycleStatus,
+    AlertRule,
+    AlertSeverity,
+    AlertStatus,
     BoundingBox,
     Claim,
     ConstraintCategory,
@@ -29,6 +35,7 @@ from .domain import (
     WorldBundle,
     WorldContext,
 )
+from .alerts import AlertEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
 
 
@@ -57,6 +64,7 @@ class WorldRepository:
     def __init__(self, database_url: str | None = None) -> None:
         self.database_url = database_url or os.environ["WORLDOS_DATABASE_URL"]
         self.constraint_engine = ConstraintEngine(repository=self)
+        self.alert_engine = AlertEngine(repository=self)
 
     @contextmanager
     def _connection(self) -> Iterator[psycopg.Connection]:
@@ -1411,6 +1419,257 @@ class WorldRepository:
             row = cur.fetchone()
             return _clean_record(row) if row else None
 
+    # -------------------------------------------------------------------------
+    # Alert Rules, Evaluations, and Triggered Alerts (Engine 14)
+    # -------------------------------------------------------------------------
 
+    def create_alert_rule(self, rule: AlertRule) -> UUID:
+        errors = self.alert_engine.validate_rule(rule)
+        if errors:
+            raise ValueError(f"Alert rule validation failed: {'; '.join(errors)}")
 
+        sql = """
+            INSERT INTO alert_rules (
+                id, name, description, event_kind, operator, metric_field, threshold,
+                severity, spatial_scope, temporal_window_seconds, cluster_threshold,
+                cooldown_seconds, is_enabled, created_at, updated_at
+            ) VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, NOW(), NOW())
+            RETURNING id
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    rule.id,
+                    rule.name,
+                    rule.description,
+                    rule.event_kind,
+                    rule.operator,
+                    rule.metric_field,
+                    rule.threshold,
+                    rule.severity.value,
+                    json.dumps(rule.spatial_scope) if rule.spatial_scope else None,
+                    rule.temporal_window_seconds,
+                    rule.cluster_threshold,
+                    rule.cooldown_seconds,
+                    rule.is_enabled,
+                ),
+            )
+            return cur.fetchone()["id"]
 
+    def get_alert_rule(self, rule_id: UUID) -> AlertRule | None:
+        sql = """
+            SELECT id, name, description, event_kind, operator, metric_field, threshold,
+                   severity, spatial_scope, temporal_window_seconds, cluster_threshold,
+                   cooldown_seconds, is_enabled, created_at, updated_at
+            FROM alert_rules
+            WHERE id = %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (rule_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            return AlertRule(
+                id=row["id"],
+                name=row["name"],
+                description=row.get("description"),
+                event_kind=row["event_kind"],
+                operator=row["operator"],
+                metric_field=row["metric_field"],
+                threshold=float(row["threshold"]),
+                severity=AlertSeverity(row["severity"]),
+                spatial_scope=row.get("spatial_scope"),
+                temporal_window_seconds=row.get("temporal_window_seconds"),
+                cluster_threshold=row.get("cluster_threshold"),
+                cooldown_seconds=row.get("cooldown_seconds", 300),
+                is_enabled=row.get("is_enabled", True),
+                created_at=row.get("created_at"),
+                updated_at=row.get("updated_at"),
+            )
+
+    def list_alert_rules(
+        self,
+        event_kind: str | None = None,
+        is_enabled: bool | None = None,
+        limit: int = 100,
+    ) -> list[AlertRule]:
+        limit = _extract_int(limit, 100)
+        clauses, values = [], []
+        if event_kind:
+            clauses.append("event_kind = %s")
+            values.append(event_kind)
+        if is_enabled is not None:
+            clauses.append("is_enabled = %s")
+            values.append(is_enabled)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT id, name, description, event_kind, operator, metric_field, threshold,
+                   severity, spatial_scope, temporal_window_seconds, cluster_threshold,
+                   cooldown_seconds, is_enabled, created_at, updated_at
+            FROM alert_rules
+            {where}
+            ORDER BY created_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            rules = []
+            for row in cur.fetchall():
+                rules.append(
+                    AlertRule(
+                        id=row["id"],
+                        name=row["name"],
+                        description=row.get("description"),
+                        event_kind=row["event_kind"],
+                        operator=row["operator"],
+                        metric_field=row["metric_field"],
+                        threshold=float(row["threshold"]),
+                        severity=AlertSeverity(row["severity"]),
+                        spatial_scope=row.get("spatial_scope"),
+                        temporal_window_seconds=row.get("temporal_window_seconds"),
+                        cluster_threshold=row.get("cluster_threshold"),
+                        cooldown_seconds=row.get("cooldown_seconds", 300),
+                        is_enabled=row.get("is_enabled", True),
+                        created_at=row.get("created_at"),
+                        updated_at=row.get("updated_at"),
+                    )
+                )
+            return rules
+
+    def update_alert_rule(
+        self,
+        rule_id: UUID,
+        is_enabled: bool | None = None,
+        threshold: float | None = None,
+    ) -> bool:
+        sets, values = [], []
+        if is_enabled is not None:
+            sets.append("is_enabled = %s")
+            values.append(is_enabled)
+        if threshold is not None:
+            sets.append("threshold = %s")
+            values.append(threshold)
+        if not sets:
+            return False
+        sets.append("updated_at = NOW()")
+        values.append(rule_id)
+        sql = f"UPDATE alert_rules SET {', '.join(sets)} WHERE id = %s"
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return cur.rowcount > 0
+
+    def delete_alert_rule(self, rule_id: UUID) -> bool:
+        sql = "DELETE FROM alert_rules WHERE id = %s"
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (rule_id,))
+            return cur.rowcount > 0
+
+    def evaluate_event_alerts(self, event_id: UUID, rule_ids: list[UUID] | None = None) -> AlertEvaluation:
+        """Run deterministic event evaluation against active rules."""
+        return self.alert_engine.evaluate_event(event_id, rule_ids=rule_ids)
+
+    def list_alerts(
+        self,
+        status: str | None = None,
+        severity: str | None = None,
+        event_id: UUID | None = None,
+        rule_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses, values = [], []
+        if status:
+            clauses.append("a.status = %s")
+            values.append(status)
+        if severity:
+            clauses.append("a.severity = %s")
+            values.append(severity)
+        if event_id:
+            clauses.append("a.event_id = %s")
+            values.append(event_id)
+        if rule_id:
+            clauses.append("a.rule_id = %s")
+            values.append(rule_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT a.id, a.rule_id, r.name AS rule_name, a.event_id, a.severity,
+                   a.title, a.message, a.dedup_key, a.status, a.evidence_id,
+                   a.context_summary, a.created_at, a.acknowledged_at,
+                   a.acknowledged_by, a.resolved_at, a.resolution_notes,
+                   evi.locator AS evidence_locator, s.slug AS source_slug
+            FROM alerts a
+            JOIN alert_rules r ON r.id = a.rule_id
+            JOIN evidence evi ON evi.id = a.evidence_id
+            JOIN sources s ON s.id = evi.source_id
+            {where}
+            ORDER BY a.created_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(row) for row in cur.fetchall()]
+
+    def get_alert(self, alert_id: UUID) -> dict[str, Any] | None:
+        sql = """
+            SELECT a.id, a.rule_id, r.name AS rule_name, a.event_id, a.severity,
+                   a.title, a.message, a.dedup_key, a.status, a.evidence_id,
+                   a.context_summary, a.created_at, a.acknowledged_at,
+                   a.acknowledged_by, a.resolved_at, a.resolution_notes,
+                   evi.locator AS evidence_locator, s.slug AS source_slug
+            FROM alerts a
+            JOIN alert_rules r ON r.id = a.rule_id
+            JOIN evidence evi ON evi.id = a.evidence_id
+            JOIN sources s ON s.id = evi.source_id
+            WHERE a.id = %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (alert_id,))
+            row = cur.fetchone()
+            return _clean_record(row) if row else None
+
+    def acknowledge_alert(self, alert_id: UUID, acknowledged_by: str = "operator") -> bool:
+        sql = """
+            UPDATE alerts
+            SET status = 'acknowledged',
+                acknowledged_at = NOW(),
+                acknowledged_by = %s
+            WHERE id = %s AND status = 'active'
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (acknowledged_by, alert_id))
+            return cur.rowcount > 0
+
+    def resolve_alert(self, alert_id: UUID, resolution_notes: str = "Resolved by operator") -> bool:
+        sql = """
+            UPDATE alerts
+            SET status = 'resolved',
+                resolved_at = NOW(),
+                resolution_notes = %s
+            WHERE id = %s AND status IN ('active', 'acknowledged')
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (resolution_notes, alert_id))
+            return cur.rowcount > 0
+
+    def list_alert_evaluations(self, event_id: UUID | None = None, limit: int = 100) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses, values = [], []
+        if event_id:
+            clauses.append("event_id = %s")
+            values.append(event_id)
+        where = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT id, event_id, status, matched_rule_ids, alerts_generated,
+                   reason, evaluated_at, metadata
+            FROM alert_evaluations
+            {where}
+            ORDER BY evaluated_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(row) for row in cur.fetchall()]
