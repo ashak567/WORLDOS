@@ -37,7 +37,13 @@ from .domain import (
     Provenance,
     RankedAlternative,
     Relationship,
+    Scenario,
+    ScenarioComparison,
+    ScenarioEvaluation,
+    ScenarioModification,
+    ScenarioOperationType,
     ScenarioProposal,
+    ScenarioStatus,
     SensitivityVariation,
     SnapshotManifest,
     Source,
@@ -56,6 +62,7 @@ from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
+from .scenarios import ScenarioLifecycleError
 from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
 
@@ -71,6 +78,15 @@ def constraint_violation_handler(request, exc: ConstraintViolationError):
             "detail": str(exc),
             "validation": exc.result.model_dump(mode="json"),
         },
+    )
+
+
+@app.exception_handler(ScenarioLifecycleError)
+def scenario_lifecycle_handler(request, exc: ScenarioLifecycleError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
     )
 
 
@@ -1248,3 +1264,212 @@ def run_decision_sensitivity(decision_id: UUID, req: DecisionSensitivityRequest 
     except ValueError as err:
         status_code = 404 if "not found" in str(err).lower() else 400
         raise HTTPException(status_code=status_code, detail=str(err)) from err
+
+
+# =============================================================================
+# Scenario Engine Endpoints (Engine 16)
+# =============================================================================
+
+
+class CreateScenarioRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="")
+    baseline_reference: str = Field(default="operational_world_state")
+    parent_scenario_id: UUID | None = None
+    parent_version: int | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+class AddScenarioModificationRequest(BaseModel):
+    target_entity_id: UUID
+    target_field: str = Field(min_length=1, max_length=255)
+    operation: ScenarioOperationType
+    value: Any = None
+    effective_time_start: datetime | None = None
+    effective_time_end: datetime | None = None
+    rationale: str = Field(default="")
+    evidence_references: list[str] = Field(default_factory=list)
+
+
+class BranchScenarioRequest(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str = Field(default="")
+
+
+class EvaluateScenarioRequest(BaseModel):
+    evaluator: str = Field(default="deterministic_scenario_engine_v1")
+
+
+@app.post("/scenarios", response_model=Scenario)
+def create_scenario_endpoint(req: CreateScenarioRequest):
+    repo = WorldRepository()
+    scenario = Scenario(
+        name=req.name,
+        description=req.description,
+        baseline_reference=req.baseline_reference,
+        parent_scenario_id=req.parent_scenario_id,
+        parent_version=req.parent_version,
+        metadata=req.metadata,
+    )
+    scenario_id = repo.create_scenario(scenario)
+    created = repo.get_scenario(scenario_id)
+    if not created:
+        raise HTTPException(status_code=500, detail="Failed to retrieve created scenario")
+    return created
+
+
+@app.get("/scenarios", response_model=list[Scenario])
+def list_scenarios_endpoint(
+    status: ScenarioStatus | str | None = None,
+    parent_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    status_v = _clean_param(status)
+    parent_v = _clean_param(parent_id)
+    limit_v = _clean_param(limit, 100)
+    return WorldRepository().list_scenarios(status=status_v, parent_id=parent_v, limit=limit_v)
+
+
+@app.get("/scenarios/{scenario_id}", response_model=Scenario)
+def get_scenario_endpoint(scenario_id: UUID):
+    scenario = WorldRepository().get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    return scenario
+
+
+@app.post("/scenarios/{scenario_id}/archive")
+def archive_scenario_endpoint(scenario_id: UUID):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    archived = repo.archive_scenario(scenario_id)
+    return {"archived": archived, "scenario_id": scenario_id}
+
+
+@app.post("/scenarios/{scenario_id}/modifications", response_model=ScenarioModification)
+def add_scenario_modification_endpoint(scenario_id: UUID, req: AddScenarioModificationRequest):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+
+    mod = ScenarioModification(
+        scenario_id=scenario_id,
+        target_entity_id=req.target_entity_id,
+        target_field=req.target_field,
+        operation=req.operation,
+        value=req.value,
+        effective_time_start=req.effective_time_start,
+        effective_time_end=req.effective_time_end,
+        rationale=req.rationale,
+        evidence_references=req.evidence_references,
+    )
+    try:
+        mod_id = repo.add_scenario_modification(mod)
+        mods = repo.list_scenario_modifications(scenario_id, is_active=True)
+        created_mod = next((m for m in mods if m.id == mod_id), None)
+        if not created_mod:
+            raise HTTPException(status_code=500, detail="Failed to retrieve created modification")
+        return created_mod
+    except ScenarioLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+
+@app.get("/scenarios/{scenario_id}/modifications", response_model=list[ScenarioModification])
+def list_scenario_modifications_endpoint(scenario_id: UUID, is_active: bool = True):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    return repo.list_scenario_modifications(scenario_id, is_active=is_active)
+
+
+@app.delete("/scenarios/{scenario_id}/modifications/{mod_id}")
+def remove_scenario_modification_endpoint(scenario_id: UUID, mod_id: UUID):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    try:
+        removed = repo.remove_scenario_modification(mod_id)
+        if not removed:
+            raise HTTPException(status_code=404, detail=f"Modification {mod_id} not found")
+        return {"removed": True, "modification_id": mod_id}
+    except ScenarioLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle
+
+
+@app.post("/scenarios/{scenario_id}/branch", response_model=Scenario)
+def branch_scenario_endpoint(scenario_id: UUID, req: BranchScenarioRequest):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Parent scenario {scenario_id} not found")
+    try:
+        return repo.branch_scenario(
+            parent_id=scenario_id,
+            new_name=req.name,
+            new_description=req.description,
+        )
+    except ScenarioLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+
+@app.post("/scenarios/{scenario_id}/validate", response_model=ConstraintValidationResult)
+def validate_scenario_endpoint(scenario_id: UUID):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    try:
+        return repo.validate_scenario(scenario_id)
+    except ScenarioLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle
+
+
+@app.post("/scenarios/{scenario_id}/evaluate", response_model=ScenarioEvaluation)
+def evaluate_scenario_endpoint(scenario_id: UUID, req: EvaluateScenarioRequest = EvaluateScenarioRequest()):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    try:
+        evaluator_name = _clean_param(req.evaluator, "deterministic_scenario_engine_v1")
+        return repo.evaluate_scenario(scenario_id, evaluator=evaluator_name)
+    except ScenarioLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+
+@app.get("/scenarios/{scenario_id}/evaluation", response_model=ScenarioEvaluation)
+def get_scenario_evaluation_endpoint(scenario_id: UUID):
+    repo = WorldRepository()
+    scenario = repo.get_scenario(scenario_id)
+    if not scenario:
+        raise HTTPException(status_code=404, detail=f"Scenario {scenario_id} not found")
+    evaluation = repo.get_latest_scenario_evaluation(scenario_id)
+    if not evaluation:
+        raise HTTPException(status_code=404, detail=f"No evaluation found for scenario {scenario_id}")
+    return evaluation
+
+
+@app.get("/scenarios/{scenario_a_id}/compare/{scenario_b_id}", response_model=ScenarioComparison)
+def compare_scenarios_endpoint(scenario_a_id: UUID, scenario_b_id: UUID):
+    repo = WorldRepository()
+    scenario_a = repo.get_scenario(scenario_a_id)
+    if not scenario_a:
+        raise HTTPException(status_code=404, detail=f"Scenario A {scenario_a_id} not found")
+    scenario_b = repo.get_scenario(scenario_b_id)
+    if not scenario_b:
+        raise HTTPException(status_code=404, detail=f"Scenario B {scenario_b_id} not found")
+    try:
+        return repo.compare_scenarios(scenario_a_id, scenario_b_id)
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve)) from ve

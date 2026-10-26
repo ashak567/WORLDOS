@@ -5,7 +5,13 @@ from typing import Protocol
 
 
 class ScenarioEngine(Protocol):
+    """Engine 16: Deterministic Scenario Engine."""
+
     def validate_constraints(self, scenario: dict) -> list[str]: ...
+    def validate_scenario(self, scenario_id: str) -> dict: ...
+    def evaluate_scenario(self, scenario_id: str) -> dict: ...
+    def branch_scenario(self, scenario_id: str, new_name: str) -> dict: ...
+
 
 
 class PredictionEngine(Protocol):

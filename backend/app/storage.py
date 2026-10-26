@@ -33,7 +33,13 @@ from .domain import (
     DecisionResult,
     EvidenceCitation,
     Relationship,
+    Scenario,
+    ScenarioComparison,
+    ScenarioEvaluation,
+    ScenarioModification,
+    ScenarioOperationType,
     ScenarioProposal,
+    ScenarioStatus,
     SpatialScope,
     TemporalScope,
     WorldBundle,
@@ -42,6 +48,7 @@ from .domain import (
 from .alerts import AlertEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .decisions import DecisionEngine
+from .scenarios import ScenarioEngine
 
 
 def _extract_int(val: Any, default: int = 100) -> int:
@@ -71,6 +78,7 @@ class WorldRepository:
         self.constraint_engine = ConstraintEngine(repository=self)
         self.alert_engine = AlertEngine(repository=self)
         self.decision_engine = DecisionEngine(repository=self)
+        self.scenario_engine = ScenarioEngine(repository=self)
 
     @contextmanager
     def _connection(self) -> Iterator[psycopg.Connection]:
@@ -1778,3 +1786,139 @@ class WorldRepository:
         with self._connection() as conn:
             variations = self.decision_engine.run_sensitivity_analysis(req, delta_pct=delta_pct, conn=conn)
             return [v.model_dump() for v in variations]
+
+    # -------------------------------------------------------------------------
+    # Engine 16: Deterministic Scenario Engine Operations
+    # -------------------------------------------------------------------------
+
+    def create_scenario(
+        self,
+        scenario_or_name: Scenario | str,
+        description: str | None = None,
+        baseline_context: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> UUID:
+        """Create a new draft scenario and return its ID."""
+        with self._connection() as conn:
+            scen = self.scenario_engine.create_scenario(
+                scenario_or_name=scenario_or_name,
+                description=description,
+                baseline_context=baseline_context,
+                metadata=metadata,
+                conn=conn,
+            )
+            return scen.id
+
+    def get_scenario(self, scenario_id: UUID) -> Scenario | None:
+        """Retrieve a scenario by ID."""
+        with self._connection() as conn:
+            return self.scenario_engine.get_scenario(scenario_id, conn=conn)
+
+    def list_scenarios(
+        self,
+        status: ScenarioStatus | str | None = None,
+        parent_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[Scenario]:
+        """List scenarios with optional status filter."""
+        limit = _extract_int(limit, 100)
+        with self._connection() as conn:
+            return self.scenario_engine.list_scenarios(
+                status=status, parent_id=parent_id, limit=limit, conn=conn
+            )
+
+    def archive_scenario(self, scenario_id: UUID) -> bool:
+        """Archive a scenario."""
+        with self._connection() as conn:
+            self.scenario_engine.archive_scenario(scenario_id, conn=conn)
+            return True
+
+    def add_scenario_modification(
+        self,
+        scenario_id_or_mod: UUID | ScenarioModification,
+        target_entity_id: UUID | None = None,
+        target_field: str | None = None,
+        operation: ScenarioOperationType | None = None,
+        value: Any = None,
+        unit: str | None = None,
+        rationale: str | None = None,
+        evidence_references: list[UUID] | None = None,
+    ) -> UUID:
+        """Add a hypothetical modification to a scenario and return its ID."""
+        with self._connection() as conn:
+            mod = self.scenario_engine.add_modification(
+                scenario_id_or_mod=scenario_id_or_mod,
+                target_entity_id=target_entity_id,
+                target_field=target_field,
+                operation=operation,
+                value=value,
+                unit=unit,
+                rationale=rationale,
+                evidence_references=evidence_references,
+                conn=conn,
+            )
+            return mod.id
+
+    def list_scenario_modifications(
+        self, scenario_id: UUID, is_active: bool = True, status: str | None = None
+    ) -> list[ScenarioModification]:
+        """List active modifications for a scenario."""
+        status_filter = status or ("active" if is_active else "superseded")
+        with self._connection() as conn:
+            return self.scenario_engine.list_modifications(scenario_id, status=status_filter, conn=conn)
+
+    def remove_scenario_modification(
+        self, modification_id: UUID, scenario_id: UUID | None = None
+    ) -> bool:
+        """Remove a modification from a scenario."""
+        with self._connection() as conn:
+            return self.scenario_engine.remove_modification(
+                arg1=modification_id, arg2=scenario_id, conn=conn
+            )
+
+    def branch_scenario(
+        self,
+        parent_scenario_id: UUID | None = None,
+        new_name: str = "",
+        new_description: str | None = None,
+        parent_id: UUID | None = None,
+    ) -> Scenario:
+        """Branch from an existing scenario."""
+        pid = parent_id or parent_scenario_id
+        if not pid:
+            raise ValueError("parent_scenario_id required to branch scenario")
+        with self._connection() as conn:
+            return self.scenario_engine.branch_scenario(
+                parent_scenario_id=pid,
+                new_name=new_name,
+                new_description=new_description,
+                conn=conn,
+            )
+
+    def validate_scenario(self, scenario_id: UUID) -> ConstraintValidationResult:
+        """Validate scenario modifications using the Constraint Engine."""
+        with self._connection() as conn:
+            return self.scenario_engine.validate_scenario(scenario_id, conn=conn)
+
+    def evaluate_scenario(
+        self,
+        scenario_id: UUID,
+        evaluator: str = "deterministic_scenario_engine_v1",
+    ) -> ScenarioEvaluation:
+        """Evaluate a validated scenario against authoritative baseline."""
+        with self._connection() as conn:
+            return self.scenario_engine.evaluate_scenario(
+                scenario_id=scenario_id, evaluator=evaluator, conn=conn
+            )
+
+    def get_latest_scenario_evaluation(self, scenario_id: UUID) -> ScenarioEvaluation | None:
+        """Retrieve latest evaluation record for a scenario."""
+        with self._connection() as conn:
+            return self.scenario_engine.get_latest_evaluation(scenario_id, conn=conn)
+
+    def compare_scenarios(
+        self, scenario_a_id: UUID, scenario_b_id: UUID
+    ) -> ScenarioComparison:
+        """Compare two evaluated scenarios."""
+        with self._connection() as conn:
+            return self.scenario_engine.compare_scenarios(scenario_a_id, scenario_b_id, conn=conn)

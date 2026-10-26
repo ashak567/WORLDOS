@@ -41,7 +41,13 @@ from app.domain import (
     Provenance,
     RankedAlternative,
     Relationship,
+    Scenario,
+    ScenarioComparison,
+    ScenarioEvaluation,
+    ScenarioModification,
+    ScenarioOperationType,
     ScenarioProposal,
+    ScenarioStatus,
     SensitivityVariation,
     SnapshotManifest,
     Source,
@@ -57,30 +63,45 @@ from app.ingestion.usgs import parse_earthquake_feature
 from app.ingestion.world_bank import parse_population
 from app.main import (
     AcknowledgeAlertRequest,
+    AddScenarioModificationRequest,
+    BranchScenarioRequest,
     CreateAlertRuleRequest,
+    CreateScenarioRequest,
     DecisionSensitivityRequest,
+    EvaluateScenarioRequest,
     ResolveAlertRequest,
     UpdateAlertRuleRequest,
     ValidationRequest,
     acknowledge_alert as api_acknowledge_alert,
+    add_scenario_modification_endpoint,
+    archive_scenario_endpoint,
+    branch_scenario_endpoint,
+    compare_scenarios_endpoint,
     compare_spatial_slices_endpoint,
     coverage_summary_endpoint,
     create_alert_rule as api_create_alert_rule,
+    create_scenario_endpoint,
     delete_alert_rule as api_delete_alert_rule,
     evaluate_event_alerts as api_evaluate_event_alerts,
+    evaluate_scenario_endpoint,
     export_snapshot_endpoint,
     evaluate_decision as api_evaluate_decision,
     get_alert as api_get_alert,
     get_alert_rule as api_get_alert_rule,
     get_decision as api_get_decision,
+    get_scenario_endpoint,
+    get_scenario_evaluation_endpoint,
     get_snapshot_endpoint,
     list_alert_evaluations as api_list_alert_evaluations,
     list_alert_rules as api_list_alert_rules,
     list_alerts as api_list_alerts,
     list_constraint_rules,
     list_decisions as api_list_decisions,
+    list_scenario_modifications_endpoint,
+    list_scenarios_endpoint,
     list_snapshots_endpoint,
     natural_earth_bundle,
+    remove_scenario_modification_endpoint,
     resolve_alert as api_resolve_alert,
     run_benchmarks_endpoint,
     run_decision_sensitivity as api_run_decision_sensitivity,
@@ -89,10 +110,12 @@ from app.main import (
     update_alert_rule as api_update_alert_rule,
     usgs_earthquake_bundle,
     validate_constraints_endpoint,
+    validate_scenario_endpoint,
     validate_snapshot_endpoint,
     world_bank_bundle,
 )
 from app.ingestion.usgs import EarthquakeRecord
+from app.scenarios import ScenarioLifecycleError
 from app.snapshots import SnapshotCatalog, SnapshotManager
 from app.storage import WorldRepository
 
@@ -114,6 +137,9 @@ class ContainerIntegrationTests(unittest.TestCase):
 
     def setUp(self) -> None:
         with psycopg.connect(self.db_url) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM scenario_evaluations")
+            cur.execute("DELETE FROM scenario_modifications")
+            cur.execute("DELETE FROM scenarios")
             cur.execute("DELETE FROM decisions")
             cur.execute("DELETE FROM alerts")
             cur.execute("DELETE FROM alert_evaluations")
@@ -1901,3 +1927,337 @@ class ContainerIntegrationTests(unittest.TestCase):
             self.assertIsNotNone(v.get("criterion_id"))
             self.assertIsNotNone(v.get("top_alternative_id"))
             self.assertGreater(len(v.get("new_rankings", [])), 0)
+
+    def test_scenario_crud_lifecycle_and_versioning(self) -> None:
+        """Verify scenario creation, versioning, draft modifications, validation, evaluation, and archive lifecycle."""
+        # 1. Ingest baseline country
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        # 2. Create scenario
+        scen = Scenario(
+            name="Climate Transition Model",
+            description="Testing transition impacts on national population",
+        )
+        scen_id = self.repo.create_scenario(scen)
+        stored = self.repo.get_scenario(scen_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored.status, ScenarioStatus.DRAFT)
+        self.assertEqual(stored.version, 1)
+
+        # 3. Add modification (material change -> increments version to 2, status remains DRAFT)
+        mod = ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SET,
+            value=1500000000.0,
+            rationale="Simulated projection for 2030",
+        )
+        mod_id = self.repo.add_scenario_modification(mod)
+        mods = self.repo.list_scenario_modifications(scen_id)
+        self.assertEqual(len(mods), 1)
+        self.assertEqual(mods[0].id, mod_id)
+
+        scen_after_mod = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_after_mod.version, 2)
+        self.assertEqual(scen_after_mod.status, ScenarioStatus.DRAFT)
+
+        # 4. Validate scenario -> transitions to VALIDATED
+        val_res = self.repo.validate_scenario(scen_id)
+        self.assertNotEqual(val_res.status, ConstraintStatus.INVALID)
+        scen_validated = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_validated.status, ScenarioStatus.VALIDATED)
+
+        # 5. Evaluate scenario -> transitions to EVALUATED
+        eval_res = self.repo.evaluate_scenario(scen_id)
+        self.assertIsNotNone(eval_res)
+        self.assertEqual(eval_res.scenario_version, 2)
+        self.assertTrue(eval_res.is_feasible)
+
+        scen_evaluated = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_evaluated.status, ScenarioStatus.EVALUATED)
+
+        # 6. Add second modification -> invalidates evaluation, increments version to 3, resets to DRAFT
+        mod2 = ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SCALE,
+            value=1.05,
+        )
+        self.repo.add_scenario_modification(mod2)
+        scen_draft_again = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_draft_again.version, 3)
+        self.assertEqual(scen_draft_again.status, ScenarioStatus.DRAFT)
+
+        # 7. Archive scenario -> transitions to ARCHIVED
+        archived = self.repo.archive_scenario(scen_id)
+        self.assertTrue(archived)
+        scen_archived = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_archived.status, ScenarioStatus.ARCHIVED)
+
+        # 8. Attempting to add modification to ARCHIVED scenario raises ScenarioLifecycleError
+        mod3 = ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.DELTA,
+            value=100.0,
+        )
+        with self.assertRaises(ScenarioLifecycleError):
+            self.repo.add_scenario_modification(mod3)
+
+    def test_scenario_operational_world_state_non_mutation(self) -> None:
+        """Non-negotiable Architectural Invariant: Scenario creation, modification, validation, evaluation, and branching NEVER mutate authoritative operational data."""
+        # 1. Seed authoritative data
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+            # Record baseline counts of all authoritative tables
+            cur.execute("SELECT count(*) AS cnt FROM entities")
+            baseline_entities = cur.fetchone()["cnt"]
+            cur.execute("SELECT count(*) AS cnt FROM observations")
+            baseline_observations = cur.fetchone()["cnt"]
+            cur.execute("SELECT count(*) AS cnt FROM geometries")
+            baseline_geometries = cur.fetchone()["cnt"]
+            cur.execute("SELECT count(*) AS cnt FROM evidence")
+            baseline_evidence = cur.fetchone()["cnt"]
+            cur.execute("SELECT count(*) AS cnt FROM provenance")
+            baseline_provenance = cur.fetchone()["cnt"]
+            cur.execute("SELECT count(*) AS cnt FROM entity_identifiers")
+            baseline_identifiers = cur.fetchone()["cnt"]
+
+            # Record baseline India population observation value
+            cur.execute("SELECT value FROM observations WHERE subject_entity_id = %s", (entity_id,))
+            baseline_pop_val = cur.fetchone()["value"]
+            self.assertEqual(float(baseline_pop_val), 1428627663.0)
+
+        # 2. Execute full battery of Scenario operations
+        scen_a = Scenario(name="Hypothetical Disruption Scenario")
+        scen_a_id = self.repo.create_scenario(scen_a)
+
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_a_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.DELTA,
+            value=-100000000.0,
+        ))
+
+        self.repo.validate_scenario(scen_a_id)
+        self.repo.evaluate_scenario(scen_a_id)
+
+        # Branch to Scenario B
+        scen_b = self.repo.branch_scenario(scen_a_id, new_name="Hypothetical Disruption Branch B")
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_b.id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SCALE,
+            value=0.90,
+        ))
+        self.repo.validate_scenario(scen_b.id)
+        self.repo.evaluate_scenario(scen_b.id)
+
+        # Compare both
+        self.repo.compare_scenarios(scen_a_id, scen_b.id)
+
+        # Archive both
+        self.repo.archive_scenario(scen_a_id)
+        self.repo.archive_scenario(scen_b.id)
+
+        # 3. Verify ZERO mutation across authoritative tables
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) AS cnt FROM entities")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_entities, "Entities count mutated!")
+            cur.execute("SELECT count(*) AS cnt FROM observations")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_observations, "Observations count mutated!")
+            cur.execute("SELECT count(*) AS cnt FROM geometries")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_geometries, "Geometries count mutated!")
+            cur.execute("SELECT count(*) AS cnt FROM evidence")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_evidence, "Evidence count mutated!")
+            cur.execute("SELECT count(*) AS cnt FROM provenance")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_provenance, "Provenance count mutated!")
+            cur.execute("SELECT count(*) AS cnt FROM entity_identifiers")
+            self.assertEqual(cur.fetchone()["cnt"], baseline_identifiers, "Entity identifiers count mutated!")
+
+            # Check target entity observation value remains untouched
+            cur.execute("SELECT value FROM observations WHERE subject_entity_id = %s", (entity_id,))
+            after_pop_val = cur.fetchone()["value"]
+            self.assertEqual(float(after_pop_val), 1428627663.0, "Authoritative observation value was mutated!")
+
+    def test_scenario_deterministic_overlay_and_epistemic_simulated(self) -> None:
+        """Verify isolated overlay computes correct deltas and tags all derived values as SIMULATED."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        scen_id = self.repo.create_scenario(Scenario(name="Growth Overlay Model"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.DELTA,
+            value=100000000.0,
+        ))
+
+        eval_res = self.repo.evaluate_scenario(scen_id)
+        self.assertIsNotNone(eval_res)
+
+        # Verify delta summary
+        delta_key = f"{entity_id}:observation.population.total"
+        self.assertIn(delta_key, eval_res.delta_summary)
+        delta_item = eval_res.delta_summary[delta_key]
+
+        self.assertEqual(delta_item["baseline_value"], 1428627663.0)
+        self.assertEqual(delta_item["simulated_value"], 1528627663.0)
+        self.assertEqual(delta_item["absolute_delta"], 100000000.0)
+        self.assertEqual(delta_item["truth_class"], "SIMULATED")
+
+        # Verify simulated state
+        sim_obs = eval_res.simulated_state[str(entity_id)]["observations"]["population.total"]
+        self.assertEqual(sim_obs["value"], 1528627663.0)
+        self.assertEqual(sim_obs["truth_class"], "SIMULATED")
+
+        # Verify net population delta in derived metrics
+        self.assertEqual(eval_res.derived_metrics["net_population_delta"], 100000000.0)
+
+    def test_scenario_branching_and_comparison(self) -> None:
+        """Verify scenario branching copies modifications and comparison calculates cross-branch deltas."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        # Parent Scenario
+        parent_id = self.repo.create_scenario(Scenario(name="Base Projection"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=parent_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SCALE,
+            value=1.10,
+        ))
+        eval_parent = self.repo.evaluate_scenario(parent_id)
+        self.assertTrue(eval_parent.is_feasible)
+
+        # Branch into Child Scenario
+        child = self.repo.branch_scenario(parent_id, new_name="High Growth Branch")
+        self.assertEqual(child.parent_scenario_id, parent_id)
+        self.assertEqual(child.parent_scenario_version, 2)
+        self.assertEqual(child.version, 1)
+
+        # Verify modification was cloned
+        child_mods = self.repo.list_scenario_modifications(child.id)
+        self.assertEqual(len(child_mods), 1)
+        self.assertEqual(child_mods[0].operation, ScenarioOperationType.SCALE)
+
+        # Add additional modification to Child
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=child.id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.DELTA,
+            value=50000000.0,
+        ))
+        eval_child = self.repo.evaluate_scenario(child.id)
+        self.assertTrue(eval_child.is_feasible)
+
+        # Compare Parent vs Child
+        comparison = self.repo.compare_scenarios(parent_id, child.id)
+        self.assertIsNotNone(comparison)
+        self.assertEqual(comparison.scenario_a_id, parent_id)
+        self.assertEqual(comparison.scenario_b_id, child.id)
+        self.assertTrue(comparison.feasibility_comparison["scenario_a_feasible"])
+        self.assertTrue(comparison.feasibility_comparison["scenario_b_feasible"])
+        self.assertGreater(len(comparison.entity_comparisons), 0)
+
+        # Child should have 50,000,000 more than Parent
+        delta_b_minus_a = comparison.metric_deltas.get(f"{entity_id}:population.total")
+        self.assertEqual(delta_b_minus_a, 50000000.0)
+
+    def test_scenario_api_endpoints(self) -> None:
+        """Verify REST API endpoints for scenario operations."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        # 1. POST /scenarios
+        create_req = CreateScenarioRequest(name="API Scenario Test", description="Testing via API")
+        scen = create_scenario_endpoint(create_req)
+        self.assertEqual(scen.name, "API Scenario Test")
+        self.assertEqual(scen.status, ScenarioStatus.DRAFT)
+
+        # 2. GET /scenarios
+        scens = list_scenarios_endpoint()
+        self.assertTrue(any(s.id == scen.id for s in scens))
+
+        # 3. GET /scenarios/{id}
+        retrieved = get_scenario_endpoint(scen.id)
+        self.assertEqual(retrieved.id, scen.id)
+
+        # 4. POST /scenarios/{id}/modifications
+        mod_req = AddScenarioModificationRequest(
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SCALE,
+            value=1.02,
+        )
+        mod = add_scenario_modification_endpoint(scen.id, mod_req)
+        self.assertEqual(mod.operation, ScenarioOperationType.SCALE)
+
+        # 5. GET /scenarios/{id}/modifications
+        mods = list_scenario_modifications_endpoint(scen.id)
+        self.assertEqual(len(mods), 1)
+
+        # 6. POST /scenarios/{id}/validate
+        val_res = validate_scenario_endpoint(scen.id)
+        self.assertNotEqual(val_res.status, ConstraintStatus.INVALID)
+
+        # 7. POST /scenarios/{id}/evaluate
+        eval_res = evaluate_scenario_endpoint(scen.id, EvaluateScenarioRequest())
+        self.assertTrue(eval_res.is_feasible)
+
+        # 8. GET /scenarios/{id}/evaluation
+        retrieved_eval = get_scenario_evaluation_endpoint(scen.id)
+        self.assertEqual(retrieved_eval.id, eval_res.id)
+
+        # 9. POST /scenarios/{id}/branch
+        branch_req = BranchScenarioRequest(name="API Branched Scenario")
+        branched = branch_scenario_endpoint(scen.id, branch_req)
+        self.assertEqual(branched.parent_scenario_id, scen.id)
+
+        # 10. GET /scenarios/{a}/compare/{b}
+        comp = compare_scenarios_endpoint(scen.id, branched.id)
+        self.assertIsNotNone(comp.summary)
+
+        # 11. POST /scenarios/{id}/archive
+        arch_res = archive_scenario_endpoint(scen.id)
+        self.assertTrue(arch_res["archived"])

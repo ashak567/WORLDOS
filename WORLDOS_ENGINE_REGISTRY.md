@@ -213,17 +213,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Implement z-score and IQR-based anomaly detection over DuckDB series.
 
 ### 16. Scenario Engine
-- **Purpose**: Sandboxed scenario definitions allowing hypothetical state changes without contaminating operational truth.
-- **Status**: `INTERFACE_ONLY`
-- **Inputs**: Baseline world state, scenario delta parameters.
-- **Outputs**: Sandboxed scenario state tagged `SIMULATED`.
-- **Dependencies**: `interfaces.py`.
-- **Persistence**: In-memory or isolated scenario database branch.
-- **Interface / API**: `ScenarioEngine.run(scenario: dict) -> dict`.
-- **Evidence Requirements**: All outputs must carry epistemic tier `SIMULATED`.
-- **Test Contract**: Verify operational tables are unmodified after scenario execution.
-- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
-- **Next Milestone**: Implement delta overlay pattern over DuckDB analytical snapshots.
+- **Purpose**: Isolated counterfactual state branches, deterministic parameter modifications, overlay evaluation, versioned branching, and cross-branch comparison without operational world-state mutation.
+- **Status**: `VERIFIED`
+- **Inputs**: Baseline world state reference, structured `ScenarioModification` list (SET, DELTA, SCALE, REMOVE).
+- **Outputs**: `ScenarioEvaluation` records, deterministic isolated overlay, delta summaries, `ScenarioComparison`.
+- **Dependencies**: PostGIS (authoritative truth queries), Constraint Engine (invariants validation), `backend/app/domain.py`, `backend/app/scenarios.py`.
+- **Persistence**: Relational tables (`scenarios`, `scenario_modifications`, `scenario_evaluations`) via migration `010_scenarios.sql`.
+- **Interface / API**: `ScenarioEngine` class in `backend/app/scenarios.py`; `WorldRepository` methods; REST endpoints `/scenarios/*` in `backend/app/main.py`.
+- **Evidence Requirements**: All hypothetical modifications and evaluated state carries `TruthClass.SIMULATED`.
+- **Test Contract**: Non-mutation of operational tables, lifecycle transition guards, deterministic overlay computation, versioned branching, and cross-scenario comparison verified in `tests/test_scenarios.py` and `tests/test_container_integration.py`.
+- **Current Implementation**: Complete deterministic engine with isolated overlays, versioned branching, pre-evaluation constraint validation, and full REST API.
+- **Next Milestone**: Multi-step forward state evolution integrated with Simulation Engine (Engine 17).
 
 ### 17. Simulation Engine
 - **Purpose**: Multi-step forward state evolution according to physical and heuristic models.

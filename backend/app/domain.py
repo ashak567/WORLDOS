@@ -714,3 +714,97 @@ class DecisionResult(BaseModel):
     trade_off_analysis: dict[str, Any] = Field(default_factory=dict)
     ranking_limitations: list[str] = Field(default_factory=list)
     evidence_citations: list[dict[str, Any]] = Field(default_factory=list)
+
+
+# ==============================================================================
+# Engine 16: Scenario Engine Models
+# ==============================================================================
+
+
+class ScenarioStatus(str, Enum):
+    DRAFT = "DRAFT"
+    VALIDATED = "VALIDATED"
+    EVALUATED = "EVALUATED"
+    ARCHIVED = "ARCHIVED"
+
+
+class ScenarioOperationType(str, Enum):
+    SET = "SET"
+    DELTA = "DELTA"
+    SCALE = "SCALE"
+    REMOVE = "REMOVE"
+
+
+class ScenarioModification(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    scenario_id: UUID
+    target_entity_id: UUID
+    target_field: str
+    operation: ScenarioOperationType = ScenarioOperationType.SET
+    value: Any
+    unit: str | None = None
+    effective_interval: TimeInterval | None = None
+    rationale: str | None = None
+    evidence_references: list[UUID] = Field(default_factory=list)
+    status: Literal["active", "superseded", "invalid"] = "active"
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_modification(self) -> "ScenarioModification":
+        if not self.target_field or not self.target_field.strip():
+            raise ValueError("target_field cannot be empty")
+        if self.operation in (ScenarioOperationType.DELTA, ScenarioOperationType.SCALE):
+            if not isinstance(self.value, (int, float)) or not math.isfinite(self.value):
+                raise ValueError(f"Operation {self.operation.value} requires a finite numeric value")
+            if self.operation == ScenarioOperationType.SCALE and self.value < 0:
+                raise ValueError("Operation SCALE requires non-negative factor")
+        return self
+
+
+class Scenario(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    description: str | None = None
+    status: ScenarioStatus = ScenarioStatus.DRAFT
+    version: int = Field(default=1, ge=1)
+    parent_scenario_id: UUID | None = None
+    parent_scenario_version: int | None = None
+    baseline_context: dict[str, Any] = Field(default_factory=dict)
+    truth_class: TruthClass = TruthClass.SIMULATED
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+    @model_validator(mode="after")
+    def validate_scenario(self) -> "Scenario":
+        if not self.name or not self.name.strip():
+            raise ValueError("Scenario name cannot be empty")
+        return self
+
+
+class ScenarioEvaluation(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    scenario_id: UUID
+    scenario_version: int
+    baseline_snapshot: dict[str, Any] = Field(default_factory=dict)
+    simulated_state: dict[str, Any] = Field(default_factory=dict)
+    delta_summary: dict[str, Any] = Field(default_factory=dict)
+    constraint_findings: list[dict[str, Any]] = Field(default_factory=list)
+    is_feasible: bool = True
+    derived_metrics: dict[str, Any] = Field(default_factory=dict)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    evaluation_version: str = "v1.0.0"
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class ScenarioComparison(BaseModel):
+    scenario_a_id: UUID
+    scenario_b_id: UUID
+    scenario_a_name: str
+    scenario_b_name: str
+    compared_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    entity_comparisons: list[dict[str, Any]] = Field(default_factory=list)
+    feasibility_comparison: dict[str, Any] = Field(default_factory=dict)
+    metric_deltas: dict[str, Any] = Field(default_factory=dict)
+    summary: str
