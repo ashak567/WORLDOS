@@ -23,6 +23,11 @@ from .domain import (
     ConstraintStatus,
     ConstraintValidationResult,
     CoverageSummary,
+    CriterionDirection,
+    DecisionAlternative,
+    DecisionCriterion,
+    DecisionRequest,
+    DecisionResult,
     Entity,
     EntityIdentifier,
     Event,
@@ -30,8 +35,10 @@ from .domain import (
     Geometry,
     Observation,
     Provenance,
+    RankedAlternative,
     Relationship,
     ScenarioProposal,
+    SensitivityVariation,
     SnapshotManifest,
     Source,
     SpatialRollupItem,
@@ -1199,3 +1206,45 @@ def resolve_alert(alert_id: UUID, req: ResolveAlertRequest = ResolveAlertRequest
     if not resolved:
         raise HTTPException(status_code=404, detail=f"Alert {alert_id} not found or already resolved")
     return {"resolved": True, "alert_id": alert_id}
+
+
+# =============================================================================
+# Decision Support Engine Endpoints (Engine 13)
+# =============================================================================
+
+
+class DecisionSensitivityRequest(BaseModel):
+    delta_pct: float = Field(default=0.20, gt=0.0, le=1.0)
+
+
+@app.post("/decisions/evaluate", response_model=DecisionResult)
+def evaluate_decision(req: DecisionRequest):
+    try:
+        repo = WorldRepository()
+        return repo.evaluate_decision(req)
+    except ValueError as val_err:
+        raise HTTPException(status_code=400, detail=str(val_err)) from val_err
+
+
+@app.get("/decisions")
+def list_decisions(limit: int = Query(default=100, ge=1, le=1000)):
+    limit_v = _clean_param(limit, 100)
+    return WorldRepository().list_decisions(limit=limit_v)
+
+
+@app.get("/decisions/{decision_id}")
+def get_decision(decision_id: UUID):
+    record = WorldRepository().get_decision(decision_id)
+    if not record:
+        raise HTTPException(status_code=404, detail=f"Decision {decision_id} not found")
+    return record
+
+
+@app.post("/decisions/{decision_id}/sensitivity", response_model=list[SensitivityVariation])
+def run_decision_sensitivity(decision_id: UUID, req: DecisionSensitivityRequest = DecisionSensitivityRequest()):
+    try:
+        delta = _clean_param(req.delta_pct, 0.20)
+        return WorldRepository().run_decision_sensitivity(decision_id, delta_pct=delta)
+    except ValueError as err:
+        status_code = 404 if "not found" in str(err).lower() else 400
+        raise HTTPException(status_code=status_code, detail=str(err)) from err

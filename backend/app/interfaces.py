@@ -21,7 +21,11 @@ class AnomalyEngine(Protocol):
 
 
 class EvidenceBoundReasoner(Protocol):
-    """An AI layer may explain query results but must return cited evidence IDs."""
-
     def answer(self, question: str, deterministic_result: dict, evidence_ids: list[str]) -> dict: ...
+
+
+class DecisionSupportEngine(Protocol):
+    """Engine 13: Deterministic Decision Support Engine."""
+
+    def evaluate(self, request: dict) -> dict: ...
 

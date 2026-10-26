@@ -566,3 +566,151 @@ class Alert(BaseModel):
     acknowledged_by: str | None = None
     resolved_at: datetime | None = None
     resolution_notes: str | None = None
+
+
+# ==============================================================================
+# Engine 13: Deterministic Decision Support Models
+# ==============================================================================
+
+
+class CriterionDirection(str, Enum):
+    MAXIMIZE = "maximize"
+    MINIMIZE = "minimize"
+    TARGET_RANGE = "target_range"
+
+
+class MissingDataPolicy(str, Enum):
+    EXCLUDE = "exclude"
+    NEUTRAL_SCORE = "neutral_score"
+    PENALIZE_MIN = "penalize_min"
+
+
+class DecisionCriterion(BaseModel):
+    id: str
+    name: str
+    metric_field: str
+    direction: CriterionDirection = CriterionDirection.MAXIMIZE
+    weight: float = Field(default=1.0, ge=0.0)
+    target_min: float | None = None
+    target_max: float | None = None
+    hard_constraint_min: float | None = None
+    hard_constraint_max: float | None = None
+    required: bool = False
+    unit: str | None = None
+
+    @model_validator(mode="after")
+    def validate_criterion(self) -> "DecisionCriterion":
+        if not self.id or not self.id.strip():
+            raise ValueError("criterion id cannot be empty")
+        if not self.name or not self.name.strip():
+            raise ValueError("criterion name cannot be empty")
+        if not self.metric_field or not self.metric_field.strip():
+            raise ValueError("criterion metric_field cannot be empty")
+        if math.isnan(self.weight) or math.isinf(self.weight) or self.weight < 0:
+            raise ValueError("criterion weight must be a finite non-negative number")
+        if self.direction == CriterionDirection.TARGET_RANGE:
+            if self.target_min is None or self.target_max is None:
+                raise ValueError("direction 'target_range' requires both target_min and target_max")
+            if self.target_min > self.target_max:
+                raise ValueError(f"target_min ({self.target_min}) must not exceed target_max ({self.target_max})")
+        if self.hard_constraint_min is not None and self.hard_constraint_max is not None:
+            if self.hard_constraint_min > self.hard_constraint_max:
+                raise ValueError(
+                    f"hard_constraint_min ({self.hard_constraint_min}) must not exceed hard_constraint_max ({self.hard_constraint_max})"
+                )
+        return self
+
+
+class DecisionAlternative(BaseModel):
+    id: str
+    name: str
+    entity_id: UUID | None = None
+    attributes: dict[str, Any] = Field(default_factory=dict)
+    scenario_proposal: ScenarioProposal | None = None
+
+
+class CriterionScoreBreakdown(BaseModel):
+    criterion_id: str
+    criterion_name: str
+    raw_value: float | None = None
+    unit: str | None = None
+    is_missing: bool = False
+    normalized_score: float
+    weight: float
+    normalized_weight: float
+    weighted_contribution: float
+    evidence_id: UUID | None = None
+    truth_class: TruthClass | None = None
+    notes: str | None = None
+
+
+class RankedAlternative(BaseModel):
+    alternative_id: str
+    name: str
+    entity_id: UUID | None = None
+    rank: int
+    overall_score: float
+    criteria_breakdown: dict[str, CriterionScoreBreakdown] = Field(default_factory=dict)
+    missing_criteria: list[str] = Field(default_factory=list)
+    uncertainty_notes: list[str] = Field(default_factory=list)
+    evidence_ids: list[UUID] = Field(default_factory=list)
+
+
+class InfeasibleAlternative(BaseModel):
+    alternative_id: str
+    name: str
+    entity_id: UUID | None = None
+    blocking_reasons: list[str] = Field(default_factory=list)
+    constraint_findings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class SensitivityVariation(BaseModel):
+    criterion_id: str
+    criterion_name: str
+    original_weight: float
+    varied_weight: float
+    top_alternative_id: str
+    top_alternative_name: str
+    top_alternative_score: float
+    rank_changed: bool
+    new_rankings: list[dict[str, Any]] = Field(default_factory=list)
+
+
+class DecisionRequest(BaseModel):
+    decision_id: UUID = Field(default_factory=uuid4)
+    objective: str
+    scope: dict[str, Any] = Field(default_factory=dict)
+    criteria: list[DecisionCriterion] = Field(default_factory=list)
+    alternatives: list[DecisionAlternative] = Field(default_factory=list)
+    missing_data_policy: MissingDataPolicy = MissingDataPolicy.NEUTRAL_SCORE
+    enforce_constraints: bool = True
+    persist: bool = True
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "DecisionRequest":
+        if not self.objective or not self.objective.strip():
+            raise ValueError("objective cannot be empty")
+        if not self.alternatives:
+            raise ValueError("at least one alternative must be provided")
+        if not self.criteria:
+            raise ValueError("at least one criterion must be provided")
+        return self
+
+
+class DecisionResult(BaseModel):
+    decision_id: UUID
+    objective: str
+    scope: dict[str, Any] = Field(default_factory=dict)
+    evaluated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    status: str = "completed"
+    alternatives_count: int = 0
+    feasible_count: int = 0
+    infeasible_count: int = 0
+    missing_data_policy: MissingDataPolicy
+    feasible_alternatives: list[RankedAlternative] = Field(default_factory=list)
+    infeasible_alternatives: list[InfeasibleAlternative] = Field(default_factory=list)
+    criteria: list[DecisionCriterion] = Field(default_factory=list)
+    normalized_weights: dict[str, float] = Field(default_factory=dict)
+    trade_off_analysis: dict[str, Any] = Field(default_factory=dict)
+    ranking_limitations: list[str] = Field(default_factory=list)
+    evidence_citations: list[dict[str, Any]] = Field(default_factory=list)

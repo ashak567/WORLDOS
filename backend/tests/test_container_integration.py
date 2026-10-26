@@ -27,14 +27,22 @@ from app.domain import (
     ConstraintSeverity,
     ConstraintStatus,
     ConstraintValidationResult,
+    CriterionDirection,
+    DecisionAlternative,
+    DecisionCriterion,
+    DecisionRequest,
+    DecisionResult,
     Entity,
     Event,
     Evidence,
     Geometry,
+    MissingDataPolicy,
     Observation,
     Provenance,
+    RankedAlternative,
     Relationship,
     ScenarioProposal,
+    SensitivityVariation,
     SnapshotManifest,
     Source,
     TimeInterval,
@@ -50,6 +58,7 @@ from app.ingestion.world_bank import parse_population
 from app.main import (
     AcknowledgeAlertRequest,
     CreateAlertRuleRequest,
+    DecisionSensitivityRequest,
     ResolveAlertRequest,
     UpdateAlertRuleRequest,
     ValidationRequest,
@@ -60,17 +69,21 @@ from app.main import (
     delete_alert_rule as api_delete_alert_rule,
     evaluate_event_alerts as api_evaluate_event_alerts,
     export_snapshot_endpoint,
+    evaluate_decision as api_evaluate_decision,
     get_alert as api_get_alert,
     get_alert_rule as api_get_alert_rule,
+    get_decision as api_get_decision,
     get_snapshot_endpoint,
     list_alert_evaluations as api_list_alert_evaluations,
     list_alert_rules as api_list_alert_rules,
     list_alerts as api_list_alerts,
     list_constraint_rules,
+    list_decisions as api_list_decisions,
     list_snapshots_endpoint,
     natural_earth_bundle,
     resolve_alert as api_resolve_alert,
     run_benchmarks_endpoint,
+    run_decision_sensitivity as api_run_decision_sensitivity,
     spatial_rollups_endpoint,
     temporal_rollups_endpoint,
     update_alert_rule as api_update_alert_rule,
@@ -101,6 +114,7 @@ class ContainerIntegrationTests(unittest.TestCase):
 
     def setUp(self) -> None:
         with psycopg.connect(self.db_url) as conn, conn.cursor() as cur:
+            cur.execute("DELETE FROM decisions")
             cur.execute("DELETE FROM alerts")
             cur.execute("DELETE FROM alert_evaluations")
             cur.execute("DELETE FROM alert_rules")
@@ -1668,3 +1682,222 @@ class ContainerIntegrationTests(unittest.TestCase):
             row = cur.fetchone()
             self.assertIsNotNone(row)
             self.assertEqual(row["kind"], "earthquake")
+
+    # -------------------------------------------------------------------------
+    # Engine 13: Deterministic Decision Support Integration Tests
+    # -------------------------------------------------------------------------
+
+    def test_decision_evaluation_over_authoritative_entities(self) -> None:
+        """Verify MCDA over real ingested country entities, observations, and evidence citations."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+
+        # 1. Ingest India (Population ~1.42B)
+        wb_ind = [{"page": 1}, [{
+            "countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1428627663,
+        }]]
+        rec_ind = parse_population(wb_ind, "https://api.worldbank.org/test/decision_ind")[0]
+        bundle_ind = world_bank_bundle(rec_ind, None, now)
+        self.repo.ingest(bundle_ind)
+
+        # 2. Ingest United States (Population ~335M)
+        wb_usa = [{"page": 1}, [{
+            "countryiso3code": "USA", "country": {"value": "United States"}, "date": "2023", "value": 334914895,
+        }]]
+        rec_usa = parse_population(wb_usa, "https://api.worldbank.org/test/decision_usa")[0]
+        bundle_usa = world_bank_bundle(rec_usa, None, now)
+        self.repo.ingest(bundle_usa)
+
+        # Resolve authoritative entity IDs after reconciliation
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme='iso_3166_1_alpha_3' AND value='IND'")
+            row_ind = cur.fetchone()
+            ind_entity_id = row_ind["entity_id"] if row_ind else bundle_ind.entity.id
+
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme='iso_3166_1_alpha_3' AND value='USA'")
+            row_usa = cur.fetchone()
+            usa_entity_id = row_usa["entity_id"] if row_usa else bundle_usa.entity.id
+
+        # 3. Construct Decision Request comparing India and USA
+        # Population (MAXIMIZE, weight 2.0, hard_constraint_min 50M)
+        # Setup cost (MINIMIZE, weight 1.0)
+        req = DecisionRequest(
+            objective="Prioritize national regional hub deployment",
+            scope={"region": "Global", "sector": "Infrastructure"},
+            persist=True,
+            criteria=[
+                DecisionCriterion(
+                    id="crit_pop",
+                    name="Population Reach",
+                    metric_field="population.total",
+                    direction=CriterionDirection.MAXIMIZE,
+                    weight=2.0,
+                    hard_constraint_min=50000000.0,
+                ),
+                DecisionCriterion(
+                    id="crit_cost",
+                    name="Setup Cost",
+                    metric_field="setup_cost",
+                    direction=CriterionDirection.MINIMIZE,
+                    weight=1.0,
+                ),
+            ],
+            alternatives=[
+                DecisionAlternative(
+                    id="alt_ind",
+                    name="India Hub",
+                    entity_id=ind_entity_id,
+                    attributes={"setup_cost": 120.0},
+                ),
+                DecisionAlternative(
+                    id="alt_usa",
+                    name="USA Hub",
+                    entity_id=usa_entity_id,
+                    attributes={"setup_cost": 80.0},
+                ),
+            ],
+        )
+
+        res = self.repo.evaluate_decision(req)
+
+        # Both meet hard constraint (pop > 50M)
+        self.assertEqual(res.feasible_count, 2)
+        self.assertEqual(res.infeasible_count, 0)
+
+        # Verify weights normalized: 2.0 / 3.0 ~ 0.6667, 1.0 / 3.0 ~ 0.3333
+        self.assertAlmostEqual(res.normalized_weights["crit_pop"], 2.0 / 3.0, places=4)
+        self.assertAlmostEqual(res.normalized_weights["crit_cost"], 1.0 / 3.0, places=4)
+
+        # Verify that India's population was resolved from database observations
+        alt_ind_res = next(a for a in res.feasible_alternatives if a.alternative_id == "alt_ind")
+        pop_breakdown = alt_ind_res.criteria_breakdown["crit_pop"]
+        self.assertFalse(pop_breakdown.is_missing)
+        self.assertEqual(pop_breakdown.raw_value, 1428627663.0)
+        self.assertEqual(pop_breakdown.truth_class, TruthClass.OBSERVED)
+        self.assertIsNotNone(pop_breakdown.evidence_id)
+
+        # Verify evidence citations collected
+        self.assertGreater(len(res.evidence_citations), 0)
+        cited_ids = [c["evidence_id"] for c in res.evidence_citations]
+        self.assertIn(str(bundle_ind.evidence.id), cited_ids)
+
+        # Ranking: India has higher overall score (max pop dominates)
+        self.assertEqual(res.feasible_alternatives[0].alternative_id, "alt_ind")
+        self.assertEqual(res.feasible_alternatives[0].rank, 1)
+
+    def test_decision_non_mutation_of_world_state(self) -> None:
+        """Verify that evaluating decisions never mutates authoritative facts."""
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) as c FROM entities")
+            e_count_before = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM observations")
+            o_count_before = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM geometries")
+            g_count_before = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM evidence")
+            ev_count_before = cur.fetchone()["c"]
+
+        # Run decision evaluation
+        req = DecisionRequest(
+            objective="Non mutation verification",
+            persist=False,
+            criteria=[
+                DecisionCriterion(id="c1", name="Score", metric_field="score", direction=CriterionDirection.MAXIMIZE),
+            ],
+            alternatives=[
+                DecisionAlternative(id="opt1", name="Option 1", attributes={"score": 85}),
+                DecisionAlternative(id="opt2", name="Option 2", attributes={"score": 92}),
+            ],
+        )
+        self.repo.evaluate_decision(req)
+
+        # Verify counts are strictly identical
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT count(*) as c FROM entities")
+            e_count_after = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM observations")
+            o_count_after = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM geometries")
+            g_count_after = cur.fetchone()["c"]
+            cur.execute("SELECT count(*) as c FROM evidence")
+            ev_count_after = cur.fetchone()["c"]
+
+        self.assertEqual(e_count_before, e_count_after)
+        self.assertEqual(o_count_before, o_count_after)
+        self.assertEqual(g_count_before, g_count_after)
+        self.assertEqual(ev_count_before, ev_count_after)
+
+    def test_decision_persistence_and_retrieval(self) -> None:
+        """Verify decision persistence into PostgreSQL decisions table and audit retrieval."""
+        decision_id = uuid4()
+        req = DecisionRequest(
+            decision_id=decision_id,
+            objective="Audit trail test",
+            scope={"env": "staging"},
+            persist=True,
+            criteria=[
+                DecisionCriterion(id="c1", name="Metric A", metric_field="a", direction=CriterionDirection.MAXIMIZE, weight=1.0),
+                DecisionCriterion(id="c2", name="Metric B", metric_field="b", direction=CriterionDirection.MINIMIZE, weight=2.0),
+            ],
+            alternatives=[
+                DecisionAlternative(id="cand_1", name="Candidate 1", attributes={"a": 100, "b": 10}),
+                DecisionAlternative(id="cand_2", name="Candidate 2", attributes={"a": 80, "b": 25}),
+            ],
+        )
+
+        eval_res = self.repo.evaluate_decision(req)
+        self.assertEqual(eval_res.decision_id, decision_id)
+
+        # Retrieve from database
+        stored = self.repo.get_decision(decision_id)
+        self.assertIsNotNone(stored)
+        self.assertEqual(stored["id"], decision_id)
+        self.assertEqual(stored["objective"], "Audit trail test")
+        self.assertEqual(stored["alternatives_count"], 2)
+        self.assertEqual(stored["feasible_count"], 2)
+        self.assertEqual(stored["top_alternative_id"], "cand_1")
+        self.assertIsNotNone(stored["result"])
+
+        # List decisions
+        decision_list = self.repo.list_decisions(limit=10)
+        self.assertTrue(any(d["id"] == decision_id for d in decision_list))
+
+    def test_decision_sensitivity_and_api_endpoints(self) -> None:
+        """Verify REST API endpoints: evaluate, get, list, and bounded sensitivity analysis."""
+        decision_id = uuid4()
+        req = DecisionRequest(
+            decision_id=decision_id,
+            objective="API Decision Test",
+            persist=True,
+            criteria=[
+                DecisionCriterion(id="crit_spd", name="Speed", metric_field="speed", direction=CriterionDirection.MAXIMIZE, weight=1.2),
+                DecisionCriterion(id="crit_rel", name="Reliability", metric_field="reliability", direction=CriterionDirection.MAXIMIZE, weight=1.0),
+            ],
+            alternatives=[
+                DecisionAlternative(id="node_a", name="Node A", attributes={"speed": 95, "reliability": 80}),
+                DecisionAlternative(id="node_b", name="Node B", attributes={"speed": 75, "reliability": 98}),
+            ],
+        )
+
+        # 1. POST /decisions/evaluate
+        api_result = api_evaluate_decision(req)
+        self.assertEqual(api_result.decision_id, decision_id)
+        self.assertEqual(api_result.feasible_count, 2)
+
+        # 2. GET /decisions/{id}
+        retrieved = api_get_decision(decision_id)
+        self.assertEqual(retrieved["id"], decision_id)
+
+        # 3. GET /decisions
+        all_decisions = api_list_decisions()
+        self.assertTrue(any(d["id"] == decision_id for d in all_decisions))
+
+        # 4. POST /decisions/{id}/sensitivity
+        sens_req = DecisionSensitivityRequest(delta_pct=0.30)
+        variations = api_run_decision_sensitivity(decision_id, sens_req)
+        self.assertGreater(len(variations), 0)
+
+        # Verify variations structure
+        for v in variations:
+            self.assertIsNotNone(v.get("criterion_id"))
+            self.assertIsNotNone(v.get("top_alternative_id"))
+            self.assertGreater(len(v.get("new_rankings", [])), 0)

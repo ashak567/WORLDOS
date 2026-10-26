@@ -173,17 +173,18 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Implement cross-temporal velocity constraints (maximum rate of change between successive observations) and polygon simplification checks.
 
 ### 13. Decision Support Engine
-- **Purpose**: Multi-criteria trade-off ranking based on deterministic evidence and scenario constraints.
-- **Status**: `SPECIFIED`
-- **Inputs**: Objective functions, weighted criteria, candidate entities/actions.
-- **Outputs**: Ranked decisions with sensitivity analysis.
-- **Dependencies**: Deterministic Analytics, Constraint Engine.
-- **Persistence**: Ephemeral / query response.
-- **Interface / API**: Planned `backend/app/engines/decision.py`.
-- **Evidence Requirements**: Every score component must link to underlying observations.
-- **Test Contract**: Deterministic scoring invariants.
-- **Current Implementation**: Conceptual.
-- **Next Milestone**: Define decision evaluation schema.
+- **Purpose**: Deterministic, evidence-linked Multi-Criteria Decision Analysis (MCDA), comparing candidate alternatives, evaluating hard constraints (feasibility gates), scoring soft preferences (weighted ranking), handling missing data policies, producing trade-off explanations, and performing bounded weight sensitivity analysis without mutating operational world state.
+- **Status**: `VERIFIED`
+- **Inputs**: `DecisionRequest` specifying objective, candidate `DecisionAlternative` items (with entity IDs, attributes, or scenario proposals), `DecisionCriterion` definitions (directions: `maximize`, `minimize`, `target_range`; weights; hard constraints; target ranges), and `MissingDataPolicy` (`EXCLUDE`, `NEUTRAL_SCORE`, `PENALIZE_MIN`).
+- **Outputs**: `DecisionResult` providing deterministic ranks, overall scores, normalized scores, per-criterion weighted contributions, feasibility findings for excluded alternatives, trade-off comparisons, audit trails, and cited evidence IDs.
+- **Dependencies**: PostgreSQL 16 / PostGIS 3.4, `WorldRepository`, `ConstraintEngine`, `pydantic`.
+- **Persistence**: Relational `decisions` table in PostgreSQL storing input request, scope, evaluated result JSON, top alternative, top score, and evaluation timestamp.
+- **Interface / API**: `backend/app/decisions.py` (`DecisionEngine`), `backend/app/domain.py` (`DecisionRequest`, `DecisionResult`, `DecisionCriterion`, `DecisionAlternative`, `CriterionScoreBreakdown`, `RankedAlternative`, `InfeasibleAlternative`, `SensitivityVariation`, `CriterionDirection`, `MissingDataPolicy`), `backend/app/interfaces.py` (`DecisionSupportEngine`), `WorldRepository` methods (`evaluate_decision`, `persist_decision`, `get_decision`, `list_decisions`, `run_decision_sensitivity`), and REST endpoints: `POST /decisions/evaluate`, `GET /decisions`, `GET /decisions/{id}`, `POST /decisions/{id}/sensitivity`.
+- **Evidence Requirements**: All source-derived criterion values preserve underlying `evidence_id`, source locators, truth classes, temporal validity, and confidence metadata; missing data is explicitly distinguished from genuine zero values.
+- **Test Contract**: Verified by 15 unit tests in `backend/tests/test_decisions.py` (request validation, criterion directions, hard-constraint exclusion, soft-preference ranking, weight normalization and equal weight fallback, missing data policies, genuine zero vs unknown distinction, deterministic tie-breaking and reproducibility, trade-off analysis, and bounded sensitivity analysis) and 4 container-backed integration tests in `backend/tests/test_container_integration.py` (authoritative entity observation resolution, non-mutation of world state, decision persistence and retrieval, and REST API endpoints). Total test suite of 90 tests passing (100%).
+- **Current Implementation**: Fully operational in container stack; integrated with PostgreSQL/PostGIS authoritative data, with audit persistence and non-mutating evaluations. Note on roadmap ordering: Engine 13 was previously skipped while Engine 14 was deepened; it is now fully implemented and verified.
+- **Next Milestone**: Integration with Scenario Engine (Engine 16) for what-if alternative simulation and Pareto frontier visualization.
+
 
 ### 14. Event / Alert Engine
 - **Purpose**: Deterministic condition-based alerting on incoming world events, spatial-temporal correlation, PostGIS geometry filtering, clustering thresholds, deduplication/cooldown enforcement, and evidence-linked alert records.

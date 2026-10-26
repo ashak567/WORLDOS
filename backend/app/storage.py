@@ -27,6 +27,10 @@ from .domain import (
     ConstraintStatus,
     ConstraintValidationResult,
     ContextQueryScope,
+    DecisionAlternative,
+    DecisionCriterion,
+    DecisionRequest,
+    DecisionResult,
     EvidenceCitation,
     Relationship,
     ScenarioProposal,
@@ -37,6 +41,7 @@ from .domain import (
 )
 from .alerts import AlertEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
+from .decisions import DecisionEngine
 
 
 def _extract_int(val: Any, default: int = 100) -> int:
@@ -65,6 +70,7 @@ class WorldRepository:
         self.database_url = database_url or os.environ["WORLDOS_DATABASE_URL"]
         self.constraint_engine = ConstraintEngine(repository=self)
         self.alert_engine = AlertEngine(repository=self)
+        self.decision_engine = DecisionEngine(repository=self)
 
     @contextmanager
     def _connection(self) -> Iterator[psycopg.Connection]:
@@ -1673,3 +1679,102 @@ class WorldRepository:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
             return [_clean_record(row) for row in cur.fetchall()]
+
+    # -------------------------------------------------------------------------
+    # Engine 13: Deterministic Decision Support Operations
+    # -------------------------------------------------------------------------
+
+    def evaluate_decision(self, request: DecisionRequest) -> DecisionResult:
+        """Evaluate a multi-criteria decision request deterministically."""
+        with self._connection() as conn:
+            return self.decision_engine.evaluate(request, conn=conn)
+
+    def persist_decision(self, result: DecisionResult, request_dict: dict[str, Any]) -> None:
+        """Persist a completed decision analysis run and its audit trace."""
+        top_alt_id = None
+        top_alt_name = None
+        top_score = None
+        if result.feasible_alternatives:
+            top_alt = result.feasible_alternatives[0]
+            top_alt_id = top_alt.alternative_id
+            top_alt_name = top_alt.name
+            top_score = top_alt.overall_score
+
+        sql = """
+            INSERT INTO decisions (
+                id, objective, scope, request, result,
+                alternatives_count, feasible_count,
+                top_alternative_id, top_alternative_name, top_score,
+                evaluated_at
+            )
+            VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+            ON CONFLICT (id) DO UPDATE SET
+                result = EXCLUDED.result,
+                top_score = EXCLUDED.top_score,
+                evaluated_at = EXCLUDED.evaluated_at
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                sql,
+                (
+                    result.decision_id,
+                    result.objective,
+                    json.dumps(result.scope),
+                    json.dumps(request_dict, default=str),
+                    json.dumps(result.model_dump(), default=str),
+                    result.alternatives_count,
+                    result.feasible_count,
+                    top_alt_id,
+                    top_alt_name,
+                    top_score,
+                    result.evaluated_at,
+                ),
+            )
+
+    def get_decision(self, decision_id: UUID) -> dict[str, Any] | None:
+        """Retrieve a persisted decision run by ID."""
+        sql = """
+            SELECT id, objective, scope, request, result,
+                   alternatives_count, feasible_count,
+                   top_alternative_id, top_alternative_name, top_score,
+                   evaluated_at, created_at
+            FROM decisions
+            WHERE id = %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (decision_id,))
+            row = cur.fetchone()
+            return _clean_record(row) if row else None
+
+    def list_decisions(self, limit: int = 100) -> list[dict[str, Any]]:
+        """List historical decision evaluation runs."""
+        limit = _extract_int(limit, 100)
+        sql = """
+            SELECT id, objective, scope,
+                   alternatives_count, feasible_count,
+                   top_alternative_id, top_alternative_name, top_score,
+                   evaluated_at, created_at
+            FROM decisions
+            ORDER BY evaluated_at DESC
+            LIMIT %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (limit,))
+            return [_clean_record(row) for row in cur.fetchall()]
+
+    def run_decision_sensitivity(
+        self, decision_id: UUID, delta_pct: float = 0.20
+    ) -> list[dict[str, Any]]:
+        """Run bounded weight sensitivity analysis on a previously evaluated decision."""
+        record = self.get_decision(decision_id)
+        if not record:
+            raise ValueError(f"Decision '{decision_id}' not found")
+
+        req_data = record["request"]
+        if isinstance(req_data, str):
+            req_data = json.loads(req_data)
+
+        req = DecisionRequest.model_validate(req_data)
+        with self._connection() as conn:
+            variations = self.decision_engine.run_sensitivity_analysis(req, delta_pct=delta_pct, conn=conn)
+            return [v.model_dump() for v in variations]
