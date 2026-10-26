@@ -41,10 +41,10 @@ The first adapter is World Bank indicator `SP.POP.TOTL`. It uses the publisher's
 
 ## Query engines
 
-- **Temporal engine:** filters `TimeInterval.starts_at` and records precision rather than treating a year as an unscoped timestamp.
-- **Spatial engine:** PostGIS `ST_DWithin` and `ST_Contains` run against evidence-backed geometry. Country points, boundary polygons, and event epicenters remain distinct geometry kinds.
-- **Context engine:** returns one entity with observations, relationships, and their evidence locators.
-- **Knowledge graph:** `relationships` is a normal relational edge table with evidence and temporal validity. It can later be projected into a graph index without splitting truth ownership.
+- **Temporal engine:** bi-temporal and valid-time modeling with precision tiers (`instant`, `day`, `month`, `year`). Supports point-in-time (`valid_at`), interval overlap (`[start, end]`), and temporal precision queries backed by GiST indexing on `geometries(valid_during)` (`tstzrange`) and composite B-tree indexing on `time_intervals(starts_at, ends_at)`.
+- **Spatial engine:** PostGIS `ST_DWithin`, `ST_Contains`, and `ST_Intersects` run against evidence-backed geometry with direct `evidence_id` foreign key lineage. Point-in-polygon containment (`/spatial/containing`) and topological intersection (`/spatial/intersections/{id}`) preserve geometry kind, confidence, source, and evidence locators.
+- **Context engine:** returns one entity with observations, relationships, claims, and their evidence locators.
+- **Knowledge graph:** directed entity-to-entity and event-to-entity edges in the `relationships` table with explicit typed predicates (`located_in`, `connected_to`, `near`, `affects`, `observed_by`, etc.), temporal intervals, and evidence lineage. Executes deterministic 1-hop and 2-hop neighborhood traversals (`/relationships/graph/{id}`) directly on PostGIS without a separate graph database.
 - **Deterministic analytics:** window functions compute population changes from observations. DuckDB is available only for a versioned analytical export.
 
 ## Deliberately deferred interfaces

@@ -169,3 +169,30 @@ class WorldBankVerticalSliceTests(unittest.TestCase):
         self.assertEqual(valid_claim.evidence_ids, [ev_id])
         self.assertEqual(valid_claim.method, "two_point_pct_v1")
 
+    def test_relationship_distinct_entities_validation(self) -> None:
+        from uuid import uuid4
+        from pydantic import ValidationError
+        from app.domain import Confidence, Relationship
+
+        e1 = uuid4()
+        ev_id = uuid4()
+        # Valid distinct entities
+        rel = Relationship(
+            subject_entity_id=e1,
+            predicate="located_in",
+            object_entity_id=uuid4(),
+            evidence_id=ev_id,
+            confidence=Confidence(value=1.0),
+        )
+        self.assertEqual(rel.predicate, "located_in")
+
+        # Refuses self-referential relationship
+        with self.assertRaises(ValidationError):
+            Relationship(
+                subject_entity_id=e1,
+                predicate="located_in",
+                object_entity_id=e1,
+                evidence_id=ev_id,
+                confidence=Confidence(value=1.0),
+            )
+

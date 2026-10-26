@@ -6,12 +6,21 @@ import os
 from contextlib import contextmanager
 from datetime import datetime
 from typing import Any, Iterator
-from uuid import UUID
+from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.rows import dict_row
 
-from .domain import Claim, WorldBundle
+from .domain import Claim, Relationship, WorldBundle
+
+
+def _extract_int(val: Any, default: int = 100) -> int:
+    if hasattr(val, "default"):
+        val = getattr(val, "default")
+    try:
+        return int(val)
+    except (TypeError, ValueError):
+        return default
 
 
 class WorldRepository:
@@ -103,12 +112,33 @@ class WorldRepository:
                  json.dumps(b.provenance.transformation)),
             )
             if b.geometry:
+                geom_evidence_id = b.geometry.evidence_id or evidence_id
+                geom_starts = None
+                geom_ends = None
+                if b.geometry.valid_during:
+                    geom_starts = b.geometry.valid_during.starts_at
+                    geom_ends = b.geometry.valid_during.ends_at
+                elif b.time_interval:
+                    geom_starts = b.time_interval.starts_at
+                    geom_ends = b.time_interval.ends_at
+
+                geom_range = None
+                if geom_starts and geom_ends:
+                    geom_range = f"[{geom_starts.isoformat()}, {geom_ends.isoformat()}]"
+                elif geom_starts:
+                    geom_range = f"[{geom_starts.isoformat()},)"
+
                 cur.execute(
-                    """INSERT INTO geometries (id,entity_id,geometry,geometry_kind,valid_during,source_id,confidence)
-                       VALUES (%s,%s,ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),%s,NULL,%s,%s)
-                       ON CONFLICT (id) DO NOTHING""",
+                    """INSERT INTO geometries (id,entity_id,geometry,geometry_kind,valid_during,source_id,evidence_id,confidence)
+                       VALUES (%s,%s,ST_SetSRID(ST_GeomFromGeoJSON(%s),4326),%s,%s::tstzrange,%s,%s,%s)
+                       ON CONFLICT (id) DO UPDATE SET
+                         geometry=EXCLUDED.geometry,
+                         geometry_kind=EXCLUDED.geometry_kind,
+                         valid_during=EXCLUDED.valid_during,
+                         evidence_id=EXCLUDED.evidence_id,
+                         confidence=EXCLUDED.confidence""",
                     (b.geometry.id, entity_id, json.dumps(b.geometry.geojson), b.geometry.geometry_kind,
-                     source_id, b.geometry.confidence.value),
+                     geom_range, source_id, geom_evidence_id, b.geometry.confidence.value),
                 )
             if b.event:
                 cur.execute(
@@ -144,35 +174,94 @@ class WorldRepository:
                 return b.geometry.id
             return entity_id
 
-    def observations(self, measure: str, start: datetime | None, end: datetime | None) -> list[dict[str, Any]]:
-        clauses, values = ["o.measure = %s"], [measure]
-        if start:
-            clauses.append("t.starts_at >= %s")
-            values.append(start)
-        if end:
-            clauses.append("t.starts_at <= %s")
-            values.append(end)
+    def observations(
+        self,
+        measure: str | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        valid_at: datetime | None = None,
+        precision: str | None = None,
+        entity_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses, values = [], []
+        if measure:
+            clauses.append("o.measure = %s")
+            values.append(measure)
+        if entity_id:
+            clauses.append("o.subject_entity_id = %s")
+            values.append(entity_id)
+        if valid_at:
+            clauses.append("t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)")
+            values.extend([valid_at, valid_at])
+        else:
+            if start and end:
+                clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s")
+                values.extend([start, end])
+            elif start:
+                clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s)")
+                values.append(start)
+            elif end:
+                clauses.append("t.starts_at <= %s")
+                values.append(end)
+        if precision:
+            clauses.append("t.precision = %s")
+            values.append(precision)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""SELECT o.id, e.id AS entity_id, e.canonical_name, o.measure, o.value, o.unit,
-                         o.truth_class, t.starts_at, t.ends_at, ev.locator AS evidence_locator, o.confidence
+                         o.truth_class, t.starts_at, t.ends_at, t.precision,
+                         ev.locator AS evidence_locator, s.slug AS source_slug, o.confidence, o.attributes
                   FROM observations o JOIN entities e ON e.id=o.subject_entity_id
                   JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence ev ON ev.id=o.evidence_id
-                  WHERE {' AND '.join(clauses)} ORDER BY t.starts_at DESC"""
+                  JOIN sources s ON s.id=ev.source_id
+                  {where_clause} ORDER BY t.starts_at DESC LIMIT %s"""
+        values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
             return list(cur.fetchall())
 
-    def events(self, kind: str | None = None) -> list[dict[str, Any]]:
+    def events(
+        self,
+        kind: str | None = None,
+        entity_id: UUID | None = None,
+        valid_at: datetime | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
         clauses, values = [], []
         if kind:
             clauses.append("ev.kind = %s")
             values.append(kind)
+        if entity_id:
+            clauses.append("ev.subject_entity_id = %s")
+            values.append(entity_id)
+        if valid_at:
+            clauses.append("t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)")
+            values.extend([valid_at, valid_at])
+        else:
+            if start and end:
+                clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s")
+                values.extend([start, end])
+            elif start:
+                clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s)")
+                values.append(start)
+            elif end:
+                clauses.append("t.starts_at <= %s")
+                values.append(end)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""SELECT ev.id, ev.kind, ev.subject_entity_id, e.canonical_name AS subject_name,
-                         t.starts_at, evi.locator AS evidence_locator, ev.confidence, ev.attributes
+                         t.starts_at, t.ends_at, t.precision,
+                         evi.locator AS evidence_locator, s.slug AS source_slug,
+                         ev.confidence, ev.attributes
                   FROM events ev LEFT JOIN entities e ON e.id=ev.subject_entity_id
                   JOIN time_intervals t ON t.id=ev.time_interval_id
                   JOIN evidence evi ON evi.id=ev.evidence_id
-                  {where_clause} ORDER BY t.starts_at DESC"""
+                  JOIN sources s ON s.id=evi.source_id
+                  {where_clause} ORDER BY t.starts_at DESC LIMIT %s"""
+        values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
             return list(cur.fetchall())
@@ -183,11 +272,16 @@ class WorldRepository:
             entity = cur.fetchone()
             if not entity:
                 return None
-            cur.execute("""SELECT predicate, object_entity_id, confidence FROM relationships WHERE subject_entity_id=%s
-                         UNION ALL SELECT predicate, subject_entity_id, confidence FROM relationships WHERE object_entity_id=%s""",
+            cur.execute("""SELECT r.predicate, r.object_entity_id, r.confidence, ev.locator AS evidence_locator
+                           FROM relationships r JOIN evidence ev ON ev.id = r.evidence_id
+                           WHERE r.subject_entity_id=%s
+                           UNION ALL
+                           SELECT r.predicate, r.subject_entity_id, r.confidence, ev.locator AS evidence_locator
+                           FROM relationships r JOIN evidence ev ON ev.id = r.evidence_id
+                           WHERE r.object_entity_id=%s""",
                         (entity_id, entity_id))
             entity["relationships"] = list(cur.fetchall())
-            cur.execute("""SELECT measure,value,unit,truth_class,t.starts_at,e.locator FROM observations o
+            cur.execute("""SELECT measure,value,unit,truth_class,t.starts_at,t.precision,e.locator FROM observations o
                          JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence e ON e.id=o.evidence_id
                          WHERE subject_entity_id=%s ORDER BY t.starts_at DESC LIMIT 100""", (entity_id,))
             entity["observations"] = list(cur.fetchall())
@@ -205,10 +299,10 @@ class WorldRepository:
             cur.execute(
                 """SELECT e.id, e.canonical_name, e.kind,
                          MIN(ST_Distance(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography)/1000) AS distance_km
-                   FROM geometries g JOIN entities e ON e.id=g.entity_id
-                   WHERE ST_DWithin(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography, %s)
-                   GROUP BY e.id, e.canonical_name, e.kind
-                   ORDER BY distance_km""",
+                    FROM geometries g JOIN entities e ON e.id=g.entity_id
+                    WHERE ST_DWithin(g.geometry::geography, ST_SetSRID(ST_MakePoint(%s,%s),4326)::geography, %s)
+                    GROUP BY e.id, e.canonical_name, e.kind
+                    ORDER BY distance_km""",
                 (longitude, latitude, longitude, latitude, radius_km * 1000),
             )
             return list(cur.fetchall())
@@ -225,14 +319,270 @@ class WorldRepository:
             )
             return cur.fetchone()
 
-    def geometries(self) -> list[dict[str, Any]]:
+    def containing_geometries(
+        self,
+        longitude: float,
+        latitude: float,
+        geometry_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 50)
+        clauses = ["ST_Contains(g.geometry, ST_SetSRID(ST_MakePoint(%s, %s), 4326))"]
+        values: list[Any] = [longitude, latitude]
+        if geometry_kind:
+            clauses.append("g.geometry_kind = %s")
+            values.append(geometry_kind)
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT e.id AS entity_id, e.canonical_name, e.kind AS entity_kind,
+                   g.id AS geometry_id, g.geometry_kind, g.confidence,
+                   s.slug AS source_slug, s.name AS source_name,
+                   COALESCE(ev.locator, fallback_ev.locator) AS evidence_locator,
+                   COALESCE(ev.retrieved_at, fallback_ev.retrieved_at) AS evidence_retrieved_at,
+                   ST_AsGeoJSON(g.geometry)::json AS geometry
+            FROM geometries g
+            JOIN entities e ON e.id = g.entity_id
+            JOIN sources s ON s.id = g.source_id
+            LEFT JOIN evidence ev ON ev.id = g.evidence_id
+            LEFT JOIN LATERAL (
+                SELECT locator, retrieved_at FROM evidence e WHERE e.source_id = g.source_id ORDER BY e.retrieved_at DESC LIMIT 1
+            ) fallback_ev ON g.evidence_id IS NULL
+            {where_clause}
+            ORDER BY g.confidence DESC, e.canonical_name
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def spatial_intersections(
+        self,
+        entity_id: UUID,
+        target_geometry_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 50)
+        clauses = [
+            "source_g.entity_id = %s",
+            "target_g.id <> source_g.id",
+            "ST_Intersects(source_g.geometry, target_g.geometry)",
+        ]
+        values: list[Any] = [entity_id]
+        if target_geometry_kind:
+            clauses.append("target_g.geometry_kind = %s")
+            values.append(target_geometry_kind)
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT
+                target_e.id AS target_entity_id,
+                target_e.canonical_name AS target_name,
+                target_e.kind AS target_kind,
+                target_g.id AS target_geometry_id,
+                target_g.geometry_kind AS target_geometry_kind,
+                ST_GeometryType(target_g.geometry) AS target_geometry_type,
+                ST_Contains(target_g.geometry, source_g.geometry) AS target_contains_source,
+                ST_Intersects(source_g.geometry, target_g.geometry) AS intersects,
+                target_g.confidence,
+                COALESCE(ev.locator, fallback_ev.locator) AS evidence_locator,
+                s.slug AS source_slug
+            FROM geometries source_g
+            JOIN geometries target_g ON ST_Intersects(source_g.geometry, target_g.geometry) AND target_g.id <> source_g.id
+            JOIN entities target_e ON target_e.id = target_g.entity_id
+            JOIN sources s ON s.id = target_g.source_id
+            LEFT JOIN evidence ev ON ev.id = target_g.evidence_id
+            LEFT JOIN LATERAL (
+                SELECT locator FROM evidence e WHERE e.source_id = target_g.source_id ORDER BY e.retrieved_at DESC LIMIT 1
+            ) fallback_ev ON target_g.evidence_id IS NULL
+            {where_clause}
+            ORDER BY target_g.confidence DESC, target_e.canonical_name
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def geometries(
+        self,
+        entity_id: UUID | None = None,
+        geometry_kind: str | None = None,
+        valid_at: datetime | None = None,
+        limit: int = 1000,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 1000)
+        clauses, values = [], []
+        if entity_id:
+            clauses.append("g.entity_id = %s")
+            values.append(entity_id)
+        if geometry_kind:
+            clauses.append("g.geometry_kind = %s")
+            values.append(geometry_kind)
+        if valid_at:
+            clauses.append("(g.valid_during IS NULL OR g.valid_during @> %s::timestamptz)")
+            values.append(valid_at)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""SELECT g.id, e.id AS entity_id, e.canonical_name, g.geometry_kind,
+                         g.valid_during, g.confidence,
+                         COALESCE(ev.locator, fallback_ev.locator) AS evidence_locator,
+                         s.slug AS source_slug, s.name AS source_name,
+                         ST_AsGeoJSON(g.geometry)::json AS geometry
+                  FROM geometries g
+                  JOIN entities e ON e.id=g.entity_id
+                  JOIN sources s ON s.id=g.source_id
+                  LEFT JOIN evidence ev ON ev.id=g.evidence_id
+                  LEFT JOIN LATERAL (
+                      SELECT locator FROM evidence e WHERE e.source_id = g.source_id ORDER BY e.retrieved_at DESC LIMIT 1
+                  ) fallback_ev ON g.evidence_id IS NULL
+                  {where_clause}
+                  ORDER BY e.canonical_name, g.geometry_kind
+                  LIMIT %s"""
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def relationships(
+        self,
+        subject_entity_id: UUID | None = None,
+        predicate: str | None = None,
+        object_entity_id: UUID | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses, values = [], []
+        if subject_entity_id:
+            clauses.append("r.subject_entity_id = %s")
+            values.append(subject_entity_id)
+        if predicate:
+            clauses.append("r.predicate = %s")
+            values.append(predicate)
+        if object_entity_id:
+            clauses.append("r.object_entity_id = %s")
+            values.append(object_entity_id)
+        where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
+        sql = f"""
+            SELECT
+                r.id,
+                r.subject_entity_id,
+                sub.canonical_name AS subject_name,
+                sub.kind AS subject_kind,
+                r.predicate,
+                r.object_entity_id,
+                obj.canonical_name AS object_name,
+                obj.kind AS object_kind,
+                r.confidence,
+                ev.locator AS evidence_locator,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                t.starts_at,
+                t.ends_at,
+                t.precision,
+                r.attributes
+            FROM relationships r
+            JOIN entities sub ON sub.id = r.subject_entity_id
+            JOIN entities obj ON obj.id = r.object_entity_id
+            JOIN evidence ev ON ev.id = r.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN time_intervals t ON t.id = r.time_interval_id
+            {where_clause}
+            ORDER BY r.id
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return list(cur.fetchall())
+
+    def record_relationship(self, relationship: Relationship) -> UUID:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(
-                """SELECT g.id, e.id AS entity_id, e.canonical_name, g.geometry_kind,
-                         ST_AsGeoJSON(g.geometry)::json AS geometry
-                   FROM geometries g JOIN entities e ON e.id=g.entity_id ORDER BY e.canonical_name"""
+                """INSERT INTO relationships (id, subject_entity_id, predicate, object_entity_id,
+                                              time_interval_id, evidence_id, confidence, attributes)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                   ON CONFLICT (id) DO UPDATE SET
+                     confidence = EXCLUDED.confidence,
+                     attributes = EXCLUDED.attributes
+                   RETURNING id""",
+                (
+                    relationship.id,
+                    relationship.subject_entity_id,
+                    relationship.predicate,
+                    relationship.object_entity_id,
+                    relationship.time_interval_id,
+                    relationship.evidence_id,
+                    relationship.confidence.value,
+                    json.dumps(relationship.attributes),
+                ),
             )
-            return list(cur.fetchall())
+            return cur.fetchone()["id"]
+
+    def entity_graph(self, entity_id: UUID, depth: int = 1, limit: int = 100) -> dict[str, Any]:
+        depth = _extract_int(depth, 1)
+        limit = _extract_int(limit, 100)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT id, canonical_name, kind, confidence FROM entities WHERE id = %s", (entity_id,))
+            root = cur.fetchone()
+            if not root:
+                return {"root_entity_id": str(entity_id), "nodes": [], "edges": []}
+
+            cur.execute(
+                """SELECT r.id, r.subject_entity_id, sub.canonical_name AS subject_name, sub.kind AS subject_kind,
+                          r.predicate, r.object_entity_id, obj.canonical_name AS object_name, obj.kind AS object_kind,
+                          r.confidence, ev.locator AS evidence_locator, s.slug AS source_slug
+                   FROM relationships r
+                   JOIN entities sub ON sub.id = r.subject_entity_id
+                   JOIN entities obj ON obj.id = r.object_entity_id
+                   JOIN evidence ev ON ev.id = r.evidence_id
+                   JOIN sources s ON s.id = ev.source_id
+                   WHERE r.subject_entity_id = %s OR r.object_entity_id = %s
+                   LIMIT %s""",
+                (entity_id, entity_id, limit),
+            )
+            edges_1 = list(cur.fetchall())
+            node_ids = {entity_id}
+            for e in edges_1:
+                node_ids.add(e["subject_entity_id"])
+                node_ids.add(e["object_entity_id"])
+
+            edges = list(edges_1)
+            if depth >= 2 and node_ids:
+                adjacent_ids = list(node_ids - {entity_id})
+                if adjacent_ids:
+                    cur.execute(
+                        """SELECT r.id, r.subject_entity_id, sub.canonical_name AS subject_name, sub.kind AS subject_kind,
+                                  r.predicate, r.object_entity_id, obj.canonical_name AS object_name, obj.kind AS object_kind,
+                                  r.confidence, ev.locator AS evidence_locator, s.slug AS source_slug
+                           FROM relationships r
+                           JOIN entities sub ON sub.id = r.subject_entity_id
+                           JOIN entities obj ON obj.id = r.object_entity_id
+                           JOIN evidence ev ON ev.id = r.evidence_id
+                           JOIN sources s ON s.id = ev.source_id
+                           WHERE (r.subject_entity_id = ANY(%s) OR r.object_entity_id = ANY(%s))
+                             AND r.id NOT IN (SELECT unnest(%s::uuid[]))
+                           LIMIT %s""",
+                        (adjacent_ids, adjacent_ids, [e["id"] for e in edges] or [uuid4()], limit),
+                    )
+                    edges_2 = list(cur.fetchall())
+                    edges.extend(edges_2)
+                    for e in edges_2:
+                        node_ids.add(e["subject_entity_id"])
+                        node_ids.add(e["object_entity_id"])
+
+            cur.execute(
+                "SELECT id, canonical_name, kind, confidence FROM entities WHERE id = ANY(%s)",
+                (list(node_ids),),
+            )
+            nodes = list(cur.fetchall())
+
+            return {
+                "root_entity_id": str(entity_id),
+                "depth": depth,
+                "node_count": len(nodes),
+                "edge_count": len(edges),
+                "nodes": nodes,
+                "edges": edges,
+            }
 
     def population_change(self, entity_id: UUID) -> list[dict[str, Any]]:
         with self._connection() as conn, conn.cursor() as cur:
@@ -489,6 +839,7 @@ class WorldRepository:
         claim_type: str | None = None,
         limit: int = 100,
     ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
         clauses, values = [], []
         if subject_entity_id:
             clauses.append("c.subject_entity_id = %s")

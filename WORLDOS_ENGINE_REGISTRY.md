@@ -95,43 +95,43 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Implement ingestion run log and source freshness endpoint.
 
 ### 7. Spatial Intelligence Engine
-- **Purpose**: Deterministic geospatial operations, topological containment, proximity joins, and CRS normalization in WGS 84 (SRID 4326).
+- **Purpose**: Deterministic geospatial operations, topological containment, proximity joins, spatial intersections, and CRS normalization in WGS 84 (SRID 4326).
 - **Status**: `VERIFIED`
-- **Inputs**: GeoJSON, coordinates, geometries, distance radii.
-- **Outputs**: Containing entities, intersecting boundaries, nearest neighbors.
+- **Inputs**: GeoJSON, coordinates, geometries, distance radii, entity IDs.
+- **Outputs**: Containing entities, intersecting geometries, nearest neighbors with evidence citations.
 - **Dependencies**: PostGIS 3.4, GEOS, Shapely.
-- **Persistence**: `geometries` table with GiST indexing.
-- **Interface / API**: `WorldRepository.entities_containing()`, `WorldRepository.entities_within()`, `GET /api/v1/spatial/containing`, `GET /api/v1/spatial/nearest`.
-- **Evidence Requirements**: Every geometry must cite source, confidence, and validity interval.
-- **Test Contract**: Verified in `test_container_integration.py::test_postgis_containment_and_distance_queries`.
-- **Current Implementation**: Fully operational in container PostGIS.
+- **Persistence**: `geometries` table with GiST indexing on `geometry` and `valid_during`, foreign key to `evidence(id)`.
+- **Interface / API**: `WorldRepository.near()`, `WorldRepository.containing_geometries()`, `WorldRepository.spatial_intersections()`, `GET /spatial/entities`, `GET /spatial/containing`, `GET /spatial/intersections/{entity_id}`.
+- **Evidence Requirements**: Every geometry cites `source_id`, `evidence_id`, confidence, and validity interval.
+- **Test Contract**: Verified in `test_container_integration.py::test_postgis_containment_and_distance_queries` and `test_spatial_containment_and_intersections_with_evidence`.
+- **Current Implementation**: Fully operational in container PostGIS with evidence attribution.
 - **Next Milestone**: Add polygon clipping, antimeridian normalization, and buffered spatial cluster queries.
 
 ### 8. Temporal Intelligence Engine
 - **Purpose**: Bi-temporal and valid-time modeling with precision tiers (`instant`, `day`, `month`, `year`).
-- **Status**: `IMPLEMENTED`
-- **Inputs**: Start timestamps, optional end timestamps, precision strings.
-- **Outputs**: Validated `TimeInterval` records, temporal slice filters.
-- **Dependencies**: PostgreSQL timestamp with time zone (`timestamptz`).
-- **Persistence**: `time_intervals` table in PostGIS.
-- **Interface / API**: `TimeInterval` model; `ordered` model validator; SQL range clauses in `WorldRepository`.
+- **Status**: `VERIFIED`
+- **Inputs**: Start timestamps, optional end timestamps, precision strings, `valid_at` target dates.
+- **Outputs**: Validated `TimeInterval` records, temporal slice filters, point-in-time and interval overlap matches.
+- **Dependencies**: PostgreSQL timestamp with time zone (`timestamptz`), `tstzrange`.
+- **Persistence**: `time_intervals` table with composite index `(starts_at, ends_at)`, `geometries(valid_during)` with GiST range index.
+- **Interface / API**: `TimeInterval` model; `ordered` model validator; `valid_at`, `start`, `end`, and `precision` parameters in `WorldRepository.observations()`, `events()`, `geometries()`.
 - **Evidence Requirements**: Start timestamp cannot exceed end timestamp.
-- **Test Contract**: Interval validation tested in `test_world_bank_vertical_slice.py`.
-- **Current Implementation**: Operational across observations, events, and relationships.
-- **Next Milestone**: Add GiST temporal range indexing (`tstzrange`) for historical timeline replay.
+- **Test Contract**: Verified in `test_world_bank_vertical_slice.py::test_time_interval_ordering_and_precision_validation` and `test_container_integration.py::test_temporal_point_in_time_and_interval_overlap_queries`.
+- **Current Implementation**: Fully operational; supports point-in-time and interval overlap queries across observations, events, and geometries.
+- **Next Milestone**: Historical world-state rewind and temporal timeline playback.
 
 ### 9. Relationship / Knowledge Graph Engine
 - **Purpose**: Directed entity-to-entity and event-to-entity topological and semantic graphs without a heavyweight graph DB.
-- **Status**: `IMPLEMENTED`
-- **Inputs**: `subject_entity_id`, `predicate`, `object_entity_id`, time interval, evidence.
-- **Outputs**: Directed graph edges, path traversal, connected components.
+- **Status**: `VERIFIED`
+- **Inputs**: `subject_entity_id`, typed `predicate` (`VALID_PREDICATES`), `object_entity_id`, time interval, evidence.
+- **Outputs**: Directed graph edges, 1-hop and 2-hop neighborhood graphs (`nodes`, `edges`, `node_count`, `edge_count`).
 - **Dependencies**: PostGIS `relationships` table.
 - **Persistence**: Relational `relationships` table with B-tree indexes on subject and object.
-- **Interface / API**: `Relationship` model; `WorldRepository.relationships()`.
-- **Evidence Requirements**: Every relationship must cite an `evidence_id` and confidence score.
-- **Test Contract**: Spatial relationship `occurred_in` verified in `test_container_integration.py`.
-- **Current Implementation**: Operational; links USGS earthquake events to containing country entities.
-- **Next Milestone**: Add recursive CTE graph traversal queries for multi-hop relationship exploration.
+- **Interface / API**: `Relationship` model; `WorldRepository.relationships()`, `record_relationship()`, `entity_graph()`; `GET /relationships`, `POST /relationships`, `GET /relationships/graph/{entity_id}`.
+- **Evidence Requirements**: Every relationship must cite an `evidence_id`, confidence score, and optional time interval.
+- **Test Contract**: Verified in `test_world_bank_vertical_slice.py::test_relationship_distinct_entities_validation` and `test_container_integration.py::test_relationship_predicates_and_graph_traversal`.
+- **Current Implementation**: Fully operational; supports verified typed predicates and deterministic 1-hop / 2-hop neighborhood traversals directly on PostGIS relational tables.
+- **Next Milestone**: Multi-predicate path-finding and cycles detection.
 
 ### 10. Context Engine
 - **Purpose**: Assemble a coherent, evidence-backed spatio-temporal slice (entities, observations, events, relationships) for a given scope.

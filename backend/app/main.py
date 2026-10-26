@@ -87,6 +87,7 @@ def world_bank_bundle(record, point, retrieved_at: datetime) -> WorldBundle:
         geometry = Geometry(id=stable_id("geometry", "world-bank", record.country_code), entity_id=entity_id,
                             geojson={"type": "Point", "coordinates": [point.longitude, point.latitude]},
                             geometry_kind="representative_point", source_id=source_id,
+                            evidence_id=evidence_id,
                             confidence=Confidence(value=0.9, method="source_metadata"))
     observation = Observation(id=observation_id, subject_entity_id=entity_id, measure="population.total",
                               value=record.population, unit="people", time_interval_id=interval_id,
@@ -120,6 +121,7 @@ def natural_earth_bundle(boundary, retrieved_at: datetime) -> WorldBundle:
                             transformation={"feature_filter": "ISO_A3", "geometry": "publisher_polygon"})
     geometry = Geometry(id=stable_id("geometry", "natural-earth", boundary.iso3), entity_id=entity_id,
                         geojson=boundary.geometry, geometry_kind="country_boundary", source_id=source_id,
+                        evidence_id=evidence_id,
                         confidence=Confidence(value=1, method="publisher_asserted"))
     return WorldBundle(source=source, entity=entity, identifiers=[identifier], evidence=evidence,
                        provenance=provenance, geometry=geometry)
@@ -186,6 +188,8 @@ def usgs_earthquake_bundle(
         geojson={"type": "Point", "coordinates": [record.longitude, record.latitude]},
         geometry_kind="epicenter",
         source_id=source_id,
+        evidence_id=evidence_id,
+        valid_during=interval,
         confidence=Confidence(value=1.0, method="publisher_asserted"),
     )
     observation = Observation(
@@ -435,13 +439,43 @@ def reject_resolution_review(review_id: UUID, req: ReviewActionRequest):
 
 
 @app.get("/observations")
-def observations(measure: str = "population.total", start: datetime | None = None, end: datetime | None = None):
-    return WorldRepository().observations(measure, start, end)
+def observations(
+    measure: str | None = "population.total",
+    start: datetime | None = None,
+    end: datetime | None = None,
+    valid_at: datetime | None = None,
+    precision: str | None = None,
+    entity_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    return WorldRepository().observations(
+        measure=measure,
+        start=start,
+        end=end,
+        valid_at=valid_at,
+        precision=precision,
+        entity_id=entity_id,
+        limit=limit,
+    )
 
 
 @app.get("/events")
-def events(kind: str | None = None):
-    return WorldRepository().events(kind=kind)
+def events(
+    kind: str | None = None,
+    entity_id: UUID | None = None,
+    valid_at: datetime | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    return WorldRepository().events(
+        kind=kind,
+        entity_id=entity_id,
+        valid_at=valid_at,
+        start=start,
+        end=end,
+        limit=limit,
+    )
 
 
 @app.get("/entities/{entity_id}/context")
@@ -458,9 +492,79 @@ def nearby_entities(longitude: float = Query(ge=-180, le=180), latitude: float =
     return WorldRepository().near(longitude, latitude, radius_km)
 
 
+@app.get("/spatial/containing")
+def containing_geometries(
+    longitude: float = Query(ge=-180, le=180),
+    latitude: float = Query(ge=-90, le=90),
+    geometry_kind: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return WorldRepository().containing_geometries(
+        longitude=longitude,
+        latitude=latitude,
+        geometry_kind=geometry_kind,
+        limit=limit,
+    )
+
+
+@app.get("/spatial/intersections/{entity_id}")
+def spatial_intersections(
+    entity_id: UUID,
+    target_geometry_kind: str | None = None,
+    limit: int = Query(default=50, ge=1, le=200),
+):
+    return WorldRepository().spatial_intersections(
+        entity_id=entity_id,
+        target_geometry_kind=target_geometry_kind,
+        limit=limit,
+    )
+
+
 @app.get("/geometries")
-def geometries():
-    return WorldRepository().geometries()
+def geometries(
+    entity_id: UUID | None = None,
+    geometry_kind: str | None = None,
+    valid_at: datetime | None = None,
+    limit: int = Query(default=1000, ge=1, le=5000),
+):
+    return WorldRepository().geometries(
+        entity_id=entity_id,
+        geometry_kind=geometry_kind,
+        valid_at=valid_at,
+        limit=limit,
+    )
+
+
+@app.get("/relationships")
+def relationships(
+    subject_id: UUID | None = None,
+    predicate: str | None = None,
+    object_id: UUID | None = None,
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    return WorldRepository().relationships(
+        subject_entity_id=subject_id,
+        predicate=predicate,
+        object_entity_id=object_id,
+        limit=limit,
+    )
+
+
+@app.post("/relationships", response_model=UUID)
+def create_relationship(relationship: Relationship):
+    return WorldRepository().record_relationship(relationship)
+
+
+@app.get("/relationships/graph/{entity_id}")
+def entity_graph(
+    entity_id: UUID,
+    depth: int = Query(default=1, ge=1, le=2),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    result = WorldRepository().entity_graph(entity_id=entity_id, depth=depth, limit=limit)
+    if not result or not result.get("nodes"):
+        raise HTTPException(status_code=404, detail="entity not found")
+    return result
 
 
 @app.get("/claims")

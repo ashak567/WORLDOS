@@ -11,7 +11,7 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.analytics import DuckDbSpatialAnalytics
-from app.domain import (Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Source,
+from app.domain import (Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, Source,
                         TimeInterval, TruthClass, WorldBundle)
 from app.export import export_observations
 from app.ingestion.natural_earth import parse_country_boundary
@@ -341,6 +341,220 @@ class ContainerIntegrationTests(unittest.TestCase):
         finally:
             if duckdb_path.exists():
                 duckdb_path.unlink()
+
+    def test_temporal_point_in_time_and_interval_overlap_queries(self) -> None:
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"temporal-src-{uuid4()}", name="Temporal Source", publisher="Temporal Bureau", refresh_policy="annual")
+        entity = Entity(kind="place", canonical_name=f"TemporalEntity-{uuid4()}", confidence=Confidence(value=1.0))
+        ev = Evidence(source_id=source.id, locator="https://example.test/temporal-indicator", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="temporal-v1")
+
+        # 1. Ingest year-precision observation spanning 2023-01-01 to 2023-12-31
+        t_year = TimeInterval(
+            starts_at=datetime(2023, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2023, 12, 31, 23, 59, 59, tzinfo=UTC),
+            precision="year",
+        )
+        obs_year = Observation(
+            subject_entity_id=entity.id,
+            measure="gdp.nominal",
+            value=500000.0,
+            unit="usd",
+            time_interval_id=t_year.id,
+            evidence_id=ev.id,
+            provenance_id=prov.id,
+            confidence=Confidence(value=1.0),
+        )
+        bundle = WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, time_interval=t_year, observation=obs_year)
+        self.repo.ingest(bundle)
+
+        # 2. Query valid_at mid-year (2023-06-15) -> must match year observation
+        mid_year = datetime(2023, 6, 15, 12, 0, 0, tzinfo=UTC)
+        matched = self.repo.observations(measure="gdp.nominal", valid_at=mid_year, entity_id=entity.id)
+        self.assertEqual(len(matched), 1)
+        self.assertEqual(matched[0]["precision"], "year")
+        self.assertEqual(matched[0]["evidence_locator"], "https://example.test/temporal-indicator")
+        self.assertEqual(matched[0]["source_slug"], source.slug)
+
+        # 3. Query valid_at next year (2024-01-01) -> must NOT match
+        next_year = datetime(2024, 1, 1, 0, 0, 1, tzinfo=UTC)
+        unmatched = self.repo.observations(measure="gdp.nominal", valid_at=next_year, entity_id=entity.id)
+        self.assertEqual(len(unmatched), 0)
+
+        # 4. Query interval overlap: [2023-11-01, 2024-02-01] overlaps [2023-01-01, 2023-12-31]
+        overlap_res = self.repo.observations(
+            measure="gdp.nominal",
+            start=datetime(2023, 11, 1, tzinfo=UTC),
+            end=datetime(2024, 2, 1, tzinfo=UTC),
+            entity_id=entity.id,
+        )
+        self.assertEqual(len(overlap_res), 1)
+
+        # 5. Query disjoint interval: [2021-01-01, 2022-12-31] -> must NOT match
+        disjoint_res = self.repo.observations(
+            measure="gdp.nominal",
+            start=datetime(2021, 1, 1, tzinfo=UTC),
+            end=datetime(2022, 12, 31, tzinfo=UTC),
+            entity_id=entity.id,
+        )
+        self.assertEqual(len(disjoint_res), 0)
+
+        # 6. Query with precision filter
+        by_precision = self.repo.observations(measure="gdp.nominal", precision="year", entity_id=entity.id)
+        self.assertEqual(len(by_precision), 1)
+        by_wrong_precision = self.repo.observations(measure="gdp.nominal", precision="day", entity_id=entity.id)
+        self.assertEqual(len(by_wrong_precision), 0)
+
+    def test_spatial_containment_and_intersections_with_evidence(self) -> None:
+        # 1. Point containment query: New Delhi (77.2090, 28.6139) inside India boundary polygon
+        containing = self.repo.containing_geometries(77.2090, 28.6139)
+        self.assertGreaterEqual(len(containing), 1)
+        india_match = next((g for g in containing if g["canonical_name"] == "India"), None)
+        self.assertIsNotNone(india_match)
+        self.assertEqual(india_match["geometry_kind"], "country_boundary")
+        self.assertEqual(india_match["confidence"], 1.0)
+        self.assertEqual(india_match["source_slug"], "natural-earth-admin-0")
+        self.assertIsNotNone(india_match["evidence_locator"])
+
+        # 2. Point containment query in ocean -> returns empty
+        ocean = self.repo.containing_geometries(-120.0, -50.0)
+        self.assertEqual(len(ocean), 0)
+
+        # 3. Spatial intersection between earthquake and country boundary
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"quake-test-{uuid4()}", name="Test Quake", publisher="Test Seismology", refresh_policy="manual")
+        quake_entity = Entity(kind="asset", canonical_name="Test Quake In India", confidence=Confidence(value=1.0))
+        ev = Evidence(source_id=source.id, locator="https://example.test/quake-in-india", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="test-v1")
+        quake_geom = Geometry(
+            entity_id=quake_entity.id,
+            geojson={"type": "Point", "coordinates": [77.2090, 28.6139]},
+            geometry_kind="epicenter",
+            source_id=source.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=1.0),
+        )
+        bundle = WorldBundle(source=source, entity=quake_entity, evidence=ev, provenance=prov, geometry=quake_geom)
+        self.repo.ingest(bundle)
+
+        intersections = self.repo.spatial_intersections(quake_entity.id)
+        self.assertGreaterEqual(len(intersections), 1)
+        target_india = next((item for item in intersections if item["target_name"] == "India"), None)
+        self.assertIsNotNone(target_india)
+        self.assertTrue(target_india["intersects"])
+        self.assertTrue(target_india["target_contains_source"])
+        self.assertEqual(target_india["target_geometry_kind"], "country_boundary")
+
+    def test_relationship_predicates_and_graph_traversal(self) -> None:
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"geo-hierarchy-{uuid4()}", name="Geo Hierarchy", publisher="Cartographic Authority", refresh_policy="manual")
+        ev = Evidence(source_id=source.id, locator="https://example.test/hierarchy", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="geo-v1")
+
+        country = Entity(kind="place", canonical_name=f"Country-{uuid4()}", confidence=Confidence(value=1.0))
+        state = Entity(kind="place", canonical_name=f"State-{uuid4()}", confidence=Confidence(value=1.0))
+        city = Entity(kind="place", canonical_name=f"City-{uuid4()}", confidence=Confidence(value=1.0))
+
+        # Ingest entities with point geometries
+        g_c = Geometry(entity_id=country.id, geojson={"type": "Point", "coordinates": [10.0, 10.0]}, geometry_kind="point", source_id=source.id, confidence=Confidence(value=1.0))
+        g_s = Geometry(entity_id=state.id, geojson={"type": "Point", "coordinates": [10.1, 10.1]}, geometry_kind="point", source_id=source.id, confidence=Confidence(value=1.0))
+        g_ci = Geometry(entity_id=city.id, geojson={"type": "Point", "coordinates": [10.2, 10.2]}, geometry_kind="point", source_id=source.id, confidence=Confidence(value=1.0))
+
+        self.repo.ingest(WorldBundle(source=source, entity=country, evidence=ev, provenance=prov, geometry=g_c))
+        self.repo.ingest(WorldBundle(source=source, entity=state, evidence=ev, provenance=prov, geometry=g_s))
+        self.repo.ingest(WorldBundle(source=source, entity=city, evidence=ev, provenance=prov, geometry=g_ci))
+
+        # Create explicit relationships: city -> located_in -> state; state -> located_in -> country
+        rel1 = Relationship(
+            subject_entity_id=city.id,
+            predicate="located_in",
+            object_entity_id=state.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=0.98),
+        )
+        rel2 = Relationship(
+            subject_entity_id=state.id,
+            predicate="located_in",
+            object_entity_id=country.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=0.99),
+        )
+        self.repo.record_relationship(rel1)
+        self.repo.record_relationship(rel2)
+
+        # 1. Query relationships by predicate
+        rels = self.repo.relationships(subject_entity_id=city.id, predicate="located_in")
+        self.assertEqual(len(rels), 1)
+        self.assertEqual(rels[0]["predicate"], "located_in")
+        self.assertEqual(rels[0]["object_name"], state.canonical_name)
+        self.assertEqual(rels[0]["evidence_locator"], ev.locator)
+
+        # 2. Query 1-hop entity graph
+        graph_1 = self.repo.entity_graph(city.id, depth=1)
+        self.assertEqual(graph_1["node_count"], 2)  # city, state
+        self.assertEqual(graph_1["edge_count"], 1)
+
+        # 3. Query 2-hop entity graph -> returns city, state, and country
+        graph_2 = self.repo.entity_graph(city.id, depth=2)
+        self.assertEqual(graph_2["node_count"], 3)  # city, state, country
+        self.assertEqual(graph_2["edge_count"], 2)
+        node_names = {n["canonical_name"] for n in graph_2["nodes"]}
+        self.assertIn(city.canonical_name, node_names)
+        self.assertIn(state.canonical_name, node_names)
+        self.assertIn(country.canonical_name, node_names)
+
+    def test_fastapi_spatial_temporal_and_relationship_endpoints(self) -> None:
+        from app.main import (
+            observations as api_observations,
+            containing_geometries as api_containing_geometries,
+            spatial_intersections as api_spatial_intersections,
+            relationships as api_relationships,
+            create_relationship as api_create_relationship,
+            entity_graph as api_entity_graph,
+        )
+
+        # 1. api_observations with valid_at
+        data = api_observations(measure="population.total", valid_at=datetime(2023, 6, 15, tzinfo=UTC))
+        self.assertIsInstance(data, list)
+
+        # 2. api_containing_geometries
+        containing = api_containing_geometries(longitude=77.2090, latitude=28.6139)
+        self.assertGreaterEqual(len(containing), 1)
+        self.assertTrue(any(c["canonical_name"] == "India" for c in containing))
+
+        # 3. api_relationships
+        rels = api_relationships(predicate="located_in")
+        self.assertIsInstance(rels, list)
+        self.assertGreaterEqual(len(rels), 1)
+
+        # 4. api_create_relationship
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"api-rel-src-{uuid4()}", name="API Rel Source", publisher="Rel Authority", refresh_policy="manual")
+        ev = Evidence(source_id=source.id, locator="https://example.test/api-rel", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="rel-v1")
+        e_a = Entity(kind="place", canonical_name=f"EntityA-{uuid4()}", confidence=Confidence(value=1.0))
+        e_b = Entity(kind="place", canonical_name=f"EntityB-{uuid4()}", confidence=Confidence(value=1.0))
+        g_a = Geometry(entity_id=e_a.id, geojson={"type": "Point", "coordinates": [0.0, 0.0]}, geometry_kind="point", source_id=source.id, confidence=Confidence(value=1.0))
+        g_b = Geometry(entity_id=e_b.id, geojson={"type": "Point", "coordinates": [0.1, 0.1]}, geometry_kind="point", source_id=source.id, confidence=Confidence(value=1.0))
+        self.repo.ingest(WorldBundle(source=source, entity=e_a, evidence=ev, provenance=prov, geometry=g_a))
+        self.repo.ingest(WorldBundle(source=source, entity=e_b, evidence=ev, provenance=prov, geometry=g_b))
+
+        new_rel = Relationship(
+            subject_entity_id=e_a.id,
+            predicate="connected_to",
+            object_entity_id=e_b.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=0.95),
+            attributes={"line_type": "optical_fiber"},
+        )
+        rel_id = api_create_relationship(new_rel)
+        self.assertEqual(rel_id, new_rel.id)
+
+        # 5. api_entity_graph
+        graph = api_entity_graph(entity_id=e_a.id, depth=1)
+        self.assertEqual(graph["node_count"], 2)
+        self.assertEqual(graph["edge_count"], 1)
+        self.assertEqual(graph["edges"][0]["predicate"], "connected_to")
 
 
 

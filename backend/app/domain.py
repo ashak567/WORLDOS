@@ -87,6 +87,7 @@ class Geometry(BaseModel):
     geojson: dict[str, Any]
     geometry_kind: str
     source_id: UUID
+    evidence_id: UUID | None = None
     confidence: Confidence
     valid_during: TimeInterval | None = None
 
@@ -150,6 +151,21 @@ class Event(BaseModel):
     attributes: dict[str, Any] = Field(default_factory=dict)
 
 
+VALID_PREDICATES: set[str] = {
+    "located_in",
+    "connected_to",
+    "near",
+    "affects",
+    "observed_by",
+    "occurred_in",
+    "adjacent_to",
+    "belongs_to",
+    "part_of",
+    "intersects",
+    "covers",
+}
+
+
 class Relationship(BaseModel):
     id: UUID = Field(default_factory=uuid4)
     subject_entity_id: UUID
@@ -159,6 +175,12 @@ class Relationship(BaseModel):
     evidence_id: UUID
     confidence: Confidence
     attributes: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_distinct_entities(self) -> "Relationship":
+        if self.subject_entity_id == self.object_entity_id:
+            raise ValueError("subject_entity_id and object_entity_id must be distinct")
+        return self
 
 
 class WorldBundle(BaseModel):
