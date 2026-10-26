@@ -134,17 +134,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Multi-predicate path-finding and cycles detection.
 
 ### 10. Context Engine
-- **Purpose**: Assemble a coherent, evidence-backed spatio-temporal slice (entities, observations, events, relationships) for a given scope.
-- **Status**: `PARTIALLY_IMPLEMENTED`
-- **Inputs**: `entity_id`, bounding box, or time window.
-- **Outputs**: Aggregated JSON world context bundle citing all evidence IDs.
-- **Dependencies**: PostGIS, `WorldRepository`.
-- **Persistence**: In-memory ephemeral view over relational tables.
-- **Interface / API**: `GET /api/v1/context?entity_id=...` in `backend/app/main.py`.
-- **Evidence Requirements**: Context must preserve evidence references for every included claim.
-- **Test Contract**: Context endpoint verified in `test_container_integration.py`.
-- **Current Implementation**: Operational for entity-centric context slices.
-- **Next Milestone**: Expand context assembly to multi-entity bounding box and temporal replay scopes.
+- **Purpose**: Assemble a coherent, evidence-backed spatio-temporal slice (entities, observations, events, geometries, relationships, claims, evidence) for a given scope.
+- **Status**: `VERIFIED`
+- **Inputs**: Bounding box coordinates (`min_lon`, `min_lat`, `max_lon`, `max_lat`), temporal scope (`valid_at`, `start`, `end`, `precision`), `entity_ids`, `entity_kind`, or single `entity_id`.
+- **Outputs**: Typed `WorldContext` bundle composing entities, geometries, observations, events, relationships, claims, and deduplicated `EvidenceCitation` records.
+- **Dependencies**: PostGIS 3.4 (`ST_MakeEnvelope`, `ST_Intersects`), PostgreSQL b-tree/GiST indexes, `WorldRepository`.
+- **Persistence**: In-memory ephemeral view over authoritative relational tables.
+- **Interface / API**: `WorldRepository.scoped_context()`, `WorldRepository.context()`, `GET /context`, `GET /entities/{entity_id}/context`.
+- **Evidence Requirements**: Every included observation, event, geometry, relationship, and claim must retain its underlying evidence ID and locator; deduplicated citations must cite source slug, name, and retrieval timestamp.
+- **Test Contract**: Verified in `test_world_bank_vertical_slice.py` (bounding box validation, temporal scope validation, model assembly) and `test_container_integration.py` (spatial bounding box filtering, temporal precision/point-in-time/interval overlap, evidence deduplication, empty scope, API error handling, and backward compatibility).
+- **Current Implementation**: Fully operational in container stack for multi-entity spatial and temporal query slices.
+- **Next Milestone**: Automated context caching with change-data-capture (CDC) invalidation and temporal replay diff streams.
 
 ### 11. Deterministic Analytics Engine
 - **Purpose**: High-performance columnar metrics, growth rates, and time-series rollups over Parquet snapshots.

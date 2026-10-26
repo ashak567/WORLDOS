@@ -247,4 +247,69 @@ class EntityResolutionReview(BaseModel):
     metadata: dict[str, Any] = Field(default_factory=dict)
 
 
+class BoundingBox(BaseModel):
+    min_longitude: float = Field(ge=-180, le=180)
+    min_latitude: float = Field(ge=-90, le=90)
+    max_longitude: float = Field(ge=-180, le=180)
+    max_latitude: float = Field(ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "BoundingBox":
+        if self.min_longitude > self.max_longitude:
+            raise ValueError("min_longitude must not exceed max_longitude")
+        if self.min_latitude > self.max_latitude:
+            raise ValueError("min_latitude must not exceed max_latitude")
+        return self
+
+
+class SpatialScope(BaseModel):
+    bounding_box: BoundingBox | None = None
+    filter_type: Literal["intersects", "contains", "within"] = "intersects"
+
+
+class TemporalScope(BaseModel):
+    valid_at: datetime | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    precision: Literal["instant", "day", "month", "year", "unknown"] | None = None
+
+    @model_validator(mode="after")
+    def validate_interval(self) -> "TemporalScope":
+        if self.starts_at and self.ends_at and self.starts_at > self.ends_at:
+            raise ValueError("starts_at must not exceed ends_at")
+        return self
+
+
+class ContextQueryScope(BaseModel):
+    spatial: SpatialScope | None = None
+    temporal: TemporalScope | None = None
+    entity_ids: list[UUID] | None = None
+    entity_kind: str | None = None
+    limit: int = 100
+
+
+class EvidenceCitation(BaseModel):
+    evidence_id: UUID
+    source_id: UUID
+    source_slug: str
+    source_name: str
+    locator: str
+    retrieved_at: datetime
+    content_hash: str | None = None
+    excerpt: str | None = None
+
+
+class WorldContext(BaseModel):
+    query_scope: ContextQueryScope
+    entities: list[dict[str, Any]] = Field(default_factory=list)
+    observations: list[dict[str, Any]] = Field(default_factory=list)
+    events: list[dict[str, Any]] = Field(default_factory=list)
+    geometries: list[dict[str, Any]] = Field(default_factory=list)
+    relationships: list[dict[str, Any]] = Field(default_factory=list)
+    claims: list[dict[str, Any]] = Field(default_factory=list)
+    evidence: list[EvidenceCitation] = Field(default_factory=list)
+    assumptions_or_limitations: list[str] = Field(default_factory=list)
+
+
+
 

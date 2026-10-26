@@ -43,7 +43,7 @@ The first adapter is World Bank indicator `SP.POP.TOTL`. It uses the publisher's
 
 - **Temporal engine:** bi-temporal and valid-time modeling with precision tiers (`instant`, `day`, `month`, `year`). Supports point-in-time (`valid_at`), interval overlap (`[start, end]`), and temporal precision queries backed by GiST indexing on `geometries(valid_during)` (`tstzrange`) and composite B-tree indexing on `time_intervals(starts_at, ends_at)`.
 - **Spatial engine:** PostGIS `ST_DWithin`, `ST_Contains`, and `ST_Intersects` run against evidence-backed geometry with direct `evidence_id` foreign key lineage. Point-in-polygon containment (`/spatial/containing`) and topological intersection (`/spatial/intersections/{id}`) preserve geometry kind, confidence, source, and evidence locators.
-- **Context engine:** returns one entity with observations, relationships, claims, and their evidence locators.
+- **Context engine:** assembles coherent, evidence-backed spatio-temporal slices across multiple entities within defined geographic bounding boxes (`ST_MakeEnvelope`) and temporal windows (`valid_at`, intervals). Returns typed `WorldContext` models composing entities, geometries, observations, events, relationships, claims, and deduplicated evidence citations while maintaining backward compatibility with single-entity context queries (`/entities/{id}/context`).
 - **Knowledge graph:** directed entity-to-entity and event-to-entity edges in the `relationships` table with explicit typed predicates (`located_in`, `connected_to`, `near`, `affects`, `observed_by`, etc.), temporal intervals, and evidence lineage. Executes deterministic 1-hop and 2-hop neighborhood traversals (`/relationships/graph/{id}`) directly on PostGIS without a separate graph database.
 - **Deterministic analytics:** window functions compute population changes from observations. DuckDB is available only for a versioned analytical export.
 
@@ -71,7 +71,7 @@ Entity reconciliation follows a strict conservative rule: entities are auto-merg
 
 ## Operational path
 
-`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023`, `POST /ingest/natural-earth/country/IND`, and `POST /ingest/usgs/earthquake/us6000m0xm`; countries reconcile through ISO-3 while earthquakes resolve through USGS event IDs and spatial containment. Use `/observations`, `/events`, `/geometries`, `/spatial/entities`, `/entities/{id}/context`, `/claims`, and `/analytics/population/{id}/growth`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
+`docker compose up --build` starts PostGIS and FastAPI. Call `POST /ingest/world-bank/population/IND?year=2023`, `POST /ingest/natural-earth/country/IND`, and `POST /ingest/usgs/earthquake/us6000m0xm`; countries reconcile through ISO-3 while earthquakes resolve through USGS event IDs and spatial containment. Use `/observations`, `/events`, `/geometries`, `/spatial/entities`, `/spatial/containing`, `/relationships`, `/context`, `/entities/{id}/context`, `/claims`, and `/analytics/population/{id}/growth`. The React/Cesium client reads the deterministic data and displays the fetched geometry with its evidence-backed context.
 
 ## Decisions and consequences
 

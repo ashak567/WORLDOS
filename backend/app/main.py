@@ -6,8 +6,24 @@ from uuid import UUID, uuid5
 from fastapi import FastAPI, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from .domain import (Claim, Confidence, Entity, EntityIdentifier, Event, Evidence, Geometry, Observation, Provenance,
-                     Relationship, Source, TimeInterval, TruthClass, WorldBundle)
+from .domain import (
+    BoundingBox,
+    Claim,
+    Confidence,
+    Entity,
+    EntityIdentifier,
+    Event,
+    Evidence,
+    Geometry,
+    Observation,
+    Provenance,
+    Relationship,
+    Source,
+    TimeInterval,
+    TruthClass,
+    WorldBundle,
+    WorldContext,
+)
 from .analytics import DuckDbSpatialAnalytics
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
@@ -484,6 +500,104 @@ def context(entity_id: UUID):
     if not result:
         raise HTTPException(status_code=404, detail="entity not found")
     return result
+
+
+def _clean_param(val: Any, default: Any = None) -> Any:
+    if hasattr(val, "default"):
+        return val.default
+    return val if val is not None else default
+
+
+@app.get("/context", response_model=WorldContext)
+def get_world_context(
+    min_lon: float | None = Query(default=None, ge=-180, le=180),
+    min_lat: float | None = Query(default=None, ge=-90, le=90),
+    max_lon: float | None = Query(default=None, ge=-180, le=180),
+    max_lat: float | None = Query(default=None, ge=-90, le=90),
+    valid_at: datetime | None = None,
+    start: datetime | None = None,
+    end: datetime | None = None,
+    precision: str | None = None,
+    entity_id: UUID | None = None,
+    entity_ids: str | None = Query(default=None, description="Comma-separated or individual entity UUIDs"),
+    entity_kind: str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+):
+    min_lon_v = _clean_param(min_lon)
+    min_lat_v = _clean_param(min_lat)
+    max_lon_v = _clean_param(max_lon)
+    max_lat_v = _clean_param(max_lat)
+    bbox_vals = [min_lon_v, min_lat_v, max_lon_v, max_lat_v]
+    provided_count = sum(1 for v in bbox_vals if v is not None)
+    if 0 < provided_count < 4:
+        raise HTTPException(
+            status_code=400,
+            detail="Bounding box requires all four coordinates: min_lon, min_lat, max_lon, max_lat",
+        )
+    bbox: BoundingBox | None = None
+    if provided_count == 4:
+        min_lon_f, min_lat_f, max_lon_f, max_lat_f = float(min_lon_v), float(min_lat_v), float(max_lon_v), float(max_lat_v)
+        if min_lon_f > max_lon_f:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid bounding box: min_lon must be less than or equal to max_lon",
+            )
+        if min_lat_f > max_lat_f:
+            raise HTTPException(
+                status_code=400,
+                detail="Invalid bounding box: min_lat must be less than or equal to max_lat",
+            )
+        bbox = BoundingBox(
+            min_longitude=min_lon_f,
+            min_latitude=min_lat_f,
+            max_longitude=max_lon_f,
+            max_latitude=max_lat_f,
+        )
+
+    start_v = _clean_param(start)
+    end_v = _clean_param(end)
+    valid_at_v = _clean_param(valid_at)
+    precision_v = _clean_param(precision)
+
+    if start_v and end_v and start_v > end_v:
+        raise HTTPException(
+            status_code=400,
+            detail="Invalid temporal scope: start must be less than or equal to end",
+        )
+    if precision_v and precision_v not in {"instant", "day", "month", "year", "unknown"}:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Invalid precision '{precision_v}'. Must be one of instant, day, month, year, unknown",
+        )
+
+    e_ids: list[UUID] = []
+    entity_id_v = _clean_param(entity_id)
+    if entity_id_v:
+        e_ids.append(UUID(str(entity_id_v)))
+    entity_ids_v = _clean_param(entity_ids)
+    if entity_ids_v:
+        for raw_id in str(entity_ids_v).split(","):
+            raw_clean = raw_id.strip()
+            if raw_clean:
+                try:
+                    e_ids.append(UUID(raw_clean))
+                except ValueError:
+                    raise HTTPException(status_code=400, detail=f"Invalid entity UUID: '{raw_clean}'")
+
+    limit_v = _clean_param(limit, 100)
+    entity_kind_v = _clean_param(entity_kind)
+
+    return WorldRepository().scoped_context(
+        bbox=bbox,
+        valid_at=valid_at_v,
+        start=start_v,
+        end=end_v,
+        precision=precision_v,
+        entity_ids=e_ids if e_ids else None,
+        entity_kind=entity_kind_v,
+        limit=limit_v,
+    )
+
 
 
 @app.get("/spatial/entities")

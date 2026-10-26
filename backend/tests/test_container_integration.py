@@ -11,8 +11,8 @@ import psycopg
 from psycopg.rows import dict_row
 
 from app.analytics import DuckDbSpatialAnalytics
-from app.domain import (Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, Source,
-                        TimeInterval, TruthClass, WorldBundle)
+from app.domain import (BoundingBox, Claim, Confidence, Entity, Evidence, Geometry, Observation, Provenance, Relationship, Source,
+                        TimeInterval, TruthClass, WorldBundle, WorldContext)
 from app.export import export_observations
 from app.ingestion.natural_earth import parse_country_boundary
 from app.ingestion.usgs import parse_earthquake_feature
@@ -555,6 +555,226 @@ class ContainerIntegrationTests(unittest.TestCase):
         self.assertEqual(graph["node_count"], 2)
         self.assertEqual(graph["edge_count"], 1)
         self.assertEqual(graph["edges"][0]["predicate"], "connected_to")
+
+    def test_context_engine_spatial_bounding_box_filtering(self) -> None:
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"bbox-src-{uuid4()}", name="Bbox Source", publisher="Bbox Authority", refresh_policy="manual")
+        ev = Evidence(source_id=source.id, locator="https://example.test/bbox", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="bbox-v1")
+
+        # Entity 1: Inside India bbox [68..97, 8..35]
+        e_inside = Entity(kind="place", canonical_name=f"IndiaCity-{uuid4()}", confidence=Confidence(value=1.0))
+        g_inside = Geometry(
+            entity_id=e_inside.id,
+            geojson={"type": "Point", "coordinates": [77.2090, 28.6139]},
+            geometry_kind="city_point",
+            source_id=source.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=1.0),
+        )
+        self.repo.ingest(WorldBundle(source=source, entity=e_inside, evidence=ev, provenance=prov, geometry=g_inside))
+
+        # Entity 2: Far outside India bbox (e.g., Tokyo, Japan)
+        e_outside = Entity(kind="place", canonical_name=f"JapanCity-{uuid4()}", confidence=Confidence(value=1.0))
+        g_outside = Geometry(
+            entity_id=e_outside.id,
+            geojson={"type": "Point", "coordinates": [139.6917, 35.6895]},
+            geometry_kind="city_point",
+            source_id=source.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=1.0),
+        )
+        self.repo.ingest(WorldBundle(source=source, entity=e_outside, evidence=ev, provenance=prov, geometry=g_outside))
+
+        # Query bounded to India [68..97, 8..35]
+        bbox = BoundingBox(min_longitude=68.0, min_latitude=8.0, max_longitude=97.0, max_latitude=35.0)
+        context = self.repo.scoped_context(bbox=bbox)
+
+        self.assertIsInstance(context, WorldContext)
+        returned_entity_ids = {e["id"] for e in context.entities}
+        self.assertIn(e_inside.id, returned_entity_ids)
+        self.assertNotIn(e_outside.id, returned_entity_ids)
+
+        # Geometries must preserve kind
+        returned_geom_kinds = {g["geometry_kind"] for g in context.geometries if g["entity_id"] == e_inside.id}
+        self.assertIn("city_point", returned_geom_kinds)
+
+        # Query scope reflects actual bounding box
+        self.assertIsNotNone(context.query_scope.spatial)
+        self.assertEqual(context.query_scope.spatial.bounding_box.min_longitude, 68.0)
+        self.assertEqual(context.query_scope.spatial.bounding_box.max_latitude, 35.0)
+
+    def test_context_engine_temporal_filtering_and_precision(self) -> None:
+        # Ingest India 2023 observation
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"time-src-{uuid4()}", name="Time Source", publisher="Time Authority", refresh_policy="manual")
+        ev = Evidence(source_id=source.id, locator="https://example.test/time", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="time-v1")
+        entity = Entity(kind="place", canonical_name=f"TimeEntity-{uuid4()}", confidence=Confidence(value=1.0))
+
+        t2023 = TimeInterval(
+            starts_at=datetime(2023, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2023, 12, 31, 23, 59, 59, tzinfo=UTC),
+            precision="year",
+        )
+        t2010 = TimeInterval(
+            starts_at=datetime(2010, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2010, 12, 31, 23, 59, 59, tzinfo=UTC),
+            precision="year",
+        )
+        obs2023 = Observation(
+            subject_entity_id=entity.id,
+            measure="metric.alpha",
+            value=2023.0,
+            unit="points",
+            time_interval_id=t2023.id,
+            evidence_id=ev.id,
+            provenance_id=prov.id,
+            confidence=Confidence(value=1.0),
+        )
+        obs2010 = Observation(
+            subject_entity_id=entity.id,
+            measure="metric.alpha",
+            value=2010.0,
+            unit="points",
+            time_interval_id=t2010.id,
+            evidence_id=ev.id,
+            provenance_id=prov.id,
+            confidence=Confidence(value=1.0),
+        )
+        self.repo.ingest(WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, time_interval=t2023, observation=obs2023))
+        self.repo.ingest(WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, time_interval=t2010, observation=obs2010))
+
+        # Point-in-time: 2023-06-15 must match 2023 obs and exclude 2010 obs
+        ctx_point = self.repo.scoped_context(
+            entity_ids=[entity.id],
+            valid_at=datetime(2023, 6, 15, tzinfo=UTC),
+        )
+        obs_vals = [o["value"] for o in ctx_point.observations if o["subject_entity_id"] == entity.id]
+        self.assertIn(2023.0, obs_vals)
+        self.assertNotIn(2010.0, obs_vals)
+        self.assertEqual(ctx_point.observations[0]["precision"], "year")
+
+        # Interval overlap: [2009, 2011] must match 2010 obs and exclude 2023 obs
+        ctx_range = self.repo.scoped_context(
+            entity_ids=[entity.id],
+            start=datetime(2009, 1, 1, tzinfo=UTC),
+            end=datetime(2011, 1, 1, tzinfo=UTC),
+        )
+        range_vals = [o["value"] for o in ctx_range.observations if o["subject_entity_id"] == entity.id]
+        self.assertIn(2010.0, range_vals)
+        self.assertNotIn(2023.0, range_vals)
+
+    def test_context_engine_evidence_lineage_and_deduplication(self) -> None:
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        source = Source(slug=f"ev-dedup-src-{uuid4()}", name="Ev Dedup Source", publisher="Ev Authority", refresh_policy="manual")
+        ev = Evidence(source_id=source.id, locator="https://example.test/ev-dedup", retrieved_at=now)
+        prov = Provenance(evidence_id=ev.id, pipeline_version="dedup-v1")
+        entity = Entity(kind="place", canonical_name=f"DedupEntity-{uuid4()}", confidence=Confidence(value=1.0))
+        geom = Geometry(
+            entity_id=entity.id,
+            geojson={"type": "Point", "coordinates": [10.0, 10.0]},
+            geometry_kind="point",
+            source_id=source.id,
+            evidence_id=ev.id,
+            confidence=Confidence(value=1.0),
+        )
+        t = TimeInterval(starts_at=now, precision="instant")
+        obs1 = Observation(
+            subject_entity_id=entity.id,
+            measure="metric.one",
+            value=1.0,
+            unit="u",
+            time_interval_id=t.id,
+            evidence_id=ev.id,
+            provenance_id=prov.id,
+            confidence=Confidence(value=1.0),
+        )
+        obs2 = Observation(
+            subject_entity_id=entity.id,
+            measure="metric.two",
+            value=2.0,
+            unit="u",
+            time_interval_id=t.id,
+            evidence_id=ev.id,
+            provenance_id=prov.id,
+            confidence=Confidence(value=1.0),
+        )
+        self.repo.ingest(WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, geometry=geom))
+        self.repo.ingest(WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, time_interval=t, observation=obs1))
+        self.repo.ingest(WorldBundle(source=source, entity=entity, evidence=ev, provenance=prov, time_interval=t, observation=obs2))
+
+        ctx = self.repo.scoped_context(entity_ids=[entity.id])
+
+        # Verify evidence citations are deduplicated
+        evidence_ids = [c.evidence_id for c in ctx.evidence]
+        self.assertEqual(len(evidence_ids), len(set(evidence_ids)), "Evidence citations must not contain duplicates")
+        self.assertIn(ev.id, evidence_ids)
+
+        # Verify every observation has its evidence locator
+        for o in ctx.observations:
+            if o["subject_entity_id"] == entity.id:
+                self.assertIsNotNone(o["evidence_locator"])
+                self.assertEqual(o["evidence_locator"], "https://example.test/ev-dedup")
+
+        # Verify entity deduplication
+        ret_eids = [e["id"] for e in ctx.entities if e["id"] == entity.id]
+        self.assertEqual(len(ret_eids), 1, "Entity must appear exactly once in entities list")
+
+    def test_context_engine_empty_scope_behavior(self) -> None:
+        # Bbox in remote Antarctica ocean with no data
+        empty_bbox = BoundingBox(min_longitude=-179.0, min_latitude=-89.0, max_longitude=-178.0, max_latitude=-88.0)
+        ctx = self.repo.scoped_context(bbox=empty_bbox)
+
+        self.assertIsInstance(ctx, WorldContext)
+        self.assertEqual(len(ctx.entities), 0)
+        self.assertEqual(len(ctx.observations), 0)
+        self.assertEqual(len(ctx.events), 0)
+        self.assertEqual(len(ctx.geometries), 0)
+        self.assertEqual(len(ctx.relationships), 0)
+        self.assertEqual(len(ctx.claims), 0)
+        self.assertEqual(len(ctx.evidence), 0)
+        self.assertTrue(any("No entities matched" in a for a in ctx.assumptions_or_limitations))
+
+    def test_context_engine_api_and_backward_compatibility(self) -> None:
+        from fastapi import HTTPException
+        from app.main import context as api_single_context, get_world_context as api_scoped_context
+
+        # 1. API Scoped Context with valid bbox
+        ctx = api_scoped_context(min_lon=68.0, min_lat=8.0, max_lon=97.0, max_lat=35.0, limit=50)
+        self.assertIsInstance(ctx, WorldContext)
+        self.assertGreaterEqual(len(ctx.entities), 1)
+
+        # 2. API rejects partial bbox (only 2 coordinates given)
+        with self.assertRaises(HTTPException) as cm:
+            api_scoped_context(min_lon=68.0, min_lat=8.0)
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("Bounding box requires all four coordinates", cm.exception.detail)
+
+        # 3. API rejects inverted bbox (min_lon > max_lon)
+        with self.assertRaises(HTTPException) as cm:
+            api_scoped_context(min_lon=100.0, min_lat=10.0, max_lon=50.0, max_lat=20.0)
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("min_lon must be less than or equal to max_lon", cm.exception.detail)
+
+        # 4. API rejects inverted temporal interval (start > end)
+        with self.assertRaises(HTTPException) as cm:
+            api_scoped_context(
+                start=datetime(2025, 1, 1, tzinfo=UTC),
+                end=datetime(2020, 1, 1, tzinfo=UTC),
+            )
+        self.assertEqual(cm.exception.status_code, 400)
+        self.assertIn("start must be less than or equal to end", cm.exception.detail)
+
+        # 5. Backward compatibility: existing GET /entities/{entity_id}/context returns entity dict
+        india_entity = ctx.entities[0]
+        single_ctx = api_single_context(entity_id=india_entity["id"])
+        self.assertIsInstance(single_ctx, dict)
+        self.assertEqual(single_ctx["id"], india_entity["id"])
+        self.assertIn("observations", single_ctx)
+        self.assertIn("relationships", single_ctx)
+        self.assertIn("claims", single_ctx)
+
 
 
 

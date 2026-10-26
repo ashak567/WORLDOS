@@ -196,3 +196,96 @@ class WorldBankVerticalSliceTests(unittest.TestCase):
                 confidence=Confidence(value=1.0),
             )
 
+    def test_bounding_box_validation(self) -> None:
+        from pydantic import ValidationError
+        from app.domain import BoundingBox
+
+        # Valid bounding box
+        bbox = BoundingBox(
+            min_longitude=68.0,
+            min_latitude=8.0,
+            max_longitude=97.0,
+            max_latitude=35.0,
+        )
+        self.assertEqual(bbox.min_longitude, 68.0)
+        self.assertEqual(bbox.max_latitude, 35.0)
+
+        # Inverted longitude (min > max)
+        with self.assertRaises(ValidationError):
+            BoundingBox(
+                min_longitude=100.0,
+                min_latitude=10.0,
+                max_longitude=50.0,
+                max_latitude=20.0,
+            )
+
+        # Inverted latitude (min > max)
+        with self.assertRaises(ValidationError):
+            BoundingBox(
+                min_longitude=10.0,
+                min_latitude=50.0,
+                max_longitude=20.0,
+                max_latitude=10.0,
+            )
+
+        # Coordinate out of range
+        with self.assertRaises(ValidationError):
+            BoundingBox(
+                min_longitude=-190.0,
+                min_latitude=0.0,
+                max_longitude=0.0,
+                max_latitude=0.0,
+            )
+
+    def test_temporal_scope_and_world_context_models(self) -> None:
+        from datetime import UTC, datetime
+        from uuid import uuid4
+        from pydantic import ValidationError
+        from app.domain import (
+            BoundingBox,
+            ContextQueryScope,
+            EvidenceCitation,
+            SpatialScope,
+            TemporalScope,
+            WorldContext,
+        )
+
+        t1 = datetime(2023, 1, 1, tzinfo=UTC)
+        t2 = datetime(2023, 12, 31, tzinfo=UTC)
+
+        # Valid temporal scope
+        ts = TemporalScope(starts_at=t1, ends_at=t2, precision="year")
+        self.assertEqual(ts.precision, "year")
+
+        # Invalid interval (starts_at > ends_at)
+        with self.assertRaises(ValidationError):
+            TemporalScope(starts_at=t2, ends_at=t1)
+
+        # Valid WorldContext assembly
+        bbox = BoundingBox(min_longitude=0.0, min_latitude=0.0, max_longitude=10.0, max_latitude=10.0)
+        scope = ContextQueryScope(
+            spatial=SpatialScope(bounding_box=bbox, filter_type="intersects"),
+            temporal=ts,
+            limit=50,
+        )
+        ev_id = uuid4()
+        citation = EvidenceCitation(
+            evidence_id=ev_id,
+            source_id=uuid4(),
+            source_slug="test-source",
+            source_name="Test Source",
+            locator="https://example.test/evidence",
+            retrieved_at=t1,
+        )
+        ctx = WorldContext(
+            query_scope=scope,
+            entities=[{"id": str(uuid4()), "canonical_name": "Test Entity"}],
+            evidence=[citation],
+            assumptions_or_limitations=["Bounded by test bbox"],
+        )
+        self.assertEqual(len(ctx.entities), 1)
+        self.assertEqual(len(ctx.evidence), 1)
+        self.assertEqual(ctx.evidence[0].evidence_id, ev_id)
+        self.assertEqual(ctx.query_scope.spatial.bounding_box.max_longitude, 10.0)
+
+

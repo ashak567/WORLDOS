@@ -5,13 +5,24 @@ import json
 import os
 from contextlib import contextmanager
 from datetime import datetime
+from decimal import Decimal
 from typing import Any, Iterator
 from uuid import UUID, uuid4
 
 import psycopg
 from psycopg.rows import dict_row
 
-from .domain import Claim, Relationship, WorldBundle
+from .domain import (
+    BoundingBox,
+    Claim,
+    ContextQueryScope,
+    EvidenceCitation,
+    Relationship,
+    SpatialScope,
+    TemporalScope,
+    WorldBundle,
+    WorldContext,
+)
 
 
 def _extract_int(val: Any, default: int = 100) -> int:
@@ -21,6 +32,18 @@ def _extract_int(val: Any, default: int = 100) -> int:
         return int(val)
     except (TypeError, ValueError):
         return default
+
+
+def _clean_record(d: dict[str, Any]) -> dict[str, Any]:
+    res = {}
+    for k, v in d.items():
+        if isinstance(v, Decimal):
+            res[k] = float(v)
+        elif hasattr(v, "lower") and hasattr(v, "upper") and not isinstance(v, (str, bytes)):
+            res[k] = str(v)
+        else:
+            res[k] = v
+    return res
 
 
 class WorldRepository:
@@ -54,34 +77,39 @@ class WorldRepository:
                     entity_id = match["entity_id"]
                     break
             if entity_id is None:
-                cur.execute(
-                    """INSERT INTO entities (id,kind,canonical_name,source_id,source_key,attributes,confidence)
-                       VALUES (%s,%s,%s,%s,%s,%s,%s)
-                       ON CONFLICT (source_id,source_key) DO UPDATE SET canonical_name=EXCLUDED.canonical_name,
-                           attributes=EXCLUDED.attributes, confidence=EXCLUDED.confidence RETURNING id""",
-                    (b.entity.id, b.entity.kind, b.entity.canonical_name, source_id, b.entity.source_key,
-                     json.dumps(b.entity.attributes), b.entity.confidence.value),
-                )
-                entity_id = cur.fetchone()["id"]
-                cur.execute(
-                    "SELECT id, canonical_name FROM entities WHERE LOWER(canonical_name) = LOWER(%s) AND id <> %s LIMIT 1",
-                    (b.entity.canonical_name, entity_id),
-                )
-                name_match = cur.fetchone()
-                if name_match:
+                cur.execute("SELECT id FROM entities WHERE id = %s", (b.entity.id,))
+                existing_entity = cur.fetchone()
+                if existing_entity:
+                    entity_id = existing_entity["id"]
+                else:
                     cur.execute(
-                        """INSERT INTO entity_resolution_reviews
-                           (candidate_entity_id, target_entity_id, match_reason, confidence, status, metadata)
-                           VALUES (%s, %s, %s, %s, 'pending', %s)
-                           ON CONFLICT (candidate_entity_id, target_entity_id, match_reason) DO NOTHING""",
-                        (
-                            entity_id,
-                            name_match["id"],
-                            "normalized_name_exact_match_unconfirmed",
-                            0.70,
-                            json.dumps({"candidate_source": b.source.slug, "target_name": name_match["canonical_name"]}),
-                        ),
+                        """INSERT INTO entities (id,kind,canonical_name,source_id,source_key,attributes,confidence)
+                           VALUES (%s,%s,%s,%s,%s,%s,%s)
+                           ON CONFLICT (source_id,source_key) DO UPDATE SET canonical_name=EXCLUDED.canonical_name,
+                               attributes=EXCLUDED.attributes, confidence=EXCLUDED.confidence RETURNING id""",
+                        (b.entity.id, b.entity.kind, b.entity.canonical_name, source_id, b.entity.source_key,
+                         json.dumps(b.entity.attributes), b.entity.confidence.value),
                     )
+                    entity_id = cur.fetchone()["id"]
+                    cur.execute(
+                        "SELECT id, canonical_name FROM entities WHERE LOWER(canonical_name) = LOWER(%s) AND id <> %s LIMIT 1",
+                        (b.entity.canonical_name, entity_id),
+                    )
+                    name_match = cur.fetchone()
+                    if name_match:
+                        cur.execute(
+                            """INSERT INTO entity_resolution_reviews
+                               (candidate_entity_id, target_entity_id, match_reason, confidence, status, metadata)
+                               VALUES (%s, %s, %s, %s, 'pending', %s)
+                               ON CONFLICT (candidate_entity_id, target_entity_id, match_reason) DO NOTHING""",
+                            (
+                                entity_id,
+                                name_match["id"],
+                                "normalized_name_exact_match_unconfirmed",
+                                0.70,
+                                json.dumps({"candidate_source": b.source.slug, "target_name": name_match["canonical_name"]}),
+                            ),
+                        )
             for identifier in b.identifiers:
                 cur.execute(
                     """INSERT INTO entity_identifiers (entity_id,source_id,source_key,scheme,value,confidence)
@@ -293,6 +321,379 @@ class WorldRepository:
                            ORDER BY created_at DESC LIMIT 100""", (entity_id,))
             entity["claims"] = list(cur.fetchall())
             return entity
+
+    def scoped_context(
+        self,
+        bbox: BoundingBox | None = None,
+        valid_at: datetime | None = None,
+        start: datetime | None = None,
+        end: datetime | None = None,
+        precision: str | None = None,
+        entity_ids: list[UUID] | None = None,
+        entity_kind: str | None = None,
+        limit: int = 100,
+    ) -> WorldContext:
+        limit = _extract_int(limit, 100)
+        assumptions: list[str] = [
+            "Deterministic world context assembled directly from authoritative PostGIS operational tables",
+            "Observed, derived, and inferred assertions retain explicit truth classes and evidence citations",
+        ]
+        if bbox:
+            assumptions.append(
+                f"Spatially scoped to bounding box [{bbox.min_longitude}, {bbox.min_latitude}, {bbox.max_longitude}, {bbox.max_latitude}]"
+            )
+        if valid_at:
+            assumptions.append(f"Temporally scoped to point-in-time valid_at={valid_at.isoformat()}")
+        elif start or end:
+            s_str = start.isoformat() if start else "earliest"
+            e_str = end.isoformat() if end else "latest"
+            assumptions.append(f"Temporally scoped to interval [{s_str}, {e_str}]")
+        if precision:
+            assumptions.append(f"Constrained to temporal precision={precision}")
+        assumptions.append(f"Slice bounded to maximum {limit} entities and factual records")
+
+        with self._connection() as conn, conn.cursor() as cur:
+            matched_geoms: dict[UUID, dict[str, Any]] = {}
+            target_entity_ids: set[UUID] = set()
+
+            if bbox:
+                g_clauses = ["ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))"]
+                g_values: list[Any] = [bbox.min_longitude, bbox.min_latitude, bbox.max_longitude, bbox.max_latitude]
+                if valid_at:
+                    g_clauses.append("(g.valid_during IS NULL OR g.valid_during @> %s::timestamptz)")
+                    g_values.append(valid_at)
+                elif start and end:
+                    g_clauses.append("(g.valid_during IS NULL OR g.valid_during && tstzrange(%s, %s, '[]'))")
+                    g_values.extend([start, end])
+                elif start:
+                    g_clauses.append("(g.valid_during IS NULL OR upper(g.valid_during) IS NULL OR upper(g.valid_during) >= %s)")
+                    g_values.append(start)
+                elif end:
+                    g_clauses.append("(g.valid_during IS NULL OR lower(g.valid_during) <= %s)")
+                    g_values.append(end)
+
+                if entity_kind:
+                    g_clauses.append("e.kind = %s")
+                    g_values.append(entity_kind)
+                if entity_ids:
+                    g_clauses.append("g.entity_id = ANY(%s)")
+                    g_values.append(list(entity_ids))
+
+                g_sql = f"""
+                    SELECT g.id, g.entity_id, e.canonical_name, g.geometry_kind, g.confidence, g.valid_during,
+                           g.evidence_id, ev.locator AS evidence_locator, ev.retrieved_at AS evidence_retrieved_at,
+                           s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
+                           ST_AsGeoJSON(g.geometry)::json AS geometry
+                    FROM geometries g
+                    JOIN entities e ON e.id = g.entity_id
+                    JOIN sources s ON s.id = g.source_id
+                    LEFT JOIN evidence ev ON ev.id = g.evidence_id
+                    WHERE {' AND '.join(g_clauses)}
+                    ORDER BY e.canonical_name, g.geometry_kind, g.id
+                    LIMIT %s
+                """
+                g_values.append(limit)
+                cur.execute(g_sql, g_values)
+                for row in cur.fetchall():
+                    row_clean = _clean_record(row)
+                    matched_geoms[row_clean["id"]] = row_clean
+                    target_entity_ids.add(row_clean["entity_id"])
+
+                if entity_ids:
+                    target_entity_ids.update(entity_ids)
+            else:
+                if entity_ids:
+                    target_entity_ids.update(entity_ids)
+                else:
+                    e_clauses = []
+                    e_values = []
+                    if entity_kind:
+                        e_clauses.append("e.kind = %s")
+                        e_values.append(entity_kind)
+                    if valid_at:
+                        e_clauses.append("""
+                            e.id IN (
+                                SELECT o.subject_entity_id FROM observations o
+                                JOIN time_intervals t ON t.id = o.time_interval_id
+                                WHERE t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)
+                                UNION
+                                SELECT ev.subject_entity_id FROM events ev
+                                JOIN time_intervals t ON t.id = ev.time_interval_id
+                                WHERE ev.subject_entity_id IS NOT NULL AND t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)
+                            )
+                        """)
+                        e_values.extend([valid_at, valid_at, valid_at, valid_at])
+                    elif start and end:
+                        e_clauses.append("""
+                            e.id IN (
+                                SELECT o.subject_entity_id FROM observations o
+                                JOIN time_intervals t ON t.id = o.time_interval_id
+                                WHERE (t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s
+                                UNION
+                                SELECT ev.subject_entity_id FROM events ev
+                                JOIN time_intervals t ON t.id = ev.time_interval_id
+                                WHERE ev.subject_entity_id IS NOT NULL AND (t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s
+                            )
+                        """)
+                        e_values.extend([start, end, start, end])
+                    elif start:
+                        e_clauses.append("""
+                            e.id IN (
+                                SELECT o.subject_entity_id FROM observations o
+                                JOIN time_intervals t ON t.id = o.time_interval_id
+                                WHERE (t.ends_at IS NULL OR t.ends_at >= %s)
+                                UNION
+                                SELECT ev.subject_entity_id FROM events ev
+                                JOIN time_intervals t ON t.id = ev.time_interval_id
+                                WHERE ev.subject_entity_id IS NOT NULL AND (t.ends_at IS NULL OR t.ends_at >= %s)
+                            )
+                        """)
+                        e_values.extend([start, start])
+                    elif end:
+                        e_clauses.append("""
+                            e.id IN (
+                                SELECT o.subject_entity_id FROM observations o
+                                JOIN time_intervals t ON t.id = o.time_interval_id
+                                WHERE t.starts_at <= %s
+                                UNION
+                                SELECT ev.subject_entity_id FROM events ev
+                                JOIN time_intervals t ON t.id = ev.time_interval_id
+                                WHERE ev.subject_entity_id IS NOT NULL AND t.starts_at <= %s
+                            )
+                        """)
+                        e_values.extend([end, end])
+
+                    where_e = f"WHERE {' AND '.join(e_clauses)}" if e_clauses else ""
+                    cur.execute(f"SELECT e.id FROM entities e {where_e} ORDER BY e.canonical_name, e.id LIMIT %s", e_values + [limit])
+                    for r in cur.fetchall():
+                        target_entity_ids.add(r["id"])
+
+            query_scope = ContextQueryScope(
+                spatial=SpatialScope(bounding_box=bbox, filter_type="intersects") if bbox else None,
+                temporal=TemporalScope(valid_at=valid_at, starts_at=start, ends_at=end, precision=precision) if (valid_at or start or end or precision) else None,
+                entity_ids=list(entity_ids) if entity_ids else None,
+                entity_kind=entity_kind,
+                limit=limit,
+            )
+
+            if not target_entity_ids:
+                return WorldContext(
+                    query_scope=query_scope,
+                    entities=[],
+                    observations=[],
+                    events=[],
+                    geometries=[],
+                    relationships=[],
+                    claims=[],
+                    evidence=[],
+                    assumptions_or_limitations=assumptions + ["No entities matched the requested query scope"],
+                )
+
+            target_list = list(target_entity_ids)
+
+            # Step 2: Fetch Entities
+            cur.execute(
+                """SELECT id, kind, canonical_name, attributes, confidence
+                   FROM entities
+                   WHERE id = ANY(%s)
+                   ORDER BY canonical_name, id""",
+                (target_list,),
+            )
+            entities_list = [_clean_record(r) for r in cur.fetchall()]
+            resolved_entity_ids = [e["id"] for e in entities_list]
+
+            if not resolved_entity_ids:
+                return WorldContext(
+                    query_scope=query_scope,
+                    entities=[],
+                    observations=[],
+                    events=[],
+                    geometries=[],
+                    relationships=[],
+                    claims=[],
+                    evidence=[],
+                    assumptions_or_limitations=assumptions + ["Specified entity IDs not found in authoritative world state"],
+                )
+
+            # Step 3: Fetch Geometries (if not already fetched with bbox)
+            if not bbox:
+                cur.execute(
+                    """SELECT g.id, g.entity_id, e.canonical_name, g.geometry_kind, g.confidence, g.valid_during,
+                              g.evidence_id, ev.locator AS evidence_locator, ev.retrieved_at AS evidence_retrieved_at,
+                              s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
+                              ST_AsGeoJSON(g.geometry)::json AS geometry
+                       FROM geometries g
+                       JOIN entities e ON e.id = g.entity_id
+                       JOIN sources s ON s.id = g.source_id
+                       LEFT JOIN evidence ev ON ev.id = g.evidence_id
+                       WHERE g.entity_id = ANY(%s)
+                       ORDER BY e.canonical_name, g.geometry_kind, g.id
+                       LIMIT %s""",
+                    (resolved_entity_ids, limit),
+                )
+                for row in cur.fetchall():
+                    row_clean = _clean_record(row)
+                    matched_geoms[row_clean["id"]] = row_clean
+
+            geometries_list = list(matched_geoms.values())
+            geometries_list.sort(key=lambda x: (x.get("canonical_name", ""), x.get("geometry_kind", ""), str(x.get("id"))))
+
+            # Step 4: Observations Query
+            obs_clauses = ["o.subject_entity_id = ANY(%s)"]
+            obs_values: list[Any] = [resolved_entity_ids]
+            if valid_at:
+                obs_clauses.append("t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)")
+                obs_values.extend([valid_at, valid_at])
+            elif start and end:
+                obs_clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s")
+                obs_values.extend([start, end])
+            elif start:
+                obs_clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s)")
+                obs_values.append(start)
+            elif end:
+                obs_clauses.append("t.starts_at <= %s")
+                obs_values.append(end)
+            if precision:
+                obs_clauses.append("t.precision = %s")
+                obs_values.append(precision)
+
+            obs_sql = f"""
+                SELECT o.id, o.subject_entity_id, e.canonical_name AS subject_name,
+                       o.measure, o.value, o.unit, o.truth_class,
+                       t.starts_at, t.ends_at, t.precision,
+                       o.evidence_id, ev.locator AS evidence_locator, ev.retrieved_at AS evidence_retrieved_at,
+                       s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
+                       o.confidence, o.attributes
+                FROM observations o
+                JOIN entities e ON e.id = o.subject_entity_id
+                JOIN time_intervals t ON t.id = o.time_interval_id
+                JOIN evidence ev ON ev.id = o.evidence_id
+                JOIN sources s ON s.id = ev.source_id
+                WHERE {' AND '.join(obs_clauses)}
+                ORDER BY t.starts_at DESC, o.id
+                LIMIT %s
+            """
+            obs_values.append(limit)
+            cur.execute(obs_sql, obs_values)
+            observations_list = [_clean_record(r) for r in cur.fetchall()]
+
+            # Step 5: Events Query
+            ev_clauses = ["ev.subject_entity_id = ANY(%s)"]
+            ev_values: list[Any] = [resolved_entity_ids]
+            if valid_at:
+                ev_clauses.append("t.starts_at <= %s AND (t.ends_at IS NULL OR t.ends_at >= %s)")
+                ev_values.extend([valid_at, valid_at])
+            elif start and end:
+                ev_clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s) AND t.starts_at <= %s")
+                ev_values.extend([start, end])
+            elif start:
+                ev_clauses.append("(t.ends_at IS NULL OR t.ends_at >= %s)")
+                ev_values.append(start)
+            elif end:
+                ev_clauses.append("t.starts_at <= %s")
+                ev_values.append(end)
+            if precision:
+                ev_clauses.append("t.precision = %s")
+                ev_values.append(precision)
+
+            ev_sql = f"""
+                SELECT ev.id, ev.kind, ev.subject_entity_id, e.canonical_name AS subject_name,
+                       t.starts_at, t.ends_at, t.precision,
+                       ev.evidence_id, evi.locator AS evidence_locator, evi.retrieved_at AS evidence_retrieved_at,
+                       s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
+                       ev.confidence, ev.attributes
+                FROM events ev
+                LEFT JOIN entities e ON e.id = ev.subject_entity_id
+                JOIN time_intervals t ON t.id = ev.time_interval_id
+                JOIN evidence evi ON evi.id = ev.evidence_id
+                JOIN sources s ON s.id = evi.source_id
+                WHERE {' AND '.join(ev_clauses)}
+                ORDER BY t.starts_at DESC, ev.id
+                LIMIT %s
+            """
+            ev_values.append(limit)
+            cur.execute(ev_sql, ev_values)
+            events_list = [_clean_record(r) for r in cur.fetchall()]
+
+            # Step 6: Relationships Query
+            cur.execute(
+                """SELECT r.id, r.subject_entity_id, sub.canonical_name AS subject_name, sub.kind AS subject_kind,
+                          r.predicate, r.object_entity_id, obj.canonical_name AS object_name, obj.kind AS object_kind,
+                          r.confidence, r.evidence_id, ev.locator AS evidence_locator, ev.retrieved_at AS evidence_retrieved_at,
+                          s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
+                          t.starts_at, t.ends_at, t.precision, r.attributes
+                   FROM relationships r
+                   JOIN entities sub ON sub.id = r.subject_entity_id
+                   JOIN entities obj ON obj.id = r.object_entity_id
+                   JOIN evidence ev ON ev.id = r.evidence_id
+                   JOIN sources s ON s.id = ev.source_id
+                   LEFT JOIN time_intervals t ON t.id = r.time_interval_id
+                   WHERE (r.subject_entity_id = ANY(%s) OR r.object_entity_id = ANY(%s))
+                   ORDER BY r.id
+                   LIMIT %s""",
+                (resolved_entity_ids, resolved_entity_ids, limit),
+            )
+            relationships_list = [_clean_record(r) for r in cur.fetchall()]
+
+            # Step 7: Claims Query
+            cur.execute(
+                """SELECT c.id, c.subject_entity_id, e.canonical_name AS subject_name,
+                          c.claim_type, c.truth_class, c.value, c.unit,
+                          c.time_interval_id, c.spatial_scope, c.method, c.computation_version,
+                          c.inputs, c.evidence_ids, c.assumptions, c.confidence, c.created_at
+                   FROM claims c
+                   LEFT JOIN entities e ON e.id = c.subject_entity_id
+                   WHERE c.subject_entity_id = ANY(%s)
+                   ORDER BY c.created_at DESC, c.id
+                   LIMIT %s""",
+                (resolved_entity_ids, limit),
+            )
+            claims_list = [_clean_record(r) for r in cur.fetchall()]
+
+            # Step 8: Deduplicated Evidence Citations
+            collected_evidence_ids: set[UUID] = set()
+            for o in observations_list:
+                if o.get("evidence_id"):
+                    collected_evidence_ids.add(UUID(str(o["evidence_id"])))
+            for ev in events_list:
+                if ev.get("evidence_id"):
+                    collected_evidence_ids.add(UUID(str(ev["evidence_id"])))
+            for g in geometries_list:
+                if g.get("evidence_id"):
+                    collected_evidence_ids.add(UUID(str(g["evidence_id"])))
+            for r in relationships_list:
+                if r.get("evidence_id"):
+                    collected_evidence_ids.add(UUID(str(r["evidence_id"])))
+            for c in claims_list:
+                for eid in c.get("evidence_ids") or []:
+                    collected_evidence_ids.add(UUID(str(eid)))
+
+            evidence_citations: list[EvidenceCitation] = []
+            if collected_evidence_ids:
+                cur.execute(
+                    """SELECT ev.id AS evidence_id, ev.source_id, s.slug AS source_slug, s.name AS source_name,
+                              ev.locator, ev.retrieved_at, ev.content_hash, ev.excerpt
+                       FROM evidence ev
+                       JOIN sources s ON s.id = ev.source_id
+                       WHERE ev.id = ANY(%s)
+                       ORDER BY s.slug, ev.locator, ev.id""",
+                    (list(collected_evidence_ids),),
+                )
+                for r in cur.fetchall():
+                    evidence_citations.append(EvidenceCitation(**_clean_record(r)))
+
+            return WorldContext(
+                query_scope=query_scope,
+                entities=entities_list,
+                observations=observations_list,
+                events=events_list,
+                geometries=geometries_list,
+                relationships=relationships_list,
+                claims=claims_list,
+                evidence=evidence_citations,
+                assumptions_or_limitations=assumptions,
+            )
+
 
     def near(self, longitude: float, latitude: float, radius_km: float) -> list[dict[str, Any]]:
         with self._connection() as conn, conn.cursor() as cur:
