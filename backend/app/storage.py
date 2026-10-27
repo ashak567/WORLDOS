@@ -57,11 +57,21 @@ from .domain import (
     DetectionMethod,
     DetectionMethodDefinition,
     FindingLifecycleStatus,
+    BacktestRequest,
+    BacktestResult,
+    PredictionEvaluation,
+    PredictionMethod,
+    PredictionMethodDefinition,
+    PredictionPoint,
+    PredictionRequest,
+    PredictionRun,
+    PredictionStatus,
 )
 from .alerts import AlertEngine
 from .anomalies import AnomalyEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .decisions import DecisionEngine
+from .prediction import PredictionEngine
 from .scenarios import ScenarioEngine
 from .simulation import SimulationEngine
 
@@ -96,6 +106,7 @@ class WorldRepository:
         self.scenario_engine = ScenarioEngine(repository=self)
         self.simulation_engine = SimulationEngine(repository=self)
         self.anomaly_engine = AnomalyEngine(repository=self)
+        self.prediction_engine = PredictionEngine(repository=self)
 
 
     @contextmanager
@@ -2069,3 +2080,65 @@ class WorldRepository:
     def list_anomaly_methods(self) -> list[DetectionMethodDefinition]:
         """List registered anomaly detection methods."""
         return self.anomaly_engine.list_methods()
+
+    # ==========================================================================
+    # Engine 18: Prediction Engine Methods
+    # ==========================================================================
+
+    def create_and_run_prediction(self, request: PredictionRequest) -> PredictionRun:
+        """Create, execute, and persist a bounded deterministic forecasting run."""
+        with self._connection() as conn:
+            return self.prediction_engine.predict(request, conn=conn)
+
+    def list_prediction_runs(
+        self,
+        entity_id: UUID | None = None,
+        metric: str | None = None,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[PredictionRun]:
+        """List historical prediction runs with optional filters."""
+        with self._connection() as conn:
+            return self.prediction_engine.list_runs(
+                entity_id=entity_id,
+                metric=metric,
+                status=status,
+                limit=limit,
+                offset=offset,
+                conn=conn,
+            )
+
+    def get_prediction_run(self, run_id: UUID) -> PredictionRun | None:
+        """Retrieve a specific prediction run by ID."""
+        with self._connection() as conn:
+            return self.prediction_engine.get_run(run_id, conn=conn)
+
+    def get_prediction_trajectory(
+        self,
+        run_id: UUID,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[PredictionPoint]:
+        """Retrieve ordered forecast trajectory points for a run."""
+        with self._connection() as conn:
+            return self.prediction_engine.get_trajectory(run_id, limit=limit, offset=offset, conn=conn)
+
+    def evaluate_prediction_run(self, run_id: UUID) -> PredictionEvaluation:
+        """Evaluate a completed prediction run against subsequently observed data points."""
+        with self._connection() as conn:
+            return self.prediction_engine.evaluate_run(run_id, conn=conn)
+
+    def get_prediction_evaluation(self, run_id: UUID) -> PredictionEvaluation | None:
+        """Retrieve evaluation results for a prediction run."""
+        with self._connection() as conn:
+            return self.prediction_engine.get_evaluation(run_id, conn=conn)
+
+    def run_prediction_backtest(self, request: BacktestRequest) -> BacktestResult:
+        """Execute a rolling-origin walk-forward backtest."""
+        with self._connection() as conn:
+            return self.prediction_engine.run_backtest(request, conn=conn)
+
+    def list_prediction_methods(self) -> list[PredictionMethodDefinition]:
+        """List registered deterministic forecasting methods."""
+        return self.prediction_engine.list_methods()

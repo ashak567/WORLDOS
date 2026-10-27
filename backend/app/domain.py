@@ -1029,3 +1029,159 @@ class AnomalyRun(BaseModel):
     error_message: str | None = None
     created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
     completed_at: datetime | None = None
+
+
+# ==============================================================================
+# Engine 18: Prediction Engine Domain Models
+# ==============================================================================
+
+
+class PredictionMethod(str, Enum):
+    NAIVE_BASELINE = "naive_baseline"
+    SEASONAL_NAIVE = "seasonal_naive"
+    MOVING_AVERAGE = "moving_average"
+    LINEAR_TREND = "linear_trend"
+    AUTO_SELECT = "auto_select"
+
+
+class PredictionStatus(str, Enum):
+    CREATED = "CREATED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    INSUFFICIENT_DATA = "INSUFFICIENT_DATA"
+
+
+class PredictionMethodDefinition(BaseModel):
+    method: PredictionMethod
+    name: str
+    version: str = "v1.0.0"
+    description: str
+    required_parameters: list[str] = Field(default_factory=list)
+    min_observations: int = 3
+    supports_prediction_intervals: bool = True
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class PredictionRequest(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    entity_id: UUID
+    metric: str
+    horizon: int = Field(default=5, ge=1, le=100)
+    step_size: int = Field(default=1, ge=1)
+    step_unit: Literal["year", "month", "day", "hour"] = "year"
+    method: PredictionMethod = PredictionMethod.LINEAR_TREND
+    method_params: dict[str, Any] = Field(default_factory=dict)
+    min_observations: int = Field(default=3, ge=2)
+    confidence_level: float = Field(default=0.95, ge=0.50, le=0.999)
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    scenario_id: UUID | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "PredictionRequest":
+        if not self.metric or not self.metric.strip():
+            raise ValueError("metric cannot be empty")
+        if self.starts_at and self.ends_at and self.ends_at < self.starts_at:
+            raise ValueError("ends_at must not precede starts_at")
+        if self.horizon < 1 or self.horizon > 100:
+            raise ValueError("horizon must be between 1 and 100")
+        if self.confidence_level < 0.50 or self.confidence_level >= 1.0:
+            raise ValueError("confidence_level must be between 0.50 and 0.999")
+        return self
+
+
+class PredictionPoint(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    run_id: UUID | None = None
+    step_index: int
+    entity_id: UUID
+    metric: str
+    unit: str
+    forecast_timestamp: datetime
+    predicted_value: float
+    lower_bound: float | None = None
+    upper_bound: float | None = None
+    confidence_level: float | None = None
+    method: PredictionMethod | str
+    method_version: str = "v1.0.0"
+    truth_class: TruthClass = TruthClass.PREDICTED
+    evidence_ids: list[UUID] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    data_quality_warnings: list[str] = Field(default_factory=list)
+    fingerprint: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PredictionEvaluation(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    run_id: UUID
+    metric: str
+    evaluation_window: dict[str, Any] = Field(default_factory=dict)
+    matched_points_count: int = 0
+    mae: float
+    rmse: float
+    mase: float | None = None
+    bias: float = 0.0
+    interval_coverage: float | None = None
+    baseline_comparison: dict[str, Any] = Field(default_factory=dict)
+    evaluation_method: str = "walk_forward"
+    method_version: str = "v1.0.0"
+    limitations: list[str] = Field(default_factory=list)
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class PredictionRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    status: PredictionStatus = PredictionStatus.CREATED
+    request: PredictionRequest
+    selected_method: PredictionMethod
+    method_version: str = "v1.0.0"
+    entity_id: UUID
+    metric: str
+    unit: str = ""
+    observations_count: int = 0
+    trajectory_points_count: int = 0
+    trajectory: list[PredictionPoint] = Field(default_factory=list)
+    historical_summary: dict[str, Any] = Field(default_factory=dict)
+    model_parameters: dict[str, Any] = Field(default_factory=dict)
+    evaluation: PredictionEvaluation | None = None
+    quality_warnings: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    reproducibility_fingerprint: str = ""
+    execution_duration_ms: float | None = None
+    error_message: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+
+
+class BacktestRequest(BaseModel):
+    entity_id: UUID
+    metric: str
+    method: PredictionMethod = PredictionMethod.LINEAR_TREND
+    method_params: dict[str, Any] = Field(default_factory=dict)
+    eval_horizon: int = Field(default=3, ge=1, le=20)
+    min_train_size: int = Field(default=3, ge=2)
+    step_size: int = Field(default=1, ge=1)
+    step_unit: Literal["year", "month", "day", "hour"] = "year"
+    confidence_level: float = Field(default=0.95, ge=0.50, le=0.999)
+
+
+class BacktestResult(BaseModel):
+    entity_id: UUID
+    metric: str
+    method: PredictionMethod
+    origins_evaluated: int
+    total_evaluations: int
+    mae: float
+    rmse: float
+    mase: float | None = None
+    bias: float = 0.0
+    interval_coverage: float | None = None
+    baseline_comparison: dict[str, Any] = Field(default_factory=dict)
+    warnings: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)

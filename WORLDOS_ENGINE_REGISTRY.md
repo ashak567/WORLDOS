@@ -240,17 +240,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 
 
 ### 18. Prediction Engine
-- **Purpose**: Forward-looking projection beyond observed time horizons with explicit assumptions.
-- **Status**: `INTERFACE_ONLY`
-- **Inputs**: Target entity/metric, historical observation series, evidence IDs.
-- **Outputs**: Predicted values tagged `PREDICTED`, confidence intervals, model assumptions.
-- **Dependencies**: `interfaces.py`, Deterministic Analytics.
-- **Persistence**: Derived observation records with truth class `PREDICTED`.
-- **Interface / API**: `PredictionEngine.predict(target: str, evidence_ids: list[str]) -> dict`.
-- **Evidence Requirements**: Must cite all input evidence IDs and model version.
-- **Test Contract**: Prediction output must never be tagged `OBSERVED`.
-- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
-- **Next Milestone**: Implement linear and polynomial trend extrapolation citing evidence.
+- **Purpose**: Forward-looking projection beyond observed time horizons, analytical uncertainty estimation, and rolling-origin walk-forward historical evaluation over authoritative world-state data without mutating operational tables.
+- **Status**: `VERIFIED`
+- **Inputs**: `PredictionRequest` (`entity_id`, `metric`, `horizon`, `step_size`, `step_unit`, `method`, `confidence_level`, `method_params`).
+- **Outputs**: `PredictionRun` record, ordered `PredictionPoint` forecast trajectory, analytical prediction intervals, deterministic reproducibility fingerprints, and `PredictionEvaluation` records.
+- **Dependencies**: PostGIS (authoritative observation queries), `backend/app/domain.py`, `backend/app/prediction.py`.
+- **Persistence**: Relational tables (`prediction_runs`, `prediction_points`, `prediction_evaluations`) via migration `013_predictions.sql`.
+- **Interface / API**: `PredictionEngine` class in `backend/app/prediction.py`; `WorldRepository` delegate methods; REST endpoints `/predictions/*` in `backend/app/main.py`.
+- **Evidence Requirements**: All forecast points carry `TruthClass.PREDICTED`, cite underlying source observation `evidence_ids`, compute canonical SHA-256 fingerprints, and record explicit assumptions and limitations.
+- **Test Contract**: Operational table non-mutation verification across all tables, target-leakage prevention in walk-forward backtesting, constant series zero-dispersion handling, interval expansion across horizons, and baseline benchmarking verified in `tests/test_prediction.py` (15 unit tests) and `tests/test_container_integration.py` (6 integration tests). Total backend regression suite of 164 passing tests.
+- **Current Implementation**: Complete deterministic forecasting engine supporting naive baseline, seasonal naive baseline, rolling moving average, ordinary least squares linear trend with analytical prediction intervals, automated walk-forward model selection (`auto_select`), out-of-sample backtesting, empirical observation evaluation, and full REST API.
+- **Next Milestone**: Ingestion, hashing, and retrieval of raster satellite imagery and documents (Engine 19: Multimodal Evidence Engine).
 
 ### 19. Multimodal Evidence Engine
 - **Purpose**: Ingestion, hashing, and retrieval of raster satellite imagery, documents, and sensory media.

@@ -67,6 +67,11 @@ from app.domain import (
     AnomalySeverity,
     DetectionMethod,
     FindingLifecycleStatus,
+    BacktestRequest,
+    PredictionMethod,
+    PredictionRequest,
+    PredictionRun,
+    PredictionStatus,
 )
 from app.constraints import ConstraintEngine, ConstraintViolationError
 from app.export import export_observations
@@ -143,6 +148,14 @@ from app.main import (
     list_anomaly_runs_endpoint,
     resolve_anomaly_finding_endpoint,
     suppress_anomaly_finding_endpoint,
+    create_prediction_endpoint,
+    get_prediction_evaluation_endpoint,
+    get_prediction_run_endpoint,
+    get_prediction_trajectory_endpoint,
+    list_prediction_evaluation_metrics_endpoint,
+    list_prediction_methods_endpoint,
+    list_prediction_runs_endpoint,
+    run_prediction_backtest_endpoint,
 )
 from app.ingestion.usgs import EarthquakeRecord
 from app.scenarios import ScenarioLifecycleError
@@ -2976,6 +2989,433 @@ class ContainerIntegrationTests(unittest.TestCase):
         finally:
             with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
                 cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_api.anomaly'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    # ==========================================================================
+    # Engine 18: Prediction Engine Integration Tests
+    # ==========================================================================
+
+    def test_prediction_execution_and_authoritative_non_mutation(self) -> None:
+        """Verify that prediction runs produce PREDICTED trajectory points and never mutate operational tables."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Prediction Test City', 1.0)",
+                (test_entity_id,),
+            )
+            # Insert 5 historical annual observations (2018-2022)
+            for idx, yr in enumerate(range(2018, 2023)):
+                t_id = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(yr, 1, 1, tzinfo=UTC)))
+                val = 100.0 + (idx * 10.0)  # 100, 110, 120, 130, 140
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_pred.pop', %s, 'people', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+            # Record baseline row counts for operational tables
+            operational_tables = ["entities", "observations", "geometries", "evidence", "claims", "alerts", "scenarios", "simulation_runs", "anomaly_runs", "anomaly_findings"]
+            pre_counts = {}
+            for tbl in operational_tables:
+                cur.execute(f"SELECT COUNT(*) as cnt FROM {tbl}")
+                pre_counts[tbl] = cur.fetchone()["cnt"]
+
+        try:
+            req = PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_pred.pop",
+                horizon=5,
+                step_size=1,
+                step_unit="year",
+                method=PredictionMethod.LINEAR_TREND,
+                confidence_level=0.95,
+            )
+            run = self.repo.create_and_run_prediction(req)
+            self.assertEqual(run.status, PredictionStatus.COMPLETED)
+            self.assertEqual(run.observations_count, 5)
+            self.assertEqual(run.trajectory_points_count, 5)
+            self.assertEqual(len(run.trajectory), 5)
+
+            # Operational non-mutation assertion
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                for tbl in operational_tables:
+                    cur.execute(f"SELECT COUNT(*) as cnt FROM {tbl}")
+                    post_cnt = cur.fetchone()["cnt"]
+                    self.assertEqual(pre_counts[tbl], post_cnt, f"Operational table {tbl} was mutated during prediction!")
+
+            # Verify every point is classified TruthClass.PREDICTED
+            for pt in run.trajectory:
+                self.assertEqual(pt.truth_class, TruthClass.PREDICTED)
+                self.assertTrue(len(pt.evidence_ids) > 0)
+                self.assertIsNotNone(pt.lower_bound)
+                self.assertIsNotNone(pt.upper_bound)
+                self.assertGreaterEqual(pt.upper_bound, pt.lower_bound)
+
+            # Verify trajectory in database
+            stored_traj = self.repo.get_prediction_trajectory(run.id)
+            self.assertEqual(len(stored_traj), 5)
+            # Verify linear trend: 100, 110, 120, 130, 140 -> next points: 150, 160, 170, 180, 190
+            self.assertAlmostEqual(stored_traj[0].predicted_value, 150.0, places=1)
+            self.assertAlmostEqual(stored_traj[1].predicted_value, 160.0, places=1)
+            self.assertAlmostEqual(stored_traj[4].predicted_value, 190.0, places=1)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM prediction_evaluations WHERE metric = 'test_pred.pop'")
+                cur.execute("DELETE FROM prediction_points WHERE metric = 'test_pred.pop'")
+                cur.execute("DELETE FROM prediction_runs WHERE metric = 'test_pred.pop'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_prediction_forecasting_methods(self) -> None:
+        """Verify Naive, Moving Average, and Linear Trend forecasting behaviors."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Methods Test City', 1.0)",
+                (test_entity_id,),
+            )
+            # Insert values: 100, 115, 118, 130
+            for idx, val in enumerate([100.0, 115.0, 118.0, 130.0]):
+                t_id = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(2020 + idx, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_methods.val', %s, 'units', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+        try:
+            # 1. Naive Baseline: points stay at latest value (130.0)
+            naive_run = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_methods.val",
+                horizon=3,
+                method=PredictionMethod.NAIVE_BASELINE,
+            ))
+            self.assertEqual(naive_run.status, PredictionStatus.COMPLETED)
+            for pt in naive_run.trajectory:
+                self.assertAlmostEqual(pt.predicted_value, 130.0)
+            # Check uncertainty intervals widen with horizon
+            w1 = naive_run.trajectory[0].upper_bound - naive_run.trajectory[0].lower_bound
+            w3 = naive_run.trajectory[2].upper_bound - naive_run.trajectory[2].lower_bound
+            self.assertGreater(w3, w1)
+
+            # 2. Moving Average with window 3: mean(115, 118, 130) = 121.0
+            ma_run = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_methods.val",
+                horizon=3,
+                method=PredictionMethod.MOVING_AVERAGE,
+                method_params={"window": 3},
+            ))
+            self.assertEqual(ma_run.status, PredictionStatus.COMPLETED)
+            self.assertAlmostEqual(ma_run.trajectory[0].predicted_value, 121.0)
+
+            # 3. Linear Trend
+            trend_run = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_methods.val",
+                horizon=3,
+                method=PredictionMethod.LINEAR_TREND,
+            ))
+            self.assertEqual(trend_run.status, PredictionStatus.COMPLETED)
+            self.assertGreater(trend_run.trajectory[0].predicted_value, 130.0)
+            self.assertGreater(trend_run.trajectory[1].predicted_value, trend_run.trajectory[0].predicted_value)
+            self.assertGreater(trend_run.trajectory[2].predicted_value, trend_run.trajectory[1].predicted_value)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM prediction_points WHERE metric = 'test_methods.val'")
+                cur.execute("DELETE FROM prediction_runs WHERE metric = 'test_methods.val'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_prediction_insufficient_data_and_constant_series(self) -> None:
+        """Verify explicit INSUFFICIENT_DATA status and constant series zero-dispersion handling."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Edge Cases City', 1.0)",
+                (test_entity_id,),
+            )
+            # 1 observation for insufficient metric
+            t1 = uuid4()
+            cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t1, datetime(2020, 1, 1, tzinfo=UTC)))
+            cur.execute(
+                """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                   VALUES (%s, %s, 'test_edge.insuf', 10.0, 'count', 'OBSERVED', %s, %s, %s, 1.0)""",
+                (uuid4(), test_entity_id, t1, evidence_id, provenance_id),
+            )
+
+            # 4 constant observations for constant metric
+            for yr in range(2020, 2024):
+                t_c = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_c, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_edge.const', 42.0, 'index', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, t_c, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+        try:
+            # Insufficient observations check
+            run_insuf = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_edge.insuf",
+                min_observations=3,
+            ))
+            self.assertEqual(run_insuf.status, PredictionStatus.INSUFFICIENT_DATA)
+            self.assertEqual(run_insuf.trajectory_points_count, 0)
+            self.assertTrue(len(run_insuf.quality_warnings) > 0)
+
+            # Constant series check: slope=0, std=0, no division by zero error
+            run_const = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_edge.const",
+                horizon=3,
+                method=PredictionMethod.LINEAR_TREND,
+            ))
+            self.assertEqual(run_const.status, PredictionStatus.COMPLETED)
+            self.assertEqual(run_const.trajectory_points_count, 3)
+            for pt in run_const.trajectory:
+                self.assertAlmostEqual(pt.predicted_value, 42.0)
+                self.assertAlmostEqual(pt.lower_bound, 42.0)
+                self.assertAlmostEqual(pt.upper_bound, 42.0)
+            self.assertTrue(any("constant" in w.lower() for w in run_const.quality_warnings))
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM prediction_points WHERE metric IN ('test_edge.insuf', 'test_edge.const')")
+                cur.execute("DELETE FROM prediction_runs WHERE metric IN ('test_edge.insuf', 'test_edge.const')")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_prediction_backtest_leakage_prevention_and_metrics(self) -> None:
+        """Verify rolling-origin walk-forward backtesting calculates accurate error metrics without target leakage."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Backtest Test City', 1.0)",
+                (test_entity_id,),
+            )
+            # Insert 8 linear observations: 10, 20, 30, 40, 50, 60, 70, 80
+            for idx, yr in enumerate(range(2015, 2023)):
+                t_id = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(yr, 1, 1, tzinfo=UTC)))
+                val = float((idx + 1) * 10)
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_bt.metric', %s, 'units', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+        try:
+            bt_req = BacktestRequest(
+                entity_id=test_entity_id,
+                metric="test_bt.metric",
+                method=PredictionMethod.LINEAR_TREND,
+                eval_horizon=2,
+                min_train_size=4,
+            )
+            res = self.repo.run_prediction_backtest(bt_req)
+            self.assertGreater(res.origins_evaluated, 0)
+            self.assertEqual(res.total_evaluations, res.origins_evaluated * 2)
+            # Since data is perfectly linear, linear trend should have near zero error
+            self.assertAlmostEqual(res.mae, 0.0, places=3)
+            self.assertAlmostEqual(res.rmse, 0.0, places=3)
+            self.assertTrue(res.baseline_comparison["outperforms_naive"])
+            self.assertGreater(res.baseline_comparison["naive_baseline_mae"], 0.0)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_prediction_evaluation_against_subsequent_observations(self) -> None:
+        """Verify evaluating a forecast against subsequently observed empirical facts."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Eval Test City', 1.0)",
+                (test_entity_id,),
+            )
+            # Observations for 2018, 2019, 2020: 10, 20, 30
+            for yr, val in [(2018, 10.0), (2019, 20.0), (2020, 30.0)]:
+                t_id = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_eval.metric', %s, 'units', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+        try:
+            # Generate 2-year forecast for 2021 and 2022
+            run = self.repo.create_and_run_prediction(PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_eval.metric",
+                horizon=2,
+                method=PredictionMethod.LINEAR_TREND,
+            ))
+            self.assertEqual(run.status, PredictionStatus.COMPLETED)
+
+            # Insert subsequent observations for 2021 (40.0) and 2022 (50.0)
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                for yr, val in [(2021, 40.0), (2022, 50.0)]:
+                    t_id = uuid4()
+                    cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(yr, 1, 1, tzinfo=UTC)))
+                    cur.execute(
+                        """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                           VALUES (%s, %s, 'test_eval.metric', %s, 'units', 'OBSERVED', %s, %s, %s, 1.0)""",
+                        (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                    )
+                conn.commit()
+
+            # Evaluate run against subsequent observations
+            eval_record = self.repo.evaluate_prediction_run(run.id)
+            self.assertEqual(eval_record.matched_points_count, 2)
+            self.assertAlmostEqual(eval_record.mae, 0.0, places=3)
+            self.assertAlmostEqual(eval_record.rmse, 0.0, places=3)
+
+            # Retrieve evaluation
+            retrieved_eval = self.repo.get_prediction_evaluation(run.id)
+            self.assertIsNotNone(retrieved_eval)
+            self.assertEqual(retrieved_eval.matched_points_count, 2)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM prediction_evaluations WHERE metric = 'test_eval.metric'")
+                cur.execute("DELETE FROM prediction_points WHERE metric = 'test_eval.metric'")
+                cur.execute("DELETE FROM prediction_runs WHERE metric = 'test_eval.metric'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_prediction_rest_api_endpoints(self) -> None:
+        """Verify REST API endpoint contracts for Engine 18."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'API Prediction City', 1.0)",
+                (test_entity_id,),
+            )
+            for idx, yr in enumerate(range(2018, 2022)):
+                t_id = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t_id, datetime(yr, 1, 1, tzinfo=UTC)))
+                val = 200.0 + (idx * 50.0)  # 200, 250, 300, 350
+                cur.execute(
+                    """INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                       VALUES (%s, %s, 'test_api.pred', %s, 'dollars', 'OBSERVED', %s, %s, %s, 1.0)""",
+                    (uuid4(), test_entity_id, val, t_id, evidence_id, provenance_id),
+                )
+            conn.commit()
+
+        try:
+            # 1. GET /predictions/methods
+            methods = list_prediction_methods_endpoint()
+            self.assertTrue(len(methods) >= 4)
+            method_ids = [m.method for m in methods]
+            self.assertIn(PredictionMethod.LINEAR_TREND, method_ids)
+            self.assertIn(PredictionMethod.NAIVE_BASELINE, method_ids)
+
+            # 2. GET /predictions/metrics
+            metrics_dict = list_prediction_evaluation_metrics_endpoint()
+            self.assertIn("metrics", metrics_dict)
+            metric_ids = [m["id"] for m in metrics_dict["metrics"]]
+            self.assertIn("mae", metric_ids)
+            self.assertIn("rmse", metric_ids)
+            self.assertIn("mase", metric_ids)
+
+            # 3. POST /predictions
+            req = PredictionRequest(
+                entity_id=test_entity_id,
+                metric="test_api.pred",
+                horizon=4,
+                method=PredictionMethod.LINEAR_TREND,
+            )
+            created_run = create_prediction_endpoint(req)
+            self.assertEqual(created_run.status, PredictionStatus.COMPLETED)
+            self.assertEqual(created_run.trajectory_points_count, 4)
+
+            # 4. GET /predictions/runs
+            runs = list_prediction_runs_endpoint(entity_id=test_entity_id)
+            self.assertEqual(len(runs), 1)
+            self.assertEqual(runs[0].id, created_run.id)
+
+            # 5. GET /predictions/runs/{run_id}
+            run_by_id = get_prediction_run_endpoint(created_run.id)
+            self.assertEqual(run_by_id.id, created_run.id)
+
+            # 6. GET /predictions/runs/{run_id}/trajectory
+            traj = get_prediction_trajectory_endpoint(created_run.id)
+            self.assertEqual(len(traj), 4)
+            self.assertAlmostEqual(traj[0].predicted_value, 400.0)
+
+            # 7. POST /predictions/backtest
+            bt_res = run_prediction_backtest_endpoint(BacktestRequest(
+                entity_id=test_entity_id,
+                metric="test_api.pred",
+                method=PredictionMethod.LINEAR_TREND,
+                eval_horizon=1,
+                min_train_size=3,
+            ))
+            self.assertEqual(bt_res.origins_evaluated, 1)
+
+            # 8. Error handling 404
+            with self.assertRaises(HTTPException):
+                get_prediction_run_endpoint(uuid4())
+
+            with self.assertRaises(HTTPException):
+                get_prediction_trajectory_endpoint(uuid4())
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM prediction_evaluations WHERE metric = 'test_api.pred'")
+                cur.execute("DELETE FROM prediction_points WHERE metric = 'test_api.pred'")
+                cur.execute("DELETE FROM prediction_runs WHERE metric = 'test_api.pred'")
                 cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
                 cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
                 conn.commit()

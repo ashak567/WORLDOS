@@ -67,6 +67,15 @@ from .domain import (
     DetectionMethod,
     DetectionMethodDefinition,
     FindingLifecycleStatus,
+    BacktestRequest,
+    BacktestResult,
+    PredictionEvaluation,
+    PredictionMethod,
+    PredictionMethodDefinition,
+    PredictionPoint,
+    PredictionRequest,
+    PredictionRun,
+    PredictionStatus,
 )
 from .alerts import AlertEngine
 from .anomalies import (
@@ -81,6 +90,10 @@ from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
+from .prediction import (
+    PredictionConfigurationError,
+    PredictionDataQualityError,
+)
 from .scenarios import ScenarioLifecycleError
 from .simulation import (
     SimulationConfigurationError,
@@ -161,6 +174,24 @@ def anomaly_lifecycle_handler(request, exc: AnomalyLifecycleError):
 
 @app.exception_handler(AnomalyDataQualityError)
 def anomaly_data_quality_handler(request, exc: AnomalyDataQualityError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(PredictionConfigurationError)
+def prediction_configuration_handler(request, exc: PredictionConfigurationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(PredictionDataQualityError)
+def prediction_data_quality_handler(request, exc: PredictionDataQualityError):
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=422,
@@ -1787,3 +1818,131 @@ def resolve_anomaly_finding_endpoint(finding_id: UUID, req: FindingActionRequest
         if "not found" in str(ale).lower():
             raise HTTPException(status_code=404, detail=str(ale)) from ale
         raise HTTPException(status_code=400, detail=str(ale)) from ale
+
+
+# ==============================================================================
+# Engine 18: Prediction Engine Endpoints
+# ==============================================================================
+
+
+@app.get("/predictions/methods", response_model=list[PredictionMethodDefinition])
+def list_prediction_methods_endpoint():
+    """List registered deterministic forecasting methods and configuration requirements."""
+    repo = WorldRepository()
+    return repo.list_prediction_methods()
+
+
+@app.get("/predictions/metrics")
+def list_prediction_evaluation_metrics_endpoint():
+    """Inspect supported forecasting evaluation metrics and their mathematical definitions."""
+    return {
+        "metrics": [
+            {
+                "id": "mae",
+                "name": "Mean Absolute Error",
+                "formula": "mean(|y - y_hat|)",
+                "description": "Measures average magnitude of forecast errors in the same units as the target metric.",
+            },
+            {
+                "id": "rmse",
+                "name": "Root Mean Squared Error",
+                "formula": "sqrt(mean((y - y_hat)^2))",
+                "description": "Penalizes larger forecast errors more severely than smaller errors.",
+            },
+            {
+                "id": "mase",
+                "name": "Mean Absolute Scaled Error",
+                "formula": "MAE / in_sample_naive_MAE",
+                "description": "Scale-independent metric comparing model accuracy to in-sample one-step naive baseline.",
+            },
+            {
+                "id": "bias",
+                "name": "Mean Signed Error",
+                "formula": "mean(y_hat - y)",
+                "description": "Identifies systematic tendency to overestimate (positive) or underestimate (negative).",
+            },
+            {
+                "id": "interval_coverage",
+                "name": "Prediction Interval Coverage",
+                "formula": "count(lower <= y <= upper) / total_evaluations",
+                "description": "Empirical proportion of verified observations falling within nominal prediction intervals.",
+            },
+        ]
+    }
+
+
+@app.post("/predictions", response_model=PredictionRun)
+def create_prediction_endpoint(req: PredictionRequest):
+    """Create, execute, and persist a bounded deterministic forecasting run."""
+    repo = WorldRepository()
+    return repo.create_and_run_prediction(req)
+
+
+@app.get("/predictions/runs", response_model=list[PredictionRun])
+def list_prediction_runs_endpoint(
+    entity_id: UUID | None = None,
+    metric: str | None = None,
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """List historical prediction runs with optional entity, metric, and status filters."""
+    repo = WorldRepository()
+    return repo.list_prediction_runs(
+        entity_id=entity_id,
+        metric=metric,
+        status=status,
+        limit=limit,
+        offset=offset,
+    )
+
+
+@app.get("/predictions/runs/{run_id}", response_model=PredictionRun)
+def get_prediction_run_endpoint(run_id: UUID):
+    """Retrieve metadata and historical summary for a specific prediction run."""
+    repo = WorldRepository()
+    run = repo.get_prediction_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Prediction run '{run_id}' not found")
+    return run
+
+
+@app.get("/predictions/runs/{run_id}/trajectory", response_model=list[PredictionPoint])
+def get_prediction_trajectory_endpoint(
+    run_id: UUID,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    """Retrieve ordered forecast trajectory points with uncertainty intervals for a run."""
+    repo = WorldRepository()
+    run = repo.get_prediction_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Prediction run '{run_id}' not found")
+    return repo.get_prediction_trajectory(run_id, limit=limit, offset=offset)
+
+
+@app.post("/predictions/runs/{run_id}/evaluate", response_model=PredictionEvaluation)
+def evaluate_prediction_run_endpoint(run_id: UUID):
+    """Evaluate a completed prediction run against subsequently observed empirical observations."""
+    repo = WorldRepository()
+    run = repo.get_prediction_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Prediction run '{run_id}' not found")
+    return repo.evaluate_prediction_run(run_id)
+
+
+@app.get("/predictions/runs/{run_id}/evaluation", response_model=PredictionEvaluation)
+def get_prediction_evaluation_endpoint(run_id: UUID):
+    """Retrieve recorded evaluation metrics for a prediction run."""
+    repo = WorldRepository()
+    eval_rec = repo.get_prediction_evaluation(run_id)
+    if not eval_rec:
+        raise HTTPException(status_code=404, detail=f"No evaluation recorded for prediction run '{run_id}'")
+    return eval_rec
+
+
+@app.post("/predictions/backtest", response_model=BacktestResult)
+def run_prediction_backtest_endpoint(req: BacktestRequest):
+    """Execute a rolling-origin walk-forward backtest to evaluate out-of-sample forecast accuracy."""
+    repo = WorldRepository()
+    return repo.run_prediction_backtest(req)

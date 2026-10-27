@@ -53,3 +53,40 @@ export async function anomalyFindings(metric?: string): Promise<AnomalyFindingSu
   if (!response.ok) throw new Error(`API returned ${response.status}`);
   return response.json();
 }
+
+export type PredictionPointSummary = {
+  id: string;
+  step_index: number;
+  forecast_timestamp: string;
+  predicted_value: number;
+  lower_bound: number | null;
+  upper_bound: number | null;
+  confidence_level: number | null;
+  method: string;
+  truth_class: string;
+};
+
+export type PredictionRunSummary = {
+  id: string;
+  entity_id: string;
+  metric: string;
+  unit: string;
+  status: "CREATED" | "RUNNING" | "COMPLETED" | "FAILED" | "INSUFFICIENT_DATA";
+  selected_method: string;
+  observations_count: number;
+  trajectory_points_count: number;
+  created_at: string;
+};
+
+export async function predictionRuns(metric?: string): Promise<PredictionRunSummary[]> {
+  const query = metric ? `?metric=${encodeURIComponent(metric)}` : "";
+  const response = await fetch(`${apiBase}/predictions/runs${query}`);
+  if (!response.ok) throw new Error(`API returned ${response.status}`);
+  return response.json();
+}
+
+export async function predictionTrajectory(runId: string): Promise<PredictionPointSummary[]> {
+  const response = await fetch(`${apiBase}/predictions/runs/${encodeURIComponent(runId)}/trajectory`);
+  if (!response.ok) throw new Error(`API returned ${response.status}`);
+  return response.json();
+}

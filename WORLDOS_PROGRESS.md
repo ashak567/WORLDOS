@@ -105,12 +105,24 @@
 10. `72c50be — Event / alert engine deepening with spatial-temporal correlation and evidence-linked alerting`
 11. `165bd82 — feat(decisions): implement deterministic decision support engine with MCDA ranking and sensitivity analysis`
 12. `526bb20 — feat(scenarios): implement deterministic scenario engine with isolated overlays and versioned branching`
+13. `e6f158a — feat(simulation): implement bounded deterministic forward simulation engine`
+14. `c6e10ef — feat(anomalies): implement evidence-aware deterministic anomaly detection`
+15. Current — `feat(prediction): implement deterministic forecasting and walk-forward evaluation` (Engine 18: Prediction Engine)
+
+### Current Engine 18 Progress
+- Implemented deterministic forecasting algorithms: naive baseline, seasonal naive baseline, rolling moving average, ordinary least squares linear trend with analytical prediction intervals, and walk-forward model auto-selection.
+- Added database migration `013_predictions.sql` creating `prediction_runs`, `prediction_points`, and `prediction_evaluations` tables.
+- Implemented rolling-origin walk-forward historical backtesting with zero target leakage.
+- Implemented standard forecast evaluation metrics: MAE, RMSE, MASE, Bias, and Interval Coverage.
+- Verified non-mutation of all operational tables.
+- Added 15 unit tests in `tests/test_prediction.py` and 6 container integration tests in `tests/test_container_integration.py` (total backend regression suite of 164 passing tests).
+- Verified clean frontend production build with prediction API types and fetchers.
 
 ### Not claimed as complete
 
-- Empirical statistical calibration, machine-learned parameter estimation, and backtested historical forecasting are deferred to Engine 18 (Prediction Engine); transition models in Engine 17 are structural/heuristic simulations under explicit user parameters.
-- High-resolution partial differential spatial mesh fluid/climate simulations are deferred.
+- Ingestion, hashing, and retrieval of raster satellite imagery and raw documents are deferred to Engine 19 (Multimodal Evidence Engine).
+- Autonomous AI agent workflows and multi-agent coordination are deferred to a later layer.
 
 ### Next task
 
-Engine 18: Prediction Engine — forward-looking projection beyond observed time horizons with explicit model assumptions, confidence intervals, and evidence citations.
+Engine 19: Multimodal Evidence Engine — ingestion, cryptographic hashing, and spatial-temporal retrieval of raster satellite imagery, documents, and sensory media.
