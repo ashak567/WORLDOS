@@ -912,3 +912,120 @@ class SimulationComparison(BaseModel):
     trajectory_divergence: dict[str, Any] = Field(default_factory=dict)
     feasibility_comparison: dict[str, bool] = Field(default_factory=dict)
     summary: str
+
+
+# ==============================================================================
+# Engine 15: Anomaly Detection Models
+# ==============================================================================
+
+
+class AnomalySeverity(str, Enum):
+    INFO = "INFO"
+    WARNING = "WARNING"
+    HIGH = "HIGH"
+    CRITICAL = "CRITICAL"
+
+
+class FindingLifecycleStatus(str, Enum):
+    NEW = "NEW"
+    ACTIVE = "ACTIVE"
+    RESOLVED = "RESOLVED"
+    SUPPRESSED = "SUPPRESSED"
+
+
+class DetectionMethod(str, Enum):
+    ROBUST_ZSCORE_MAD = "robust_zscore_mad"
+    TEMPORAL_CHANGE = "temporal_change"
+    PEER_GROUP_DEVIATION = "peer_group_deviation"
+    SPATIAL_DEVIATION = "spatial_deviation"
+    MULTIVARIATE_MAHALANOBIS = "multivariate_mahalanobis"
+
+
+class DetectionMethodDefinition(BaseModel):
+    method: DetectionMethod
+    name: str
+    version: str = "v1.0.0"
+    description: str
+    supported_scopes: list[str] = Field(default_factory=list)
+    required_parameters: list[str] = Field(default_factory=list)
+    default_threshold: float
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class AnomalyDetectionRequest(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    entity_ids: list[UUID] | None = None
+    metric: str
+    detection_methods: list[DetectionMethod] = Field(
+        default_factory=lambda: [DetectionMethod.ROBUST_ZSCORE_MAD, DetectionMethod.TEMPORAL_CHANGE]
+    )
+    baseline_config: dict[str, Any] = Field(default_factory=dict)
+    threshold: float | None = None
+    min_observations: int = Field(default=3, ge=2)
+    spatial_scope: dict[str, Any] | None = None
+    starts_at: datetime | None = None
+    ends_at: datetime | None = None
+    severity_thresholds: dict[str, float] | None = None
+    limit: int = Field(default=100, ge=1, le=1000)
+    evaluate_as_alert: bool = False
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_request(self) -> "AnomalyDetectionRequest":
+        if not self.metric or not self.metric.strip():
+            raise ValueError("metric cannot be empty")
+        if self.starts_at and self.ends_at and self.ends_at < self.starts_at:
+            raise ValueError("ends_at must not precede starts_at")
+        if self.threshold is not None:
+            if not math.isfinite(self.threshold) or self.threshold <= 0:
+                raise ValueError("threshold must be a positive finite number")
+        return self
+
+
+class AnomalyFinding(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    run_id: UUID | None = None
+    entity_id: UUID
+    entity_name: str
+    observation_id: UUID | None = None
+    metric: str
+    unit: str
+    observed_value: float
+    observed_at: datetime
+    expected_value: float | None = None
+    deviation: float
+    deviation_magnitude: float
+    anomaly_score: float
+    detection_method: DetectionMethod | str
+    method_version: str = "v1.0.0"
+    threshold_applied: float
+    severity: AnomalySeverity = AnomalySeverity.WARNING
+    status: FindingLifecycleStatus = FindingLifecycleStatus.NEW
+    data_reliability: float = Field(default=1.0, ge=0.0, le=1.0)
+    baseline_observation_count: int = 0
+    baseline_window: dict[str, Any] = Field(default_factory=dict)
+    baseline_summary: dict[str, Any] = Field(default_factory=dict)
+    evidence_ids: list[UUID] = Field(default_factory=list)
+    truth_class: TruthClass = TruthClass.DERIVED
+    explanation: str
+    limitations: list[str] = Field(default_factory=list)
+    data_quality_warnings: list[str] = Field(default_factory=list)
+    fingerprint: str = ""
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
+class AnomalyRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    status: str = "RUNNING"
+    request: AnomalyDetectionRequest
+    observations_evaluated: int = 0
+    findings_count: int = 0
+    findings: list[AnomalyFinding] = Field(default_factory=list)
+    summary_statistics: dict[str, Any] = Field(default_factory=dict)
+    exclusions_and_warnings: list[str] = Field(default_factory=list)
+    execution_duration_ms: float | None = None
+    error_message: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None

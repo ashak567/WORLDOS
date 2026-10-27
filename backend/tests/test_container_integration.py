@@ -61,6 +61,12 @@ from app.domain import (
     TruthClass,
     WorldBundle,
     WorldContext,
+    AnomalyDetectionRequest,
+    AnomalyFinding,
+    AnomalyRun,
+    AnomalySeverity,
+    DetectionMethod,
+    FindingLifecycleStatus,
 )
 from app.constraints import ConstraintEngine, ConstraintViolationError
 from app.export import export_observations
@@ -128,6 +134,15 @@ from app.main import (
     validate_scenario_endpoint,
     validate_snapshot_endpoint,
     world_bank_bundle,
+    FindingActionRequest,
+    detect_anomalies_endpoint,
+    get_anomaly_finding_endpoint,
+    get_anomaly_run_endpoint,
+    list_anomaly_findings_endpoint,
+    list_anomaly_methods_endpoint,
+    list_anomaly_runs_endpoint,
+    resolve_anomaly_finding_endpoint,
+    suppress_anomaly_finding_endpoint,
 )
 from app.ingestion.usgs import EarthquakeRecord
 from app.scenarios import ScenarioLifecycleError
@@ -2597,3 +2612,370 @@ class ContainerIntegrationTests(unittest.TestCase):
         # 8. POST /simulations/{id}/cancel (on completed simulation -> raises 400)
         with self.assertRaises(HTTPException):
             cancel_simulation_endpoint(sim_run.id)
+
+    # -------------------------------------------------------------------------
+    # Engine 15: Anomaly Detection Integration Tests
+    # -------------------------------------------------------------------------
+
+    def test_anomaly_detection_execution_and_authoritative_non_mutation(self) -> None:
+        """Verify anomaly detection over historical series and STRICT non-mutation of authoritative tables."""
+        # 1. Count rows in authoritative operational tables before detection
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM entities")
+            entities_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM observations")
+            obs_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM geometries")
+            geoms_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM evidence")
+            evidence_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM provenance")
+            provenance_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM entity_identifiers")
+            identifiers_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM alerts")
+            alerts_before = cur.fetchone()["c"]
+
+            test_entity_id = uuid4()
+            cur.execute("SELECT id AS evidence_id FROM evidence LIMIT 1")
+            ev_id = cur.fetchone()["evidence_id"]
+            cur.execute("SELECT id AS provenance_id FROM provenance LIMIT 1")
+            prov_id = cur.fetchone()["provenance_id"]
+
+            cur.execute(
+                "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Anomaly Test Country', 1.0)",
+                (test_entity_id,),
+            )
+            # Insert baseline observations followed by an anomalous spike point (99,000,000)
+            for yr, val in [(2030, 10000000.0), (2031, 10100000.0), (2032, 10200000.0), (2033, 10300000.0), (2034, 99000000.0)]:
+                sub_t = uuid4()
+                cur.execute(
+                    "INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')",
+                    (sub_t, datetime(yr, 1, 1, tzinfo=UTC)),
+                )
+                cur.execute(
+                    """
+                    INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence)
+                    VALUES (%s, %s, 'test_anomaly.pop', %s, 'persons', 'OBSERVED', %s, %s, %s, 1.0)
+                    """,
+                    (uuid4(), test_entity_id, val, sub_t, ev_id, prov_id),
+                )
+            conn.commit()
+
+        try:
+            # Run anomaly detection
+            req = AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_anomaly.pop",
+                threshold=3.0,
+                min_observations=3,
+                detection_methods=[DetectionMethod.ROBUST_ZSCORE_MAD, DetectionMethod.TEMPORAL_CHANGE],
+            )
+            run = self.repo.detect_anomalies(req)
+
+            self.assertEqual(run.status, "COMPLETED")
+            self.assertGreater(run.observations_evaluated, 0)
+            self.assertGreater(run.findings_count, 0)
+
+            # Check finding properties
+            spike_finding = next((f for f in run.findings if f.observed_value == 99000000.0), None)
+            self.assertIsNotNone(spike_finding)
+            self.assertEqual(spike_finding.truth_class, TruthClass.DERIVED)
+            self.assertEqual(spike_finding.status, FindingLifecycleStatus.NEW)
+            self.assertTrue(spike_finding.explanation)
+            self.assertGreater(spike_finding.anomaly_score, 3.0)
+            self.assertIn(spike_finding.severity, (AnomalySeverity.HIGH, AnomalySeverity.CRITICAL))
+
+        finally:
+            # Clean up test observations and test entity
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_anomaly.pop'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+        # STRICT NON-MUTATION ASSERTION: Check that authoritative tables were NOT mutated by anomaly detection
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM entities")
+            self.assertEqual(cur.fetchone()["c"], entities_before)
+            cur.execute("SELECT COUNT(*) AS c FROM observations")
+            self.assertEqual(cur.fetchone()["c"], obs_before)
+            cur.execute("SELECT COUNT(*) AS c FROM geometries")
+            self.assertEqual(cur.fetchone()["c"], geoms_before)
+            cur.execute("SELECT COUNT(*) AS c FROM evidence")
+            self.assertEqual(cur.fetchone()["c"], evidence_before)
+            cur.execute("SELECT COUNT(*) AS c FROM provenance")
+            self.assertEqual(cur.fetchone()["c"], provenance_before)
+            cur.execute("SELECT COUNT(*) AS c FROM entity_identifiers")
+            self.assertEqual(cur.fetchone()["c"], identifiers_before)
+            cur.execute("SELECT COUNT(*) AS c FROM alerts")
+            self.assertEqual(cur.fetchone()["c"], alerts_before)
+
+    def test_anomaly_temporal_change_spike_and_drop(self) -> None:
+        """Verify temporal change detects both abrupt spikes and drops and ignores ordinary noise."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute("INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Temporal Test Entity', 1.0)", (test_entity_id,))
+            for yr, val in [(2020, 100.0), (2021, 102.0), (2022, 20.0)]:
+                tid = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (tid, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_temporal.drop', %s, 'count', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), test_entity_id, val, tid, evidence_id, provenance_id)
+                )
+            conn.commit()
+
+        try:
+            req = AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_temporal.drop",
+                threshold=25.0,
+                detection_methods=[DetectionMethod.TEMPORAL_CHANGE],
+            )
+            run = self.repo.detect_anomalies(req)
+            self.assertEqual(run.status, "COMPLETED")
+
+            # 100 -> 102 is 2% change, below threshold 25%, so no finding for 2021
+            findings_2021 = [f for f in run.findings if f.observed_at.year == 2021]
+            self.assertEqual(len(findings_2021), 0)
+
+            # 102 -> 20 is ~-80.4% drop, triggers finding
+            findings_2022 = [f for f in run.findings if f.observed_at.year == 2022]
+            self.assertEqual(len(findings_2022), 1)
+            f2022 = findings_2022[0]
+            self.assertLess(f2022.deviation, 0)
+            self.assertAlmostEqual(f2022.deviation, -82.0, places=1)
+            self.assertGreater(f2022.anomaly_score, 25.0)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_temporal.drop'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_anomaly_constant_series_and_insufficient_history(self) -> None:
+        """Verify explicit handling of constant series (zero dispersion) and insufficient history."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute("INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Constant Test Entity', 1.0)", (test_entity_id,))
+            for yr in (2020, 2021, 2022, 2023):
+                tid = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (tid, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_constant.metric', 5.0, 'kg', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), test_entity_id, tid, evidence_id, provenance_id)
+                )
+
+            for yr in (2020, 2021):
+                tid = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (tid, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_insufficient.metric', 10.0, 'kg', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), test_entity_id, tid, evidence_id, provenance_id)
+                )
+            conn.commit()
+
+        try:
+            run_const = self.repo.detect_anomalies(AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_constant.metric",
+                threshold=3.0,
+                min_observations=3,
+                detection_methods=[DetectionMethod.ROBUST_ZSCORE_MAD],
+            ))
+            self.assertEqual(run_const.status, "COMPLETED")
+            self.assertEqual(run_const.findings_count, 0)
+
+            run_insuf = self.repo.detect_anomalies(AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_insufficient.metric",
+                threshold=3.0,
+                min_observations=4,
+                detection_methods=[DetectionMethod.ROBUST_ZSCORE_MAD],
+            ))
+            self.assertEqual(run_insuf.status, "COMPLETED")
+            self.assertEqual(run_insuf.findings_count, 0)
+            self.assertTrue(any("INSUFFICIENT_DATA" in msg for msg in run_insuf.exclusions_and_warnings))
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric IN ('test_constant.metric', 'test_insufficient.metric')")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_anomaly_peer_group_and_spatial_deviation(self) -> None:
+        """Verify peer group cross-sectional detection flags outlier within peer cohort."""
+        e1, e2, e3 = uuid4(), uuid4(), uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            for eid, name in [(e1, "Peer City Alpha"), (e2, "Peer City Beta"), (e3, "Peer City Gamma")]:
+                cur.execute(
+                    "INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', %s, 1.0)",
+                    (eid, name)
+                )
+
+            t2025 = uuid4()
+            cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (t2025, datetime(2025, 1, 1, tzinfo=UTC)))
+            for eid, val in [(e1, 100.0), (e2, 105.0), (e3, 500.0)]:
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_peer.val', %s, 'index', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), eid, val, t2025, evidence_id, provenance_id)
+                )
+            conn.commit()
+
+        try:
+            run = self.repo.detect_anomalies(AnomalyDetectionRequest(
+                entity_ids=[e1, e2, e3],
+                metric="test_peer.val",
+                threshold=2.0,
+                detection_methods=[DetectionMethod.PEER_GROUP_DEVIATION],
+            ))
+            self.assertEqual(run.status, "COMPLETED")
+            self.assertEqual(run.findings_count, 1)
+            self.assertEqual(run.findings[0].entity_id, e3)
+            self.assertEqual(run.findings[0].observed_value, 500.0)
+            self.assertEqual(run.findings[0].detection_method, DetectionMethod.PEER_GROUP_DEVIATION)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_peer.val'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id IN (%s, %s, %s)", (e1, e2, e3))
+                cur.execute("DELETE FROM entities WHERE id IN (%s, %s, %s)", (e1, e2, e3))
+                conn.commit()
+
+    def test_anomaly_fingerprint_deduplication_and_lifecycle(self) -> None:
+        """Verify fingerprint deduplication and finding lifecycle transitions (suppress, resolve)."""
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute("INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'Dedup Test Entity', 1.0)", (test_entity_id,))
+            for yr, val in [(2020, 10.0), (2021, 10.0), (2022, 10.0), (2023, 100.0)]:
+                tid = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (tid, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_dedup.metric', %s, 'count', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), test_entity_id, val, tid, evidence_id, provenance_id)
+                )
+            conn.commit()
+
+        try:
+            req = AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_dedup.metric",
+                threshold=3.0,
+                min_observations=3,
+                detection_methods=[DetectionMethod.ROBUST_ZSCORE_MAD],
+            )
+
+            run1 = self.repo.detect_anomalies(req)
+            self.assertEqual(run1.findings_count, 1)
+            f1 = run1.findings[0]
+
+            run2 = self.repo.detect_anomalies(req)
+            self.assertEqual(run2.findings_count, 1)
+            f2 = run2.findings[0]
+
+            self.assertEqual(f1.fingerprint, f2.fingerprint)
+
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("SELECT COUNT(*) AS c FROM anomaly_findings WHERE fingerprint = %s", (f1.fingerprint,))
+                self.assertEqual(cur.fetchone()["c"], 1)
+
+            suppressed = self.repo.suppress_anomaly_finding(f1.id, notes="Known reporting quirk")
+            self.assertEqual(suppressed.status, FindingLifecycleStatus.SUPPRESSED)
+
+            resolved = self.repo.resolve_anomaly_finding(f1.id, notes="Corrected by publisher")
+            self.assertEqual(resolved.status, FindingLifecycleStatus.RESOLVED)
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_dedup.metric'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()
+
+    def test_anomaly_rest_api_endpoints(self) -> None:
+        """Verify REST API endpoints for Engine 15 Anomaly Detection."""
+        methods = list_anomaly_methods_endpoint()
+        self.assertGreaterEqual(len(methods), 4)
+
+        test_entity_id = uuid4()
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT id FROM evidence LIMIT 1")
+            evidence_id = cur.fetchone()["id"]
+            cur.execute("SELECT id FROM provenance LIMIT 1")
+            provenance_id = cur.fetchone()["id"]
+
+            cur.execute("INSERT INTO entities (id, kind, canonical_name, confidence) VALUES (%s, 'place', 'API Test Entity', 1.0)", (test_entity_id,))
+            for yr, val in [(2020, 50.0), (2021, 52.0), (2022, 51.0), (2023, 500.0)]:
+                tid = uuid4()
+                cur.execute("INSERT INTO time_intervals (id, starts_at, precision) VALUES (%s, %s, 'year')", (tid, datetime(yr, 1, 1, tzinfo=UTC)))
+                cur.execute(
+                    "INSERT INTO observations (id, subject_entity_id, measure, value, unit, truth_class, time_interval_id, evidence_id, provenance_id, confidence) VALUES (%s, %s, 'test_api.anomaly', %s, 'count', 'OBSERVED', %s, %s, %s, 1.0)",
+                    (uuid4(), test_entity_id, val, tid, evidence_id, provenance_id)
+                )
+            conn.commit()
+
+        try:
+            req = AnomalyDetectionRequest(
+                entity_ids=[test_entity_id],
+                metric="test_api.anomaly",
+                threshold=3.0,
+                min_observations=3,
+                detection_methods=[DetectionMethod.ROBUST_ZSCORE_MAD],
+            )
+            run = detect_anomalies_endpoint(req)
+            self.assertEqual(run.status, "COMPLETED")
+            self.assertEqual(run.findings_count, 1)
+
+            runs = list_anomaly_runs_endpoint(limit=10)
+            self.assertTrue(any(r.id == run.id for r in runs))
+
+            retrieved_run = get_anomaly_run_endpoint(run.id)
+            self.assertEqual(retrieved_run.id, run.id)
+
+            findings = list_anomaly_findings_endpoint(metric="test_api.anomaly")
+            self.assertEqual(len(findings), 1)
+
+            fid = findings[0].id
+            retrieved_finding = get_anomaly_finding_endpoint(fid)
+            self.assertEqual(retrieved_finding.id, fid)
+
+            supp = suppress_anomaly_finding_endpoint(fid, FindingActionRequest(notes="Test suppress"))
+            self.assertEqual(supp.status, FindingLifecycleStatus.SUPPRESSED)
+
+            res = resolve_anomaly_finding_endpoint(fid, FindingActionRequest(notes="Test resolve"))
+            self.assertEqual(res.status, FindingLifecycleStatus.RESOLVED)
+
+            with self.assertRaises(HTTPException):
+                get_anomaly_finding_endpoint(uuid4())
+
+            with self.assertRaises(HTTPException):
+                get_anomaly_run_endpoint(uuid4())
+
+        finally:
+            with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+                cur.execute("DELETE FROM anomaly_findings WHERE metric = 'test_api.anomaly'")
+                cur.execute("DELETE FROM observations WHERE subject_entity_id = %s", (test_entity_id,))
+                cur.execute("DELETE FROM entities WHERE id = %s", (test_entity_id,))
+                conn.commit()

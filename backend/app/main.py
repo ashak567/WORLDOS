@@ -60,6 +60,19 @@ from .domain import (
     TruthClass,
     WorldBundle,
     WorldContext,
+    AnomalyDetectionRequest,
+    AnomalyFinding,
+    AnomalyRun,
+    AnomalySeverity,
+    DetectionMethod,
+    DetectionMethodDefinition,
+    FindingLifecycleStatus,
+)
+from .alerts import AlertEngine
+from .anomalies import (
+    AnomalyConfigurationError,
+    AnomalyDataQualityError,
+    AnomalyLifecycleError,
 )
 from .analytics import DuckDbSpatialAnalytics
 from .benchmarks import AnalyticalBenchmarkSuite
@@ -121,6 +134,33 @@ def simulation_configuration_handler(request, exc: SimulationConfigurationError)
 
 @app.exception_handler(SimulationConstraintViolationError)
 def simulation_constraint_handler(request, exc: SimulationConstraintViolationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AnomalyConfigurationError)
+def anomaly_configuration_handler(request, exc: AnomalyConfigurationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AnomalyLifecycleError)
+def anomaly_lifecycle_handler(request, exc: AnomalyLifecycleError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(AnomalyDataQualityError)
+def anomaly_data_quality_handler(request, exc: AnomalyDataQualityError):
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=422,
@@ -1634,3 +1674,116 @@ def cancel_simulation_endpoint(simulation_id: UUID):
         return {"cancelled": cancelled, "simulation_id": simulation_id}
     except SimulationLifecycleError as sle:
         raise HTTPException(status_code=400, detail=str(sle)) from sle
+
+
+# ==============================================================================
+# Engine 15: Anomaly Detection Endpoints
+# ==============================================================================
+
+
+@app.get("/anomalies/methods", response_model=list[DetectionMethodDefinition])
+def list_anomaly_methods_endpoint():
+    """List registered anomaly detection methods and their configuration requirements."""
+    return WorldRepository().list_anomaly_methods()
+
+
+@app.post("/anomalies/detect", response_model=AnomalyRun)
+def detect_anomalies_endpoint(request: AnomalyDetectionRequest):
+    """Execute a deterministic anomaly detection run over authoritative observations."""
+    repo = WorldRepository()
+    try:
+        return repo.detect_anomalies(request)
+    except AnomalyConfigurationError as ace:
+        raise HTTPException(status_code=400, detail=str(ace)) from ace
+    except AnomalyDataQualityError as adqe:
+        raise HTTPException(status_code=422, detail=str(adqe)) from adqe
+
+
+@app.get("/anomalies/runs", response_model=list[AnomalyRun])
+def list_anomaly_runs_endpoint(
+    status: str | None = None,
+    limit: int = Query(default=50, ge=1, le=500),
+    offset: int = Query(default=0, ge=0),
+):
+    """List anomaly detection runs with pagination and optional status filter."""
+    status_v = _clean_param(status)
+    limit_v = _clean_param(limit, 50)
+    offset_v = _clean_param(offset, 0)
+    return WorldRepository().list_anomaly_runs(status=status_v, limit=limit_v, offset=offset_v)
+
+
+@app.get("/anomalies/runs/{run_id}", response_model=AnomalyRun)
+def get_anomaly_run_endpoint(run_id: UUID):
+    """Retrieve an anomaly run and its associated findings."""
+    run = WorldRepository().get_anomaly_run(run_id)
+    if not run:
+        raise HTTPException(status_code=404, detail=f"Anomaly run {run_id} not found")
+    return run
+
+
+@app.get("/anomalies/findings", response_model=list[AnomalyFinding])
+def list_anomaly_findings_endpoint(
+    entity_id: UUID | None = None,
+    metric: str | None = None,
+    severity: AnomalySeverity | str | None = None,
+    status: FindingLifecycleStatus | str | None = None,
+    detection_method: DetectionMethod | str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    """List anomaly findings with structured filters and pagination."""
+    eid_v = _clean_param(entity_id)
+    met_v = _clean_param(metric)
+    sev_v = _clean_param(severity)
+    st_v = _clean_param(status)
+    dm_v = _clean_param(detection_method)
+    limit_v = _clean_param(limit, 100)
+    offset_v = _clean_param(offset, 0)
+    return WorldRepository().list_anomaly_findings(
+        entity_id=eid_v,
+        metric=met_v,
+        severity=sev_v,
+        status=st_v,
+        detection_method=dm_v,
+        limit=limit_v,
+        offset=offset_v,
+    )
+
+
+@app.get("/anomalies/findings/{finding_id}", response_model=AnomalyFinding)
+def get_anomaly_finding_endpoint(finding_id: UUID):
+    """Retrieve an individual anomaly finding by its unique identifier."""
+    finding = WorldRepository().get_anomaly_finding(finding_id)
+    if not finding:
+        raise HTTPException(status_code=404, detail=f"Anomaly finding {finding_id} not found")
+    return finding
+
+
+class FindingActionRequest(BaseModel):
+    notes: str | None = None
+
+
+@app.post("/anomalies/findings/{finding_id}/suppress", response_model=AnomalyFinding)
+def suppress_anomaly_finding_endpoint(finding_id: UUID, req: FindingActionRequest | None = None):
+    """Suppress a finding to prevent repeated operational alert notifications."""
+    repo = WorldRepository()
+    try:
+        notes = req.notes if req else None
+        return repo.suppress_anomaly_finding(finding_id, notes=notes)
+    except AnomalyLifecycleError as ale:
+        if "not found" in str(ale).lower():
+            raise HTTPException(status_code=404, detail=str(ale)) from ale
+        raise HTTPException(status_code=400, detail=str(ale)) from ale
+
+
+@app.post("/anomalies/findings/{finding_id}/resolve", response_model=AnomalyFinding)
+def resolve_anomaly_finding_endpoint(finding_id: UUID, req: FindingActionRequest | None = None):
+    """Mark a finding as resolved after verification or baseline remediation."""
+    repo = WorldRepository()
+    try:
+        notes = req.notes if req else None
+        return repo.resolve_anomaly_finding(finding_id, notes=notes)
+    except AnomalyLifecycleError as ale:
+        if "not found" in str(ale).lower():
+            raise HTTPException(status_code=404, detail=str(ale)) from ale
+        raise HTTPException(status_code=400, detail=str(ale)) from ale

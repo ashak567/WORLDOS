@@ -1,5 +1,42 @@
 # WORLDOS progress
 
+## Checkpoint: Deterministic Evidence-Aware Anomaly Detection Engine (Engine 15)
+
+**Date:** 2026-10-27
+**Branch:** `main`
+**Status:** implemented; live container integration and contract tests passing, frontend production build passed
+
+### Completed
+
+- **Database Migration (`db/init/012_anomalies.sql`):**
+  - Created relational tables `anomaly_runs` and `anomaly_findings`.
+  - Added indexes on `entity_id`, `metric`, `observed_at`, `severity`, `status`, `detection_method`, `run_id`, and `created_at`.
+  - Enforced unique constraint on `fingerprint` for idempotent execution and deduplication.
+- **Typed Anomaly Domain Models (`backend/app/domain.py`):**
+  - Implemented `AnomalySeverity` (`INFO`, `WARNING`, `HIGH`, `CRITICAL`).
+  - Implemented `FindingLifecycleStatus` (`NEW`, `ACTIVE`, `RESOLVED`, `SUPPRESSED`).
+  - Implemented `DetectionMethod` (`ROBUST_ZSCORE_MAD`, `TEMPORAL_CHANGE`, `PEER_GROUP_DEVIATION`, `SPATIAL_DEVIATION`, `MULTIVARIATE_MAHALANOBIS`).
+  - Implemented `DetectionMethodDefinition` declaring method metadata, supported scopes, parameters, default thresholds, assumptions, and limitations.
+  - Implemented `AnomalyDetectionRequest` with input bounds and temporal ordering validation.
+  - Implemented `AnomalyFinding` preserving observed value, expected value, deviation, normalized anomaly score, data reliability, evidence references, explanations, limitations, and fingerprints.
+  - Implemented `AnomalyRun` with execution metadata, observations count, findings count, summary statistics, and data quality exclusions.
+- **Deterministic Detection Algorithms (`backend/app/anomalies.py`):**
+  - *Method A: Robust Z-Score via MAD*: Computes median and MAD scaled by 0.6745. Implemented target leakage prevention (evaluating strictly against preceding points) and zero-dispersion handling for constant series without division by zero.
+  - *Method B: Temporal Change Detection*: Computes step-to-step percentage and absolute shifts, handling zero baselines and rejecting false percentage calculations.
+  - *Method C: Peer Group Cross-Sectional Deviation*: Evaluates entities against contemporaneous peer cohorts of the same entity kind.
+  - *Method D: Spatial Neighborhood Deviation*: Integrates PostGIS geometry coordinates to evaluate observations against spatial neighbors within distance radius.
+  - *Method E: Multivariate Mahalanobis*: Registered specification and interface for aligned multi-metric distance.
+- **Data Quality, Epistemics & Deduplication:**
+  - Strict non-mutation guarantee: Authoritative operational tables (`entities`, `observations`, `geometries`, `evidence`, `alerts`, etc.) are verified not to have added, modified, or deleted rows during anomaly detection.
+  - Epistemic classification: All anomaly findings carry `TruthClass.DERIVED` and cite underlying observation `evidence_ids`.
+  - Canonical SHA-256 fingerprinting for deduplication and lifecycle tracking (`suppress`, `resolve`).
+- **Storage & REST API Integration (`backend/app/storage.py`, `backend/app/main.py`):**
+  - Added `AnomalyEngine` delegate methods to `WorldRepository`.
+  - Implemented endpoints: `GET /anomalies/methods`, `POST /anomalies/detect`, `GET /anomalies/runs`, `GET /anomalies/runs/{id}`, `GET /anomalies/findings`, `GET /anomalies/findings/{id}`, `POST /anomalies/findings/{id}/suppress`, `POST /anomalies/findings/{id}/resolve`.
+- **Frontend Integration (`frontend/src/api.ts`):**
+  - Added `AnomalyFindingSummary` type and `anomalyFindings` fetcher.
+  - Verified frontend production build passed cleanly in 16.46s.
+
 ## Checkpoint: Bounded Deterministic Forward Simulation Engine (Engine 17)
 
 **Date:** 2026-10-27

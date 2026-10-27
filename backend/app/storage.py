@@ -50,8 +50,16 @@ from .domain import (
     TransitionRuleDefinition,
     WorldBundle,
     WorldContext,
+    AnomalyDetectionRequest,
+    AnomalyFinding,
+    AnomalyRun,
+    AnomalySeverity,
+    DetectionMethod,
+    DetectionMethodDefinition,
+    FindingLifecycleStatus,
 )
 from .alerts import AlertEngine
+from .anomalies import AnomalyEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .decisions import DecisionEngine
 from .scenarios import ScenarioEngine
@@ -87,6 +95,7 @@ class WorldRepository:
         self.decision_engine = DecisionEngine(repository=self)
         self.scenario_engine = ScenarioEngine(repository=self)
         self.simulation_engine = SimulationEngine(repository=self)
+        self.anomaly_engine = AnomalyEngine(repository=self)
 
 
     @contextmanager
@@ -1994,3 +2003,69 @@ class WorldRepository:
     def list_simulation_rules(self) -> list[TransitionRuleDefinition]:
         """List registered transition rules."""
         return self.simulation_engine.rule_registry.list_rules()
+
+    # -------------------------------------------------------------------------
+    # Engine 15: Anomaly Detection Engine Methods
+    # -------------------------------------------------------------------------
+
+    def detect_anomalies(self, request: AnomalyDetectionRequest) -> AnomalyRun:
+        """Execute a deterministic anomaly detection request."""
+        with self._connection() as conn:
+            return self.anomaly_engine.detect(request, conn=conn)
+
+    def list_anomaly_runs(
+        self,
+        status: str | None = None,
+        limit: int = 50,
+        offset: int = 0,
+    ) -> list[AnomalyRun]:
+        """List anomaly detection runs with pagination."""
+        with self._connection() as conn:
+            return self.anomaly_engine.list_runs(status=status, limit=limit, offset=offset, conn=conn)
+
+    def get_anomaly_run(self, run_id: UUID) -> AnomalyRun | None:
+        """Retrieve an anomaly run and its associated findings."""
+        with self._connection() as conn:
+            return self.anomaly_engine.get_run(run_id, conn=conn)
+
+    def list_anomaly_findings(
+        self,
+        entity_id: UUID | None = None,
+        metric: str | None = None,
+        severity: AnomalySeverity | str | None = None,
+        status: FindingLifecycleStatus | str | None = None,
+        detection_method: DetectionMethod | str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[AnomalyFinding]:
+        """List anomaly findings with structured filters and pagination."""
+        with self._connection() as conn:
+            return self.anomaly_engine.list_findings(
+                entity_id=entity_id,
+                metric=metric,
+                severity=severity,
+                status=status,
+                detection_method=detection_method,
+                limit=limit,
+                offset=offset,
+                conn=conn,
+            )
+
+    def get_anomaly_finding(self, finding_id: UUID) -> AnomalyFinding | None:
+        """Retrieve an anomaly finding by ID."""
+        with self._connection() as conn:
+            return self.anomaly_engine.get_finding(finding_id, conn=conn)
+
+    def suppress_anomaly_finding(self, finding_id: UUID, notes: str | None = None) -> AnomalyFinding:
+        """Suppress a finding to prevent repeated operational alert notifications."""
+        with self._connection() as conn:
+            return self.anomaly_engine.suppress_finding(finding_id, notes=notes, conn=conn)
+
+    def resolve_anomaly_finding(self, finding_id: UUID, notes: str | None = None) -> AnomalyFinding:
+        """Mark a finding as resolved after verification or baseline remediation."""
+        with self._connection() as conn:
+            return self.anomaly_engine.resolve_finding(finding_id, notes=notes, conn=conn)
+
+    def list_anomaly_methods(self) -> list[DetectionMethodDefinition]:
+        """List registered anomaly detection methods."""
+        return self.anomaly_engine.list_methods()

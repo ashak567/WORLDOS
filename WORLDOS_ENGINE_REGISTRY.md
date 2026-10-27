@@ -200,17 +200,17 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: External notification delivery channels (webhooks, email dispatchers) as deferred async tasks.
 
 ### 15. Anomaly Detection Engine
-- **Purpose**: Deterministic statistical outlier and change-point detection on historical observation series.
-- **Status**: `INTERFACE_ONLY`
-- **Inputs**: Time-series observation values (`list[float]`), significance thresholds.
-- **Outputs**: Indices of anomalous observations (`list[int]`).
-- **Dependencies**: `interfaces.py`, `numpy`/`duckdb`.
-- **Persistence**: Ephemeral / derived observation tags.
-- **Interface / API**: `AnomalyEngine.detect(series: list[float]) -> list[int]`.
-- **Evidence Requirements**: Detected anomalies must cite the underlying series evidence IDs.
-- **Test Contract**: Verification against synthetic standard normal distribution with injected outliers.
-- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
-- **Next Milestone**: Implement z-score and IQR-based anomaly detection over DuckDB series.
+- **Purpose**: Deterministic, evidence-bound statistical outlier, temporal change-point, peer-group cross-sectional, and spatial anomaly detection over authoritative world-state data.
+- **Status**: `VERIFIED`
+- **Inputs**: `AnomalyDetectionRequest` (entity IDs, metric, detection methods, threshold, min observations, spatial scope, temporal range, severity thresholds).
+- **Outputs**: `AnomalyRun` record, ordered `AnomalyFinding` list, summary statistics, data-quality exclusions and warnings.
+- **Dependencies**: PostgreSQL/PostGIS (`observations`, `time_intervals`, `entities`, `geometries`), `backend/app/domain.py`, `backend/app/anomalies.py`.
+- **Persistence**: Relational tables in PostgreSQL (`anomaly_runs`, `anomaly_findings`) via migration `012_anomalies.sql`.
+- **Interface / API**: `AnomalyEngine` class in `backend/app/anomalies.py`; `WorldRepository` methods (`detect_anomalies`, `list_anomaly_runs`, `get_anomaly_run`, `list_anomaly_findings`, `get_anomaly_finding`, `suppress_anomaly_finding`, `resolve_anomaly_finding`, `list_anomaly_methods`); REST endpoints `/anomalies/*` in `backend/app/main.py`.
+- **Evidence Requirements**: All detected findings carry `TruthClass.DERIVED`, cite underlying observation `evidence_ids`, compute canonical deterministic SHA-256 fingerprints for deduplication, and record structured explanations and explicit limitations.
+- **Test Contract**: Verified by 12 unit tests in `backend/tests/test_anomalies.py` (median, MAD, modified z-score, zero dispersion, temporal shifts, request validation, fingerprint determinism, severity mapping) and 6 container-backed integration tests in `backend/tests/test_container_integration.py` (authoritative non-mutation checks across all operational tables, temporal drop/spike detection, constant series & insufficient history handling, peer group cross-sectional detection, fingerprint deduplication & lifecycle transitions, and full REST API endpoint operations). Total backend test suite of 143 tests passing.
+- **Current Implementation**: Complete deterministic engine with robust z-score via MAD (0.6745 NIST scaling), temporal change detection, peer cohort deviation, spatial neighborhood deviation, formal finding lifecycle (`NEW`, `ACTIVE`, `RESOLVED`, `SUPPRESSED`), and full REST API.
+- **Next Milestone**: Multivariate joint anomaly detection deepening with automated feature alignment and covariance regularization.
 
 ### 16. Scenario Engine
 - **Purpose**: Isolated counterfactual state branches, deterministic parameter modifications, overlay evaluation, versioned branching, and cross-branch comparison without operational world-state mutation.

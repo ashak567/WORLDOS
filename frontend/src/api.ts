@@ -30,3 +30,26 @@ export async function geometryFeatures(): Promise<GeometryFeature[]> {
   return response.json();
 }
 
+export type AnomalyFindingSummary = {
+  id: string;
+  entity_id: string;
+  entity_name: string;
+  metric: string;
+  unit: string;
+  observed_value: number;
+  observed_at: string;
+  expected_value: number | null;
+  deviation: number;
+  anomaly_score: number;
+  detection_method: string;
+  severity: "INFO" | "WARNING" | "HIGH" | "CRITICAL";
+  status: "NEW" | "ACTIVE" | "RESOLVED" | "SUPPRESSED";
+  explanation: string;
+};
+
+export async function anomalyFindings(metric?: string): Promise<AnomalyFindingSummary[]> {
+  const query = metric ? `?metric=${encodeURIComponent(metric)}` : "";
+  const response = await fetch(`${apiBase}/anomalies/findings${query}`);
+  if (!response.ok) throw new Error(`API returned ${response.status}`);
+  return response.json();
+}
