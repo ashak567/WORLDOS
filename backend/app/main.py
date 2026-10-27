@@ -45,12 +45,18 @@ from .domain import (
     ScenarioProposal,
     ScenarioStatus,
     SensitivityVariation,
+    SimulationComparison,
+    SimulationRequest,
+    SimulationRun,
+    SimulationStatus,
+    SimulationStep,
     SnapshotManifest,
     Source,
     SpatialRollupItem,
     SpatialSliceComparison,
     TemporalTrendItem,
     TimeInterval,
+    TransitionRuleDefinition,
     TruthClass,
     WorldBundle,
     WorldContext,
@@ -63,6 +69,11 @@ from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
 from .scenarios import ScenarioLifecycleError
+from .simulation import (
+    SimulationConfigurationError,
+    SimulationConstraintViolationError,
+    SimulationLifecycleError,
+)
 from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
 
@@ -86,6 +97,33 @@ def scenario_lifecycle_handler(request, exc: ScenarioLifecycleError):
     from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(SimulationLifecycleError)
+def simulation_lifecycle_handler(request, exc: SimulationLifecycleError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(SimulationConfigurationError)
+def simulation_configuration_handler(request, exc: SimulationConfigurationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
+
+
+@app.exception_handler(SimulationConstraintViolationError)
+def simulation_constraint_handler(request, exc: SimulationConstraintViolationError):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(
+        status_code=422,
         content={"detail": str(exc)},
     )
 
@@ -1473,3 +1511,126 @@ def compare_scenarios_endpoint(scenario_a_id: UUID, scenario_b_id: UUID):
         return repo.compare_scenarios(scenario_a_id, scenario_b_id)
     except ValueError as ve:
         raise HTTPException(status_code=400, detail=str(ve)) from ve
+
+
+# ==============================================================================
+# Engine 17: Simulation Engine Endpoints
+# ==============================================================================
+
+
+class CreateSimulationRequest(BaseModel):
+    scenario_id: UUID
+    scenario_version: int | None = None
+    starts_at: datetime
+    ends_at: datetime
+    step_size: float = Field(default=1.0, gt=0)
+    step_unit: Literal["hour", "day", "month", "year", "step"] = "year"
+    max_steps: int = Field(default=100, ge=1, le=500)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    initial_state_overrides: dict[str, Any] = Field(default_factory=dict)
+    rule_ids: list[str] = Field(default_factory=lambda: ["population_dynamics_v1"])
+    requested_metrics: list[str] = Field(default_factory=list)
+    branch_id: UUID | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+
+@app.get("/simulations/rules", response_model=list[TransitionRuleDefinition])
+def list_simulation_rules_endpoint():
+    return WorldRepository().list_simulation_rules()
+
+
+@app.post("/simulations", response_model=SimulationRun)
+def create_simulation_endpoint(req: CreateSimulationRequest):
+    repo = WorldRepository()
+    sim_req = SimulationRequest(
+        scenario_id=req.scenario_id,
+        scenario_version=req.scenario_version,
+        starts_at=req.starts_at,
+        ends_at=req.ends_at,
+        step_size=req.step_size,
+        step_unit=req.step_unit,
+        max_steps=req.max_steps,
+        parameters=req.parameters,
+        initial_state_overrides=req.initial_state_overrides,
+        rule_ids=req.rule_ids,
+        requested_metrics=req.requested_metrics,
+        branch_id=req.branch_id,
+        metadata=req.metadata,
+    )
+    return repo.create_and_run_simulation(sim_req)
+
+
+@app.get("/simulations", response_model=list[SimulationRun])
+def list_simulations_endpoint(
+    scenario_id: UUID | None = None,
+    status: SimulationStatus | str | None = None,
+    limit: int = Query(default=100, ge=1, le=1000),
+    offset: int = Query(default=0, ge=0),
+):
+    scen_v = _clean_param(scenario_id)
+    status_v = _clean_param(status)
+    limit_v = _clean_param(limit, 100)
+    offset_v = _clean_param(offset, 0)
+    return WorldRepository().list_simulations(
+        scenario_id=scen_v, status=status_v, limit=limit_v, offset=offset_v
+    )
+
+
+@app.get("/simulations/{simulation_id}", response_model=SimulationRun)
+def get_simulation_endpoint(simulation_id: UUID):
+    sim = WorldRepository().get_simulation(simulation_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+    return sim
+
+
+@app.get("/simulations/{simulation_id}/trajectory", response_model=list[SimulationStep])
+def get_simulation_trajectory_endpoint(
+    simulation_id: UUID,
+    offset: int = Query(default=0, ge=0),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    repo = WorldRepository()
+    sim = repo.get_simulation(simulation_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+    offset_v = _clean_param(offset, 0)
+    limit_v = _clean_param(limit, 200)
+    return repo.get_simulation_trajectory(simulation_id, offset=offset_v, limit=limit_v)
+
+
+@app.get("/simulations/{simulation_id}/steps/{step_index}", response_model=SimulationStep)
+def get_simulation_step_endpoint(simulation_id: UUID, step_index: int):
+    repo = WorldRepository()
+    sim = repo.get_simulation(simulation_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+    step = repo.get_simulation_step(simulation_id, step_index=step_index)
+    if not step:
+        raise HTTPException(status_code=404, detail=f"Step {step_index} not found for simulation {simulation_id}")
+    return step
+
+
+@app.get("/simulations/{simulation_a_id}/compare/{simulation_b_id}", response_model=SimulationComparison)
+def compare_simulations_endpoint(simulation_a_id: UUID, simulation_b_id: UUID):
+    repo = WorldRepository()
+    sim_a = repo.get_simulation(simulation_a_id)
+    if not sim_a:
+        raise HTTPException(status_code=404, detail=f"Simulation A {simulation_a_id} not found")
+    sim_b = repo.get_simulation(simulation_b_id)
+    if not sim_b:
+        raise HTTPException(status_code=404, detail=f"Simulation B {simulation_b_id} not found")
+    return repo.compare_simulations(simulation_a_id, simulation_b_id)
+
+
+@app.post("/simulations/{simulation_id}/cancel")
+def cancel_simulation_endpoint(simulation_id: UUID):
+    repo = WorldRepository()
+    sim = repo.get_simulation(simulation_id)
+    if not sim:
+        raise HTTPException(status_code=404, detail=f"Simulation {simulation_id} not found")
+    try:
+        cancelled = repo.cancel_simulation(simulation_id)
+        return {"cancelled": cancelled, "simulation_id": simulation_id}
+    except SimulationLifecycleError as sle:
+        raise HTTPException(status_code=400, detail=str(sle)) from sle

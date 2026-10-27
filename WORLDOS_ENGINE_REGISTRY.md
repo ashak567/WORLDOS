@@ -226,17 +226,18 @@ This registry is the durable record of all 26 first-class engine boundaries with
 - **Next Milestone**: Multi-step forward state evolution integrated with Simulation Engine (Engine 17).
 
 ### 17. Simulation Engine
-- **Purpose**: Multi-step forward state evolution according to physical and heuristic models.
-- **Status**: `INTERFACE_ONLY`
-- **Inputs**: Scenario state, time step count, transition rules.
-- **Outputs**: Time-stamped trajectory of simulated entity states.
-- **Dependencies**: `interfaces.py`.
-- **Persistence**: Sandboxed simulation run logs.
-- **Interface / API**: `SimulationEngine.run(scenario: dict) -> dict`.
-- **Evidence Requirements**: All generated values tagged `SIMULATED`.
-- **Test Contract**: Conservation of mass/population invariants during simulation.
-- **Current Implementation**: Protocol defined in `backend/app/interfaces.py`.
-- **Next Milestone**: Define state transition interface.
+- **Purpose**: Bounded, deterministic multi-step forward state evolution over isolated scenario branches according to versioned physical and heuristic transition rules without authoritative operational mutation.
+- **Status**: `VERIFIED`
+- **Inputs**: Pinned scenario reference (`scenario_id`, `scenario_version`), temporal boundaries (`starts_at`, `ends_at`), time-step size and unit (`step_size`, `step_unit`), registered rule IDs, initial state overrides, simulation parameters.
+- **Outputs**: Ordered time-stamped trajectory of simulated entity states, per-step metrics, analytical trajectory summaries, constraint feasibility findings (`is_feasible: bool`), and canonical reproducibility fingerprints.
+- **Dependencies**: PostGIS (authoritative baseline queries), Scenario Engine (Engine 16 sandboxed state initialization), Constraint Engine (Engine 12 invariant evaluation), `backend/app/domain.py`, `backend/app/simulation.py`.
+- **Persistence**: Relational tables (`simulation_runs`, `simulation_steps`) via migration `011_simulations.sql`.
+- **Interface / API**: `SimulationEngine` in `backend/app/simulation.py`; `WorldRepository` delegate methods; REST endpoints `/simulations/*` in `backend/app/main.py`.
+- **Evidence Requirements**: Every trajectory step, output metric, and summary is explicitly classified as `TruthClass.SIMULATED`. Baseline facts loaded read-only retain empirical provenance.
+- **Test Contract**: Operational non-mutation verification (authoritative row counts strictly unchanged before and after simulation), bit-for-bit reproducibility from pinned inputs, state cloning preventing cross-step mutation, calendar-aware step boundary arithmetic, and cross-simulation comparisons verified in `tests/test_simulation.py` and `tests/test_container_integration.py`.
+- **Current Implementation**: Complete deterministic engine with transition rule registry (`population_dynamics_v1`, `stock_flow_accounting_v1`, `per_capita_resource_depletion_v1`, `threshold_state_transition_v1`, `generic_linear_evolution_v1`), bounded execution loop (max 500 steps), trajectory metrics, and REST API.
+- **Next Milestone**: Forward-looking predictive trend extrapolation under explicit assumptions (Engine 18: Prediction Engine).
+
 
 ### 18. Prediction Engine
 - **Purpose**: Forward-looking projection beyond observed time horizons with explicit assumptions.

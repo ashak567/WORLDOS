@@ -1,53 +1,58 @@
 # WORLDOS progress
 
-## Checkpoint: Deterministic Scenario Engine (Engine 16)
+## Checkpoint: Bounded Deterministic Forward Simulation Engine (Engine 17)
 
-**Date:** 2026-10-26
+**Date:** 2026-10-27
 **Branch:** `main`
-**Status:** implemented; live container integration and contract tests passed (108/108), frontend production build passed
+**Status:** implemented; live container integration and contract tests passing, frontend production build passed
 
 ### Completed
 
-- **Database Migration (`db/init/010_scenarios.sql`):**
-  - Created relational tables: `scenarios`, `scenario_modifications`, and `scenario_evaluations`.
-  - Configured check constraints, foreign keys with `ON DELETE CASCADE` on modifications/evaluations, and indexes on `parent_scenario_id`, `status`, and `target_entity_id`.
-  - Added scenario versioning and audit timestamps.
-- **Typed Scenario Domain Models (`backend/app/domain.py`):**
-  - Implemented `ScenarioStatus` (`DRAFT`, `VALIDATED`, `EVALUATED`, `ARCHIVED`).
-  - Implemented `ScenarioOperationType` (`SET`, `DELTA`, `SCALE`, `REMOVE`) on structured targets (`observation.<measure>`, `attribute.<key>`, `parameter.<name>`).
-  - Implemented `ScenarioModification` with validation for non-empty identifiers, finite values, and temporal intervals.
-  - Implemented `Scenario` with default `TruthClass.SIMULATED`, version tracking, parent scenario pointer, and baseline context.
-  - Implemented `ScenarioEvaluation` storing baseline snapshot, isolated simulated state overlay, delta summaries, constraint validation findings, feasibility status, derived metrics, and reproducibility assumptions.
-  - Implemented `ScenarioComparison` comparing two evaluated scenarios across common target metrics, cross-branch deltas, and feasibility.
-- **Deterministic Scenario Engine Core (`backend/app/scenarios.py`):**
-  - *Operational Non-Mutation*: Authoritative tables (`entities`, `observations`, `geometries`, `evidence`, `claims`, `alerts`) are NEVER mutated. All scenario queries against world facts are strictly read-only.
-  - *Lifecycle State Machine*: Enforces strict transitions (`DRAFT` -> `VALIDATED` -> `EVALUATED` -> `ARCHIVED`). Modifications are restricted to draft state; material edits increment version and automatically drop status back to `DRAFT`. Archived scenarios reject mutations.
-  - *Constraint Engine Pre-Evaluation Validation*: Integrates Engine 12 to validate modifications against numeric bounds, non-negativity (e.g. population >= 0), and target integrity. Scenarios with blocking findings remain `DRAFT` and cannot be evaluated.
-  - *Deterministic Modification Overlay*: Applies modifications in deterministic sort order `(target_entity_id, target_field, created_at, id)`. Successive modifications accumulate deterministically over simulated state.
-  - *Epistemic Classification*: Every hypothetical parameter, modified observation, attribute, and delta record is explicitly tagged with `TruthClass.SIMULATED`.
-  - *Versioned Branching*: `branch_scenario` clones active parent modifications to a new child scenario with `version = 1`, preserving parent references (`parent_scenario_id`, `parent_scenario_version`) and audit history without overwriting prior evaluations.
-  - *Scenario Comparison*: `compare_scenarios` evaluates and aligns metric values across branches, computing absolute deltas ($B - A$) and feasibility comparisons.
+- **Database Migration (`db/init/011_simulations.sql`):**
+  - Created relational tables: `simulation_runs` and `simulation_steps`.
+  - Configured check constraints, foreign keys with `ON DELETE CASCADE` referencing scenarios and runs, and composite uniqueness constraint `UNIQUE(simulation_id, step_index)` on simulation steps.
+  - Added indexes on `(scenario_id, scenario_version)`, `status`, `created_at DESC`, and `(simulation_id, step_index ASC)`.
+- **Typed Simulation Domain Models (`backend/app/domain.py`):**
+  - Implemented `SimulationStatus` (`CREATED`, `VALIDATED`, `RUNNING`, `COMPLETED`, `FAILED`, `CANCELLED`).
+  - Implemented `SimulationRequest` with boundary validations (`ends_at > starts_at`, `step_size > 0`, `max_steps <= 500`).
+  - Implemented `TransitionRuleDefinition` declaring supported variables, required inputs, output units, preconditions, assumptions, and limitations.
+  - Implemented `SimulationStep` with step index, simulated timestamp, state snapshot, step metrics, applied rules, constraint findings, step findings, and deterministic step fingerprint.
+  - Implemented `SimulationRun` tracking pinned scenario version, configuration, initial state, final state, trajectory summary, constraint feasibility (`is_feasible: bool`), assumptions, execution duration, and reproducibility fingerprint.
+  - Implemented `SimulationComparison` comparing two completed simulation runs across final outcomes, metric deltas ($B - A$), and feasibility.
+- **Deterministic Transition Rule Framework (`backend/app/simulation.py`):**
+  - Implemented `TransitionRuleRegistry` for strongly-typed, registered rule discovery without executing caller-supplied arbitrary code.
+  - Registered 5 verified deterministic transition rules:
+    - `population_dynamics_v1`: annual growth rate ($r$), optional carrying capacity ($K$), and net migration delta per step.
+    - `stock_flow_accounting_v1`: conservation of mass/resources through inflow, outflow, decay rate, and capacity boundaries.
+    - `per_capita_resource_depletion_v1`: coupled multi-variable resource depletion driven by population size and annual per-capita consumption rate.
+    - `threshold_state_transition_v1`: dynamic threshold evaluation emitting simulated warnings and alerts (`SIMULATED_ALERT`) without mutating operational alerts.
+    - `generic_linear_evolution_v1`: constant linear slope with optional min/max bounds for synthetic fixtures.
+- **Engine 17 Simulation Engine Core (`backend/app/simulation.py`):**
+  - *Operational Non-Mutation*: Authoritative tables (`entities`, `observations`, `geometries`, `evidence`, `claims`, `alerts`) are NEVER mutated. Queries against baseline facts are strictly read-only.
+  - *Deep State Isolation*: Implemented `_clone_state` ensuring every trajectory step and intermediate rule application operates on an isolated snapshot, preventing cross-step mutation.
+  - *Calendar-Aware Discrete Stepping*: Implemented `_compute_step_count` and `advance_simulated_timestamp` handling leap years and calendar intervals for hours, days, months, and years.
+  - *Bounded Horizons*: Enforces strict execution limits (`max_steps <= 500`), rejecting unbounded loops.
+  - *Constraint Invariant Integration*: Evaluates each step state using the Constraint Engine (Engine 12) for non-finite values and negative population bounds. Infeasible states are flagged with `is_feasible = False` and persisted without silent failure.
+  - *Epistemic Classification*: Every simulated state, trajectory step, derived metric, and delta summary carries `TruthClass.SIMULATED`.
+  - *Reproducibility*: Computes canonical SHA-256 fingerprints over canonical JSON of `(scenario_id, scenario_version, starts_at, ends_at, step_size, step_unit, rule_ids, parameters, initial_state)`.
+  - *Scenario Branch Pinning*: Simulations reference pinned scenario versions; subsequent modifications to the scenario do not alter or invalidate existing simulation runs.
+  - *Analytical Trajectory Summaries*: Aggregates min, max, mean, absolute change, and relative percentage change across time series.
+  - *Simulation Comparison*: `compare_simulations` aligns final metrics and computes divergence between compatible runs.
 - **Repository Integration (`backend/app/storage.py`):**
-  - Integrated `ScenarioEngine` into `WorldRepository`.
-  - Added repository methods: `create_scenario`, `get_scenario`, `list_scenarios`, `archive_scenario`, `add_scenario_modification`, `list_scenario_modifications`, `remove_scenario_modification`, `branch_scenario`, `validate_scenario`, `evaluate_scenario`, `get_latest_scenario_evaluation`, and `compare_scenarios`.
+  - Integrated `SimulationEngine` into `WorldRepository`.
+  - Added repository methods: `create_and_run_simulation`, `get_simulation`, `list_simulations`, `get_simulation_trajectory`, `get_simulation_step`, `compare_simulations`, `cancel_simulation`, and `list_simulation_rules`.
 - **FastAPI REST Endpoint Contracts (`backend/app/main.py`):**
-  - `POST /scenarios`: creates scenario in `DRAFT` status.
-  - `GET /scenarios`: lists scenarios with optional `status` and `parent_id` filters.
-  - `GET /scenarios/{id}`: retrieves scenario metadata and version.
-  - `POST /scenarios/{id}/modifications`: adds a modification, incrementing version.
-  - `GET /scenarios/{id}/modifications`: lists active modifications.
-  - `DELETE /scenarios/{id}/modifications/{mod_id}`: removes a modification.
-  - `POST /scenarios/{id}/validate`: validates modifications against Constraint Engine.
-  - `POST /scenarios/{id}/evaluate`: evaluates scenario and produces isolated overlay.
-  - `GET /scenarios/{id}/evaluation`: retrieves latest evaluation record.
-  - `POST /scenarios/{id}/branch`: branches a child scenario.
-  - `GET /scenarios/{a}/compare/{b}`: compares two scenarios.
-  - `POST /scenarios/{id}/archive`: archives a scenario.
+  - `GET /simulations/rules`: lists registered transition rules.
+  - `POST /simulations`: executes a forward simulation over a pinned scenario.
+  - `GET /simulations`: lists simulation runs with scenario and status filters.
+  - `GET /simulations/{id}`: retrieves simulation run metadata.
+  - `GET /simulations/{id}/trajectory`: retrieves ordered trajectory steps with pagination.
+  - `GET /simulations/{id}/steps/{step_index}`: retrieves a specific trajectory step.
+  - `GET /simulations/{a}/compare/{b}`: compares two simulation runs.
+  - `POST /simulations/{id}/cancel`: cancels an active or queued run.
 - **Verification Evidence:**
-  - 13 unit tests in `backend/tests/test_scenarios.py` verifying model defaults, supported operations, non-empty targets, deterministic overlay calculations, conflicting modification ordering, lifecycle rejection, reproducibility, and comparison deltas.
-  - 5 container-backed integration tests in `backend/tests/test_container_integration.py` verifying CRUD lifecycle, real database operational non-mutation (verifying row counts of `entities`, `observations`, `geometries`, `evidence`, `provenance`, and `entity_identifiers` remain 100% identical before and after scenario operations), isolated overlays with `TruthClass.SIMULATED`, versioned branching, cross-scenario comparison, and REST API endpoints.
-  - Complete container test suite passed: **108 tests passed in 120.73s** (`Ran 108 tests in 120.725s, OK`).
-  - Frontend production build verified (`npm --prefix frontend run build` built cleanly in 12.10s).
+  - 12 unit tests in `backend/tests/test_simulation.py` verifying domain bounds, transition rule dynamics, stock-flow conservation, coupled depletion, threshold warnings, deterministic fingerprinting, calendar stepping, and rule registry discovery.
+  - 5 container-backed integration tests in `backend/tests/test_container_integration.py` verifying real PostgreSQL execution, operational non-mutation (verifying row counts of `entities`, `observations`, `geometries`, `evidence`, `provenance`, `entity_identifiers`, and `alerts` remain 100% identical before and after simulation), bit-for-bit reproducibility, scenario version pinning, cross-simulation comparison deltas, constraint infeasibility handling, and REST API endpoints.
 
 ### Previous Checkpoints Reused
 
@@ -62,12 +67,13 @@
 9. `f88fe35 — Deterministic constraint engine for spatial, temporal, relationship, and evidence validation`
 10. `72c50be — Event / alert engine deepening with spatial-temporal correlation and evidence-linked alerting`
 11. `165bd82 — feat(decisions): implement deterministic decision support engine with MCDA ranking and sensitivity analysis`
+12. `526bb20 — feat(scenarios): implement deterministic scenario engine with isolated overlays and versioned branching`
 
 ### Not claimed as complete
 
-- Multi-step forward physical simulation with dynamic differential equations is deferred to Engine 17 (Simulation Engine); the Scenario Engine focuses on deterministic parameter overlays, counterfactual state definitions, and comparative branch evaluation.
-- Unrestricted arbitrary SQL mutations or JSON table patching are prohibited by design; only safe, strongly-typed domain modification operations (`SET`, `DELTA`, `SCALE`, `REMOVE`) on supported fields are allowed.
+- Empirical statistical calibration, machine-learned parameter estimation, and backtested historical forecasting are deferred to Engine 18 (Prediction Engine); transition models in Engine 17 are structural/heuristic simulations under explicit user parameters.
+- High-resolution partial differential spatial mesh fluid/climate simulations are deferred.
 
 ### Next task
 
-Engine 17: Simulation Engine — multi-step forward state evolution, physical/heuristic transition rules, and temporal trajectory modeling over sandboxed scenario branches.
+Engine 18: Prediction Engine — forward-looking projection beyond observed time horizons with explicit model assumptions, confidence intervals, and evidence citations.

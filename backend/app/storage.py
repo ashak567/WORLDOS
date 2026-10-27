@@ -40,8 +40,14 @@ from .domain import (
     ScenarioOperationType,
     ScenarioProposal,
     ScenarioStatus,
+    SimulationComparison,
+    SimulationRequest,
+    SimulationRun,
+    SimulationStatus,
+    SimulationStep,
     SpatialScope,
     TemporalScope,
+    TransitionRuleDefinition,
     WorldBundle,
     WorldContext,
 )
@@ -49,6 +55,7 @@ from .alerts import AlertEngine
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .decisions import DecisionEngine
 from .scenarios import ScenarioEngine
+from .simulation import SimulationEngine
 
 
 def _extract_int(val: Any, default: int = 100) -> int:
@@ -79,6 +86,8 @@ class WorldRepository:
         self.alert_engine = AlertEngine(repository=self)
         self.decision_engine = DecisionEngine(repository=self)
         self.scenario_engine = ScenarioEngine(repository=self)
+        self.simulation_engine = SimulationEngine(repository=self)
+
 
     @contextmanager
     def _connection(self) -> Iterator[psycopg.Connection]:
@@ -1922,3 +1931,66 @@ class WorldRepository:
         """Compare two evaluated scenarios."""
         with self._connection() as conn:
             return self.scenario_engine.compare_scenarios(scenario_a_id, scenario_b_id, conn=conn)
+
+    # -------------------------------------------------------------------------
+    # Engine 17: Simulation Engine Methods
+    # -------------------------------------------------------------------------
+
+    def create_and_run_simulation(self, request: SimulationRequest) -> SimulationRun:
+        """Execute a forward simulation over an isolated scenario state."""
+        with self._connection() as conn:
+            return self.simulation_engine.create_and_run_simulation(request, conn=conn)
+
+    def get_simulation(self, simulation_id: UUID) -> SimulationRun | None:
+        """Retrieve simulation run metadata."""
+        with self._connection() as conn:
+            return self.simulation_engine.get_simulation(simulation_id, conn=conn)
+
+    def list_simulations(
+        self,
+        scenario_id: UUID | None = None,
+        status: SimulationStatus | str | None = None,
+        limit: int = 100,
+        offset: int = 0,
+    ) -> list[SimulationRun]:
+        """List simulations with optional filters."""
+        with self._connection() as conn:
+            return self.simulation_engine.list_simulations(
+                scenario_id=scenario_id, status=status, limit=limit, offset=offset, conn=conn
+            )
+
+    def get_simulation_trajectory(
+        self, simulation_id: UUID, offset: int = 0, limit: int = 200
+    ) -> list[SimulationStep]:
+        """Retrieve ordered trajectory steps for a simulation run."""
+        with self._connection() as conn:
+            return self.simulation_engine.get_trajectory(
+                simulation_id=simulation_id, offset=offset, limit=limit, conn=conn
+            )
+
+    def get_simulation_step(
+        self, simulation_id: UUID, step_index: int
+    ) -> SimulationStep | None:
+        """Retrieve an individual step by its index."""
+        with self._connection() as conn:
+            return self.simulation_engine.get_step(
+                simulation_id=simulation_id, step_index=step_index, conn=conn
+            )
+
+    def compare_simulations(
+        self, simulation_a_id: UUID, simulation_b_id: UUID
+    ) -> SimulationComparison:
+        """Compare two simulation runs."""
+        with self._connection() as conn:
+            return self.simulation_engine.compare_simulations(
+                simulation_a_id=simulation_a_id, simulation_b_id=simulation_b_id, conn=conn
+            )
+
+    def cancel_simulation(self, simulation_id: UUID) -> bool:
+        """Cancel an in-progress or queued simulation."""
+        with self._connection() as conn:
+            return self.simulation_engine.cancel_simulation(simulation_id, conn=conn)
+
+    def list_simulation_rules(self) -> list[TransitionRuleDefinition]:
+        """List registered transition rules."""
+        return self.simulation_engine.rule_registry.list_rules()

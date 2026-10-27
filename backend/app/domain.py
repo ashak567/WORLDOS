@@ -808,3 +808,107 @@ class ScenarioComparison(BaseModel):
     feasibility_comparison: dict[str, Any] = Field(default_factory=dict)
     metric_deltas: dict[str, Any] = Field(default_factory=dict)
     summary: str
+
+
+# ==============================================================================
+# Engine 17: Simulation Engine Models
+# ==============================================================================
+
+
+class SimulationStatus(str, Enum):
+    CREATED = "CREATED"
+    VALIDATED = "VALIDATED"
+    RUNNING = "RUNNING"
+    COMPLETED = "COMPLETED"
+    FAILED = "FAILED"
+    CANCELLED = "CANCELLED"
+
+
+class SimulationRequest(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    scenario_id: UUID
+    scenario_version: int | None = None
+    starts_at: datetime
+    ends_at: datetime
+    step_size: float = Field(default=1.0, gt=0)
+    step_unit: Literal["hour", "day", "month", "year", "step"] = "year"
+    max_steps: int = Field(default=100, ge=1, le=500)
+    parameters: dict[str, Any] = Field(default_factory=dict)
+    initial_state_overrides: dict[str, Any] = Field(default_factory=dict)
+    rule_ids: list[str] = Field(default_factory=list)
+    requested_metrics: list[str] = Field(default_factory=list)
+    branch_id: UUID | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+
+    @model_validator(mode="after")
+    def validate_simulation_request(self) -> "SimulationRequest":
+        if self.ends_at <= self.starts_at:
+            raise ValueError("ends_at must be strictly greater than starts_at")
+        if self.step_size <= 0:
+            raise ValueError("step_size must be positive")
+        if self.max_steps < 1 or self.max_steps > 500:
+            raise ValueError("max_steps must be between 1 and 500")
+        return self
+
+
+class TransitionRuleDefinition(BaseModel):
+    id: str
+    version: str = "v1.0.0"
+    name: str
+    description: str
+    supported_variables: list[str] = Field(default_factory=list)
+    required_inputs: dict[str, str] = Field(default_factory=dict)
+    output_variables: dict[str, str] = Field(default_factory=dict)
+    preconditions: list[str] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+
+
+class SimulationStep(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    simulation_id: UUID
+    step_index: int = Field(ge=0)
+    simulated_at: datetime
+    state: dict[str, Any] = Field(default_factory=dict)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    applied_rules: list[str] = Field(default_factory=list)
+    constraint_findings: list[dict[str, Any]] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
+    truth_class: TruthClass = TruthClass.SIMULATED
+    step_fingerprint: str = ""
+
+
+class SimulationRun(BaseModel):
+    id: UUID = Field(default_factory=uuid4)
+    scenario_id: UUID
+    scenario_version: int
+    status: SimulationStatus = SimulationStatus.CREATED
+    configuration: dict[str, Any] = Field(default_factory=dict)
+    initial_state: dict[str, Any] = Field(default_factory=dict)
+    final_state: dict[str, Any] = Field(default_factory=dict)
+    trajectory_summary: dict[str, Any] = Field(default_factory=dict)
+    is_feasible: bool = True
+    constraint_findings: list[dict[str, Any]] = Field(default_factory=list)
+    assumptions: list[str] = Field(default_factory=list)
+    limitations: list[str] = Field(default_factory=list)
+    step_count: int = 0
+    execution_duration_ms: float | None = None
+    reproducibility_fingerprint: str = ""
+    truth_class: TruthClass = TruthClass.SIMULATED
+    error_message: str | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    completed_at: datetime | None = None
+
+
+class SimulationComparison(BaseModel):
+    simulation_a_id: UUID
+    simulation_b_id: UUID
+    scenario_a_id: UUID
+    scenario_b_id: UUID
+    compared_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    step_count_a: int
+    step_count_b: int
+    metric_deltas: dict[str, Any] = Field(default_factory=dict)
+    trajectory_divergence: dict[str, Any] = Field(default_factory=dict)
+    feasibility_comparison: dict[str, bool] = Field(default_factory=dict)
+    summary: str

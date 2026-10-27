@@ -8,6 +8,7 @@ import unittest
 from uuid import uuid4
 
 import psycopg
+from fastapi import HTTPException
 from psycopg.rows import dict_row
 
 from app.analytics import DuckDbSpatialAnalytics
@@ -49,6 +50,11 @@ from app.domain import (
     ScenarioProposal,
     ScenarioStatus,
     SensitivityVariation,
+    SimulationComparison,
+    SimulationRequest,
+    SimulationRun,
+    SimulationStatus,
+    SimulationStep,
     SnapshotManifest,
     Source,
     TimeInterval,
@@ -67,6 +73,7 @@ from app.main import (
     BranchScenarioRequest,
     CreateAlertRuleRequest,
     CreateScenarioRequest,
+    CreateSimulationRequest,
     DecisionSensitivityRequest,
     EvaluateScenarioRequest,
     ResolveAlertRequest,
@@ -76,11 +83,14 @@ from app.main import (
     add_scenario_modification_endpoint,
     archive_scenario_endpoint,
     branch_scenario_endpoint,
+    cancel_simulation_endpoint,
     compare_scenarios_endpoint,
+    compare_simulations_endpoint,
     compare_spatial_slices_endpoint,
     coverage_summary_endpoint,
     create_alert_rule as api_create_alert_rule,
     create_scenario_endpoint,
+    create_simulation_endpoint,
     delete_alert_rule as api_delete_alert_rule,
     evaluate_event_alerts as api_evaluate_event_alerts,
     evaluate_scenario_endpoint,
@@ -91,6 +101,9 @@ from app.main import (
     get_decision as api_get_decision,
     get_scenario_endpoint,
     get_scenario_evaluation_endpoint,
+    get_simulation_endpoint,
+    get_simulation_step_endpoint,
+    get_simulation_trajectory_endpoint,
     get_snapshot_endpoint,
     list_alert_evaluations as api_list_alert_evaluations,
     list_alert_rules as api_list_alert_rules,
@@ -99,6 +112,8 @@ from app.main import (
     list_decisions as api_list_decisions,
     list_scenario_modifications_endpoint,
     list_scenarios_endpoint,
+    list_simulation_rules_endpoint,
+    list_simulations_endpoint,
     list_snapshots_endpoint,
     natural_earth_bundle,
     remove_scenario_modification_endpoint,
@@ -116,8 +131,14 @@ from app.main import (
 )
 from app.ingestion.usgs import EarthquakeRecord
 from app.scenarios import ScenarioLifecycleError
+from app.simulation import (
+    SimulationConfigurationError,
+    SimulationConstraintViolationError,
+    SimulationLifecycleError,
+)
 from app.snapshots import SnapshotCatalog, SnapshotManager
 from app.storage import WorldRepository
+
 
 
 class ContainerIntegrationTests(unittest.TestCase):
@@ -2261,3 +2282,318 @@ class ContainerIntegrationTests(unittest.TestCase):
         # 11. POST /scenarios/{id}/archive
         arch_res = archive_scenario_endpoint(scen.id)
         self.assertTrue(arch_res["archived"])
+
+    def test_simulation_execution_and_authoritative_non_mutation(self) -> None:
+        """Verify Engine 17 multi-step forward simulation and strict non-mutation of operational world state."""
+        now = datetime(2026, 9, 29, tzinfo=UTC)
+        wb_payload = [{"page": 1}, [{"countryiso3code": "IND", "country": {"value": "India"}, "date": "2023", "value": 1400000000}]]
+        record = parse_population(wb_payload, "https://api.worldbank.org/test/ind/sim")[0]
+        self.repo.ingest(world_bank_bundle(record, None, now))
+
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+            # Snapshot authoritative operational table row counts BEFORE scenario & simulation
+            cur.execute("SELECT COUNT(*) AS c FROM entities")
+            entities_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM observations")
+            obs_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM geometries")
+            geoms_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM evidence")
+            evidence_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM provenance")
+            prov_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM entity_identifiers")
+            idents_before = cur.fetchone()["c"]
+            cur.execute("SELECT COUNT(*) AS c FROM alerts")
+            alerts_before = cur.fetchone()["c"]
+
+        # 1. Create and evaluate a scenario with a hypothetical +5% population scale
+        scenario_id = self.repo.create_scenario(Scenario(name="Simulation Baseline Scenario"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scenario_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SCALE,
+            value=1.05,
+        ))
+        eval_res = self.repo.evaluate_scenario(scenario_id)
+        self.assertTrue(eval_res.is_feasible)
+
+        # 2. Run a 5-step forward simulation with 2% annual growth
+        sim_start = datetime(2026, 1, 1, 0, 0, 0, tzinfo=UTC)
+        sim_end = datetime(2031, 1, 1, 0, 0, 0, tzinfo=UTC)
+        sim_req = SimulationRequest(
+            scenario_id=scenario_id,
+            starts_at=sim_start,
+            ends_at=sim_end,
+            step_size=1.0,
+            step_unit="year",
+            max_steps=100,
+            rule_ids=["population_dynamics_v1"],
+            parameters={"growth_rate": 0.02, "net_migration": 0.0},
+        )
+        sim_run = self.repo.create_and_run_simulation(sim_req)
+
+        # 3. Verify simulation run metadata
+        self.assertEqual(sim_run.status, SimulationStatus.COMPLETED)
+        self.assertTrue(sim_run.is_feasible)
+        self.assertEqual(sim_run.step_count, 6)  # Step 0 + 5 steps
+        self.assertTrue(sim_run.reproducibility_fingerprint.startswith("sim_"))
+        self.assertIsNotNone(sim_run.execution_duration_ms)
+
+        # 4. Verify trajectory steps
+        trajectory = self.repo.get_simulation_trajectory(sim_run.id)
+        self.assertEqual(len(trajectory), 6)
+        # Check Step 0 (initial conditions)
+        self.assertEqual(trajectory[0].step_index, 0)
+        self.assertEqual(trajectory[0].truth_class, TruthClass.SIMULATED)
+        init_pop = trajectory[0].state[str(entity_id)]["observations"]["population.total"]["value"]
+        # Expected: 1,400,000,000 * 1.05 = 1,470,000,000
+        self.assertAlmostEqual(init_pop, 1470000000.0, places=2)
+
+        # Check trajectory monotonicity (growing by 2% each year)
+        prev_pop = init_pop
+        for step in trajectory[1:]:
+            step_pop = step.state[str(entity_id)]["observations"]["population.total"]["value"]
+            self.assertGreater(step_pop, prev_pop)
+            self.assertEqual(step.truth_class, TruthClass.SIMULATED)
+            self.assertTrue(step.step_fingerprint.startswith("step_"))
+            prev_pop = step_pop
+
+        # 5. Check analytical trajectory summary
+        pop_metric_key = f"{entity_id}.population.total"
+        summary = sim_run.trajectory_summary.get(pop_metric_key)
+        self.assertIsNotNone(summary)
+        self.assertAlmostEqual(summary["initial"], 1470000000.0, places=2)
+        self.assertGreater(summary["final"], summary["initial"])
+        self.assertGreater(summary["relative_change_pct"], 10.0)
+
+        # 6. CRITICAL VERIFICATION: Operational tables must NOT be mutated!
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT COUNT(*) AS c FROM entities")
+            self.assertEqual(cur.fetchone()["c"], entities_before)
+            cur.execute("SELECT COUNT(*) AS c FROM observations")
+            self.assertEqual(cur.fetchone()["c"], obs_before)
+            cur.execute("SELECT COUNT(*) AS c FROM geometries")
+            self.assertEqual(cur.fetchone()["c"], geoms_before)
+            cur.execute("SELECT COUNT(*) AS c FROM evidence")
+            self.assertEqual(cur.fetchone()["c"], evidence_before)
+            cur.execute("SELECT COUNT(*) AS c FROM provenance")
+            self.assertEqual(cur.fetchone()["c"], prov_before)
+            cur.execute("SELECT COUNT(*) AS c FROM entity_identifiers")
+            self.assertEqual(cur.fetchone()["c"], idents_before)
+            cur.execute("SELECT COUNT(*) AS c FROM alerts")
+            self.assertEqual(cur.fetchone()["c"], alerts_before)
+
+    def test_simulation_reproducibility_and_version_pinning(self) -> None:
+        """Verify identical inputs produce identical fingerprints and scenario edits do not mutate prior runs."""
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        scen_id = self.repo.create_scenario(Scenario(name="Reproducibility Scenario"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SET,
+            value=1000000.0,
+        ))
+
+        # Run 1
+        start_t = datetime(2026, 1, 1, tzinfo=UTC)
+        end_t = datetime(2029, 1, 1, tzinfo=UTC)
+        req1 = SimulationRequest(
+            scenario_id=scen_id,
+            starts_at=start_t,
+            ends_at=end_t,
+            step_size=1.0,
+            step_unit="year",
+            rule_ids=["population_dynamics_v1"],
+            parameters={"growth_rate": 0.03},
+        )
+        sim1 = self.repo.create_and_run_simulation(req1)
+
+        # Run 2 with identical parameters
+        req2 = SimulationRequest(
+            scenario_id=scen_id,
+            starts_at=start_t,
+            ends_at=end_t,
+            step_size=1.0,
+            step_unit="year",
+            rule_ids=["population_dynamics_v1"],
+            parameters={"growth_rate": 0.03},
+        )
+        sim2 = self.repo.create_and_run_simulation(req2)
+
+        # Bit-for-bit identical fingerprints
+        self.assertEqual(sim1.reproducibility_fingerprint, sim2.reproducibility_fingerprint)
+        traj1 = self.repo.get_simulation_trajectory(sim1.id)
+        traj2 = self.repo.get_simulation_trajectory(sim2.id)
+        self.assertEqual(len(traj1), len(traj2))
+        for s1, s2 in zip(traj1, traj2):
+            self.assertEqual(s1.metrics, s2.metrics)
+
+        # Add modification to scenario (increments scenario version to 3)
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.DELTA,
+            value=200000.0,
+        ))
+        scen_after = self.repo.get_scenario(scen_id)
+        self.assertEqual(scen_after.version, 3)
+
+        # Existing simulation 1 must retain its pinned scenario_version = 2
+        sim1_reloaded = self.repo.get_simulation(sim1.id)
+        self.assertEqual(sim1_reloaded.scenario_version, 2)
+
+    def test_simulation_comparison_and_divergence(self) -> None:
+        """Verify cross-simulation comparison computes metric deltas and trajectory divergence."""
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        scen_id = self.repo.create_scenario(Scenario(name="Comparison Scenario"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SET,
+            value=10000000.0,
+        ))
+
+        start_t = datetime(2026, 1, 1, tzinfo=UTC)
+        end_t = datetime(2030, 1, 1, tzinfo=UTC)
+
+        # Sim A: Low growth (1% per year)
+        sim_a = self.repo.create_and_run_simulation(SimulationRequest(
+            scenario_id=scen_id,
+            starts_at=start_t,
+            ends_at=end_t,
+            step_size=1.0,
+            step_unit="year",
+            parameters={"growth_rate": 0.01},
+        ))
+
+        # Sim B: High growth (5% per year)
+        sim_b = self.repo.create_and_run_simulation(SimulationRequest(
+            scenario_id=scen_id,
+            starts_at=start_t,
+            ends_at=end_t,
+            step_size=1.0,
+            step_unit="year",
+            parameters={"growth_rate": 0.05},
+        ))
+
+        comparison = self.repo.compare_simulations(sim_a.id, sim_b.id)
+        self.assertIsNotNone(comparison)
+        self.assertEqual(comparison.step_count_a, 5)
+        self.assertEqual(comparison.step_count_b, 5)
+
+        pop_metric = f"{entity_id}.population.total"
+        self.assertIn(pop_metric, comparison.metric_deltas)
+        delta_info = comparison.metric_deltas[pop_metric]
+        # B should have strictly higher population than A
+        self.assertGreater(delta_info["final_b"], delta_info["final_a"])
+        self.assertGreater(delta_info["delta"], 0)
+        self.assertGreater(delta_info["pct_difference"], 0)
+
+    def test_simulation_constraint_violation_and_infeasibility(self) -> None:
+        """Verify simulations capturing infeasible states record constraint findings."""
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        scen_id = self.repo.create_scenario(Scenario(name="Infeasible Scenario"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SET,
+            value=100.0,
+        ))
+
+        # Simulation with massive negative net migration driving population negative
+        sim = self.repo.create_and_run_simulation(SimulationRequest(
+            scenario_id=scen_id,
+            starts_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2028, 1, 1, tzinfo=UTC),
+            step_size=1.0,
+            step_unit="year",
+            parameters={"growth_rate": 0.0, "net_migration": -500.0},
+        ))
+        # Population is bounded to 0 (extinction)
+        self.assertEqual(sim.status, SimulationStatus.COMPLETED)
+        traj = self.repo.get_simulation_trajectory(sim.id)
+        # Verify findings recorded
+        self.assertTrue(any(len(s.findings) > 0 for s in traj))
+
+    def test_simulation_api_endpoints(self) -> None:
+        """Verify REST API endpoints for simulation operations."""
+        with psycopg.connect(self.db_url, row_factory=dict_row) as conn, conn.cursor() as cur:
+            cur.execute("SELECT entity_id FROM entity_identifiers WHERE scheme = 'iso_3166_1_alpha_3' AND value = 'IND'")
+            entity_id = cur.fetchone()["entity_id"]
+
+        # 1. GET /simulations/rules
+        rules = list_simulation_rules_endpoint()
+        self.assertGreater(len(rules), 0)
+        self.assertTrue(any(r.id == "population_dynamics_v1" for r in rules))
+
+        # Create scenario for API test
+        scen_id = self.repo.create_scenario(Scenario(name="API Simulation Scenario"))
+        self.repo.add_scenario_modification(ScenarioModification(
+            scenario_id=scen_id,
+            target_entity_id=entity_id,
+            target_field="observation.population.total",
+            operation=ScenarioOperationType.SET,
+            value=5000000.0,
+        ))
+
+        # 2. POST /simulations
+        create_req = CreateSimulationRequest(
+            scenario_id=scen_id,
+            starts_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2029, 1, 1, tzinfo=UTC),
+            step_size=1.0,
+            step_unit="year",
+            parameters={"growth_rate": 0.02},
+        )
+        sim_run = create_simulation_endpoint(create_req)
+        self.assertEqual(sim_run.status, SimulationStatus.COMPLETED)
+
+        # 3. GET /simulations
+        sims = list_simulations_endpoint(scenario_id=scen_id)
+        self.assertTrue(any(s.id == sim_run.id for s in sims))
+
+        # 4. GET /simulations/{id}
+        retrieved_sim = get_simulation_endpoint(sim_run.id)
+        self.assertEqual(retrieved_sim.id, sim_run.id)
+
+        # 5. GET /simulations/{id}/trajectory
+        trajectory = get_simulation_trajectory_endpoint(sim_run.id)
+        self.assertEqual(len(trajectory), 4)
+
+        # 6. GET /simulations/{id}/steps/{step_index}
+        step0 = get_simulation_step_endpoint(sim_run.id, 0)
+        self.assertEqual(step0.step_index, 0)
+
+        # 7. GET /simulations/{a}/compare/{b}
+        sim_b = create_simulation_endpoint(CreateSimulationRequest(
+            scenario_id=scen_id,
+            starts_at=datetime(2026, 1, 1, tzinfo=UTC),
+            ends_at=datetime(2029, 1, 1, tzinfo=UTC),
+            step_size=1.0,
+            step_unit="year",
+            parameters={"growth_rate": 0.04},
+        ))
+        comp = compare_simulations_endpoint(sim_run.id, sim_b.id)
+        self.assertIsNotNone(comp.summary)
+
+        # 8. POST /simulations/{id}/cancel (on completed simulation -> raises 400)
+        with self.assertRaises(HTTPException):
+            cancel_simulation_endpoint(sim_run.id)
