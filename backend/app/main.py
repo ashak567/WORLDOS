@@ -88,8 +88,27 @@ from .benchmarks import AnalyticalBenchmarkSuite
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
+from .ingestion.opensky import (
+    AircraftStateRecord,
+    OpenSkyAuthError,
+    OpenSkyError,
+    OpenSkyRateLimitError,
+    fetch_aircraft_states,
+)
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
+from .ingestion import (
+    camera_to_world_bundle,
+    infrastructure_to_world_bundle,
+    load_authoritative_cameras,
+    load_authoritative_infrastructure,
+    load_authoritative_satellites,
+    load_authoritative_thermal_anomalies,
+    load_sample_vessels,
+    maritime_vessel_bundle,
+    satellite_to_world_bundle,
+    thermal_anomaly_to_world_bundle,
+)
 from .prediction import (
     PredictionConfigurationError,
     PredictionDataQualityError,
@@ -103,7 +122,17 @@ from .simulation import (
 from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
 
+from fastapi.middleware.cors import CORSMiddleware
+
 app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API")
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 @app.exception_handler(ConstraintViolationError)
@@ -228,6 +257,14 @@ class EarthquakeIngestionResult(BaseModel):
     containing_country_id: UUID | None = None
     relationships_written: int
     run_id: UUID | None = None
+
+
+class OpenSkyIngestionResult(BaseModel):
+    records_fetched: int
+    records_persisted: int
+    run_id: UUID | None = None
+    freshness_observed_at: datetime | None = None
+    credit_cost_estimate: int = 1
 
 
 
@@ -425,6 +462,125 @@ def usgs_earthquake_bundle(
     )
 
 
+def opensky_aircraft_bundle(record: AircraftStateRecord, retrieved_at: datetime) -> WorldBundle:
+    source_id = stable_id("source", "opensky-network")
+    entity_id = stable_id("entity", "aircraft", record.icao24)
+    time_str = record.observation_time.isoformat()
+    interval_id = stable_id("time", "aircraft", record.icao24, time_str)
+    evidence_id = stable_id("evidence", "opensky-network", record.locator)
+    provenance_id = stable_id("provenance", "opensky-state-vector-v1", record.locator)
+    observation_id = stable_id("observation", "aircraft", record.icao24, time_str)
+    geometry_id = stable_id("geometry", "aircraft", record.icao24, time_str)
+
+    source = Source(
+        id=source_id,
+        slug="opensky-network",
+        name="OpenSky Network",
+        publisher="OpenSky Network Association",
+        license="OpenSky Terms of Use (Non-commercial / Academic)",
+        homepage="https://opensky-network.org/",
+        refresh_policy="credit-budgeted, authenticated state-vector ingestion",
+    )
+    canonical_name = record.callsign if record.callsign else f"ICAO24:{record.icao24.upper()}"
+    entity = Entity(
+        id=entity_id,
+        kind="asset",
+        canonical_name=canonical_name,
+        source_id=source_id,
+        source_key=record.icao24,
+        attributes={
+            "icao24": record.icao24,
+            "callsign": record.callsign,
+            "origin_country": record.origin_country,
+            "category": record.category,
+        },
+        confidence=Confidence(value=1.0, method="transponder_broadcast"),
+    )
+    identifiers = [
+        EntityIdentifier(
+            source_id=source_id,
+            source_key=record.icao24,
+            scheme="icao24",
+            value=record.icao24,
+            confidence=Confidence(value=1.0, method="transponder_broadcast"),
+        )
+    ]
+    if record.callsign:
+        identifiers.append(
+            EntityIdentifier(
+                source_id=source_id,
+                source_key=record.icao24,
+                scheme="callsign",
+                value=record.callsign,
+                confidence=Confidence(value=0.9, method="transponder_broadcast"),
+            )
+        )
+    interval = TimeInterval(
+        id=interval_id,
+        starts_at=record.observation_time,
+        ends_at=record.observation_time,
+        precision="instant",
+    )
+    evidence = Evidence(
+        id=evidence_id,
+        source_id=source_id,
+        locator=record.locator,
+        retrieved_at=retrieved_at,
+        content_hash=record.content_hash,
+    )
+    provenance = Provenance(
+        id=provenance_id,
+        evidence_id=evidence_id,
+        pipeline_version="opensky-state-vector-v1",
+        transformation={"measure": "aircraft.state", "transponder_source": record.position_source},
+    )
+    geometry = Geometry(
+        id=geometry_id,
+        entity_id=entity_id,
+        geojson={"type": "Point", "coordinates": [record.longitude, record.latitude]},
+        geometry_kind="position",
+        source_id=source_id,
+        evidence_id=evidence_id,
+        valid_during=interval,
+        confidence=Confidence(value=1.0, method="transponder_asserted"),
+    )
+    observation = Observation(
+        id=observation_id,
+        subject_entity_id=entity_id,
+        measure="aircraft.state",
+        value=record.baro_altitude if record.baro_altitude is not None else 0.0,
+        unit="meters",
+        time_interval_id=interval_id,
+        evidence_id=evidence_id,
+        provenance_id=provenance_id,
+        confidence=Confidence(value=1.0, method="source_asserted"),
+        attributes={
+            "icao24": record.icao24,
+            "callsign": record.callsign,
+            "origin_country": record.origin_country,
+            "baro_altitude": record.baro_altitude,
+            "geo_altitude": record.geo_altitude,
+            "velocity": record.velocity,
+            "true_track": record.true_track,
+            "vertical_rate": record.vertical_rate,
+            "on_ground": record.on_ground,
+            "squawk": record.squawk,
+            "position_source": record.position_source,
+            "category": record.category,
+        },
+    )
+    return WorldBundle(
+        source=source,
+        entity=entity,
+        identifiers=identifiers,
+        time_interval=interval,
+        evidence=evidence,
+        provenance=provenance,
+        observation=observation,
+        geometry=geometry,
+    )
+
+
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok", "system_of_record": "postgresql-postgis"}
@@ -586,6 +742,292 @@ def ingest_usgs_earthquake(event_id: str) -> EarthquakeIngestionResult:
             error_message=str(exc),
         )
         raise HTTPException(status_code=500, detail=f"Persistence failed: {exc}") from exc
+
+
+@app.post("/ingest/opensky/states", response_model=OpenSkyIngestionResult)
+def ingest_opensky_states(
+    lamin: float | None = Query(default=None, description="Lower latitude bound"),
+    lomin: float | None = Query(default=None, description="Lower longitude bound"),
+    lamax: float | None = Query(default=None, description="Upper latitude bound"),
+    lomax: float | None = Query(default=None, description="Upper longitude bound"),
+    global_snapshot: bool = Query(default=True, description="Fetch global snapshot without bbox filter"),
+) -> OpenSkyIngestionResult:
+    if global_snapshot:
+        lamin, lomin, lamax, lomax = None, None, None, None
+        credit_cost = 4
+    elif lamin is None or lomin is None or lamax is None or lomax is None:
+        lamin, lomin, lamax, lomax = 26.0, 75.0, 30.0, 79.0
+        credit_cost = 1
+    else:
+        area = abs(lamax - lamin) * abs(lomax - lomin)
+        if area <= 25:
+            credit_cost = 1
+        elif area <= 100:
+            credit_cost = 2
+        elif area <= 400:
+            credit_cost = 3
+        else:
+            credit_cost = 4
+
+    repo = WorldRepository()
+    source_id = stable_id("source", "opensky-network")
+    source = Source(
+        id=source_id,
+        slug="opensky-network",
+        name="OpenSky Network",
+        publisher="OpenSky Network Association",
+        license="OpenSky Terms of Use (Non-commercial / Academic)",
+        homepage="https://opensky-network.org/",
+        refresh_policy="credit-budgeted, authenticated state-vector ingestion",
+    )
+    repo.ensure_source(source)
+    run_id = repo.record_ingestion_run(
+        source_id=source_id,
+        pipeline_version="opensky-state-vector-v1",
+        status="started",
+        metadata={"lamin": lamin, "lomin": lomin, "lamax": lamax, "lomax": lomax, "credit_cost_est": credit_cost, "global_snapshot": global_snapshot},
+    )
+    now = datetime.now(UTC)
+    try:
+        records = fetch_aircraft_states(lamin=lamin, lomin=lomin, lamax=lamax, lomax=lomax)
+        persisted_count = 0
+        latest_obs = None
+        for r in records:
+            bundle = opensky_aircraft_bundle(r, now)
+            repo.ingest(bundle)
+            persisted_count += 1
+            if latest_obs is None or r.observation_time > latest_obs:
+                latest_obs = r.observation_time
+
+        repo.finish_ingestion_run(
+            run_id,
+            status="completed",
+            records_fetched=len(records),
+            records_persisted=persisted_count,
+            records_failed=0,
+            freshness_observed_at=latest_obs or now,
+        )
+        return OpenSkyIngestionResult(
+            records_fetched=len(records),
+            records_persisted=persisted_count,
+            run_id=run_id,
+            freshness_observed_at=latest_obs or now,
+            credit_cost_estimate=credit_cost,
+        )
+    except OpenSkyAuthError as auth_err:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(auth_err),
+        )
+        raise HTTPException(status_code=401, detail=str(auth_err)) from auth_err
+    except OpenSkyRateLimitError as rate_err:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(rate_err),
+        )
+        raise HTTPException(status_code=429, detail=str(rate_err)) from rate_err
+    except Exception as exc:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(exc),
+        )
+        raise HTTPException(status_code=500, detail=f"OpenSky ingestion failed: {exc}") from exc
+
+
+@app.get("/aircraft/states")
+def list_aircraft_states(
+    min_lon: float | None = Query(default=None),
+    min_lat: float | None = Query(default=None),
+    max_lon: float | None = Query(default=None),
+    max_lat: float | None = Query(default=None),
+    limit: int = Query(default=500, ge=1, le=10000),
+):
+    min_lon_v = _clean_param(min_lon)
+    min_lat_v = _clean_param(min_lat)
+    max_lon_v = _clean_param(max_lon)
+    max_lat_v = _clean_param(max_lat)
+    limit_v = _clean_param(limit, 500)
+
+    min_lon_f = float(min_lon_v) if min_lon_v is not None else None
+    min_lat_f = float(min_lat_v) if min_lat_v is not None else None
+    max_lon_f = float(max_lon_v) if max_lon_v is not None else None
+    max_lat_f = float(max_lat_v) if max_lat_v is not None else None
+
+    return WorldRepository().aircraft_states(
+        min_lon=min_lon_f,
+        min_lat=min_lat_f,
+        max_lon=max_lon_f,
+        max_lat=max_lat_f,
+        limit=limit_v,
+    )
+
+
+@app.get("/aircraft/states/{icao24}/track")
+def get_aircraft_track(icao24: str, limit: int = Query(default=100, ge=1, le=500)):
+    """Retrieve ordered historical observation track for a specific aircraft."""
+    return WorldRepository().aircraft_track(icao24=icao24, limit=limit)
+
+
+@app.get("/maritime/vessels")
+def list_maritime_vessels(
+    min_lon: float | None = Query(default=None),
+    min_lat: float | None = Query(default=None),
+    max_lon: float | None = Query(default=None),
+    max_lat: float | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    min_lon_v = _clean_param(min_lon)
+    min_lat_v = _clean_param(min_lat)
+    max_lon_v = _clean_param(max_lon)
+    max_lat_v = _clean_param(max_lat)
+    limit_v = _clean_param(limit, 200)
+
+    return WorldRepository().maritime_vessels(
+        min_lon=float(min_lon_v) if min_lon_v is not None else None,
+        min_lat=float(min_lat_v) if min_lat_v is not None else None,
+        max_lon=float(max_lon_v) if max_lon_v is not None else None,
+        max_lat=float(max_lat_v) if max_lat_v is not None else None,
+        limit=limit_v,
+    )
+
+
+@app.post("/ingest/maritime/vessels")
+def ingest_maritime_vessels() -> dict[str, Any]:
+    repo = WorldRepository()
+    records = load_sample_vessels()
+    now = datetime.now(UTC)
+    persisted = 0
+    for r in records:
+        bundle = maritime_vessel_bundle(r, now)
+        repo.ingest(bundle)
+        persisted += 1
+    return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
+
+
+@app.get("/space/satellites")
+def list_satellites(limit: int = Query(default=50, ge=1, le=200)):
+    return WorldRepository().satellites(limit=_clean_param(limit, 50))
+
+
+@app.post("/ingest/space/satellites")
+def ingest_satellites() -> dict[str, Any]:
+    repo = WorldRepository()
+    records = load_authoritative_satellites()
+    now = datetime.now(UTC)
+    persisted = 0
+    for r in records:
+        bundle = satellite_to_world_bundle(r, now)
+        repo.ingest(bundle)
+        persisted += 1
+    return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
+
+
+@app.get("/cameras")
+def list_cameras(
+    min_lon: float | None = Query(default=None),
+    min_lat: float | None = Query(default=None),
+    max_lon: float | None = Query(default=None),
+    max_lat: float | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    min_lon_v = _clean_param(min_lon)
+    min_lat_v = _clean_param(min_lat)
+    max_lon_v = _clean_param(max_lon)
+    max_lat_v = _clean_param(max_lat)
+    limit_v = _clean_param(limit, 100)
+
+    return WorldRepository().cameras(
+        min_lon=float(min_lon_v) if min_lon_v is not None else None,
+        min_lat=float(min_lat_v) if min_lat_v is not None else None,
+        max_lon=float(max_lon_v) if max_lon_v is not None else None,
+        max_lat=float(max_lat_v) if max_lat_v is not None else None,
+        limit=limit_v,
+    )
+
+
+@app.post("/ingest/cameras")
+def ingest_cameras() -> dict[str, Any]:
+    repo = WorldRepository()
+    records = load_authoritative_cameras()
+    now = datetime.now(UTC)
+    persisted = 0
+    for r in records:
+        bundle = camera_to_world_bundle(r, now)
+        repo.ingest(bundle)
+        persisted += 1
+    return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
+
+
+@app.get("/events/thermal")
+def list_thermal_anomalies(
+    min_lon: float | None = Query(default=None),
+    min_lat: float | None = Query(default=None),
+    max_lon: float | None = Query(default=None),
+    max_lat: float | None = Query(default=None),
+    limit: int = Query(default=200, ge=1, le=1000),
+):
+    min_lon_v = _clean_param(min_lon)
+    min_lat_v = _clean_param(min_lat)
+    max_lon_v = _clean_param(max_lon)
+    max_lat_v = _clean_param(max_lat)
+    limit_v = _clean_param(limit, 200)
+
+    return WorldRepository().thermal_anomalies(
+        min_lon=float(min_lon_v) if min_lon_v is not None else None,
+        min_lat=float(min_lat_v) if min_lat_v is not None else None,
+        max_lon=float(max_lon_v) if max_lon_v is not None else None,
+        max_lat=float(max_lat_v) if max_lat_v is not None else None,
+        limit=limit_v,
+    )
+
+
+@app.post("/ingest/nasa-firms/fires")
+def ingest_thermal_anomalies() -> dict[str, Any]:
+    repo = WorldRepository()
+    records = load_authoritative_thermal_anomalies()
+    now = datetime.now(UTC)
+    persisted = 0
+    for r in records:
+        bundle = thermal_anomaly_to_world_bundle(r, now)
+        repo.ingest(bundle)
+        persisted += 1
+    return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
+
+
+@app.get("/infrastructure")
+def list_infrastructure(
+    node_type: str | None = Query(default=None),
+    limit: int = Query(default=100, ge=1, le=500),
+):
+    return WorldRepository().infrastructure_nodes(
+        node_type=node_type,
+        limit=_clean_param(limit, 100),
+    )
+
+
+@app.post("/ingest/infrastructure")
+def ingest_infrastructure() -> dict[str, Any]:
+    repo = WorldRepository()
+    records = load_authoritative_infrastructure()
+    now = datetime.now(UTC)
+    persisted = 0
+    for r in records:
+        bundle = infrastructure_to_world_bundle(r, now)
+        repo.ingest(bundle)
+        persisted += 1
+    return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
 
 
 @app.get("/sources/health")

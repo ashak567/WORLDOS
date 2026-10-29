@@ -124,6 +124,19 @@ class WorldRepository:
         with self._connection() as conn:
             return self.constraint_engine.validate_scenario_proposal(proposal, conn=conn)
 
+    def ensure_source(self, source: Source) -> UUID:
+        """Ensure a source record is registered in the database, returning its primary key."""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO sources (id,slug,name,publisher,license,homepage,refresh_policy)
+                   VALUES (%s,%s,%s,%s,%s,%s,%s)
+                   ON CONFLICT (slug) DO UPDATE SET name=EXCLUDED.name
+                   RETURNING id""",
+                (source.id, source.slug, source.name, source.publisher, source.license,
+                 str(source.homepage) if source.homepage else None, source.refresh_policy),
+            )
+            return cur.fetchone()["id"]
+
     def ingest(self, bundle: WorldBundle, enforce_constraints: bool = True) -> UUID:
         """Idempotently persist one fact and every piece of its provenance after constraint validation."""
         b = bundle
@@ -317,10 +330,329 @@ class WorldRepository:
                   JOIN time_intervals t ON t.id=o.time_interval_id JOIN evidence ev ON ev.id=o.evidence_id
                   JOIN sources s ON s.id=ev.source_id
                   {where_clause} ORDER BY t.starts_at DESC LIMIT %s"""
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def aircraft_states(
+        self,
+        min_lon: float | None = None,
+        min_lat: float | None = None,
+        max_lon: float | None = None,
+        max_lat: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 200)
+        clauses = ["o.measure = 'aircraft.state'"]
+        values: list[Any] = []
+        if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
+            clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
+            values.extend([min_lon, min_lat, max_lon, max_lat])
+
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT DISTINCT ON (e.id)
+                o.id,
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            {where_clause}
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
         values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
-            return list(cur.fetchall())
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def aircraft_track(self, icao24: str, limit: int = 100) -> list[dict[str, Any]]:
+        """Query ordered historical observation track for a given aircraft ICAO24 address."""
+        limit = _extract_int(limit, 100)
+        sql = """
+            SELECT
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            JOIN geometries g ON g.evidence_id = ev.id AND g.geometry_kind = 'position'
+            WHERE o.measure = 'aircraft.state'
+              AND (
+                  e.source_key = LOWER(%s)
+                  OR e.canonical_name ILIKE %s
+                  OR o.attributes->>'icao24' = LOWER(%s)
+              )
+            ORDER BY t.starts_at ASC
+            LIMIT %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, (icao24, f"%{icao24}%", icao24, limit))
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def maritime_vessels(
+        self,
+        min_lon: float | None = None,
+        min_lat: float | None = None,
+        max_lon: float | None = None,
+        max_lat: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 200)
+        clauses = ["o.measure = 'maritime.vessel_state'"]
+        values: list[Any] = []
+        if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
+            clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
+            values.extend([min_lon, min_lat, max_lon, max_lat])
+
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT DISTINCT ON (e.id)
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            {where_clause}
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def satellites(self, limit: int = 50) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 50)
+        sql = """
+            SELECT DISTINCT ON (e.id)
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            WHERE o.measure = 'orbital.ephemeris_state'
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, [limit])
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def cameras(
+        self,
+        min_lon: float | None = None,
+        min_lat: float | None = None,
+        max_lon: float | None = None,
+        max_lat: float | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses = ["o.measure = 'camera.status'"]
+        values: list[Any] = []
+        if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
+            clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
+            values.extend([min_lon, min_lat, max_lon, max_lat])
+
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT DISTINCT ON (e.id)
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            {where_clause}
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def thermal_anomalies(
+        self,
+        min_lon: float | None = None,
+        min_lat: float | None = None,
+        max_lon: float | None = None,
+        max_lat: float | None = None,
+        limit: int = 200,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 200)
+        clauses = ["o.measure = 'fire.radiative_power'"]
+        values: list[Any] = []
+        if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
+            clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
+            values.extend([min_lon, min_lat, max_lon, max_lat])
+
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT DISTINCT ON (e.id)
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            {where_clause}
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
+
+    def infrastructure_nodes(
+        self,
+        node_type: str | None = None,
+        limit: int = 100,
+    ) -> list[dict[str, Any]]:
+        limit = _extract_int(limit, 100)
+        clauses = ["o.measure = 'infrastructure.status'"]
+        values: list[Any] = []
+        if node_type:
+            clauses.append("o.attributes->>'node_type' = %s")
+            values.append(node_type)
+
+        where_clause = f"WHERE {' AND '.join(clauses)}"
+        sql = f"""
+            SELECT DISTINCT ON (e.id)
+                o.id AS observation_id,
+                e.id AS entity_id,
+                e.canonical_name,
+                o.measure,
+                o.value,
+                o.unit,
+                o.truth_class,
+                t.starts_at AS observed_at,
+                ST_X(g.geometry) AS longitude,
+                ST_Y(g.geometry) AS latitude,
+                ST_AsGeoJSON(g.geometry)::json AS geometry,
+                ev.locator AS evidence_locator,
+                ev.content_hash AS evidence_content_hash,
+                s.slug AS source_slug,
+                s.name AS source_name,
+                o.confidence,
+                o.attributes
+            FROM observations o
+            JOIN entities e ON e.id = o.subject_entity_id
+            JOIN time_intervals t ON t.id = o.time_interval_id
+            JOIN evidence ev ON ev.id = o.evidence_id
+            JOIN sources s ON s.id = ev.source_id
+            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            {where_clause}
+            ORDER BY e.id, t.starts_at DESC
+            LIMIT %s
+        """
+        values.append(limit)
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(sql, values)
+            return [_clean_record(r) for r in cur.fetchall()]
 
     def events(
         self,
@@ -355,17 +687,31 @@ class WorldRepository:
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""SELECT ev.id, ev.kind, ev.subject_entity_id, e.canonical_name AS subject_name,
                          t.starts_at, t.ends_at, t.precision,
-                         evi.locator AS evidence_locator, s.slug AS source_slug,
-                         ev.confidence, ev.attributes
-                  FROM events ev LEFT JOIN entities e ON e.id=ev.subject_entity_id
-                  JOIN time_intervals t ON t.id=ev.time_interval_id
-                  JOIN evidence evi ON evi.id=ev.evidence_id
-                  JOIN sources s ON s.id=evi.source_id
+                         evi.locator AS evidence_locator, s.slug AS source_slug, s.name AS source_name,
+                         ev.confidence, ev.attributes,
+                         ST_AsGeoJSON(g.geometry)::json AS geometry,
+                         ST_X(ST_Centroid(g.geometry)) AS longitude,
+                         ST_Y(ST_Centroid(g.geometry)) AS latitude
+                  FROM events ev
+                  LEFT JOIN entities e ON e.id = ev.subject_entity_id
+                  LEFT JOIN geometries g ON g.entity_id = ev.subject_entity_id AND g.geometry_kind IN ('epicenter', 'position', 'point', 'representative_point')
+                  JOIN time_intervals t ON t.id = ev.time_interval_id
+                  JOIN evidence evi ON evi.id = ev.evidence_id
+                  JOIN sources s ON s.id = evi.source_id
                   {where_clause} ORDER BY t.starts_at DESC LIMIT %s"""
         values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
-            return list(cur.fetchall())
+            results = []
+            for row in cur.fetchall():
+                rec = _clean_record(row)
+                lon = rec.get("longitude")
+                lat = rec.get("latitude")
+                if lon is not None and lat is not None:
+                    rec["coordinates"] = [lon, lat]
+                    rec["point"] = [lon, lat]
+                results.append(rec)
+            return results
 
     def context(self, entity_id: UUID) -> dict[str, Any] | None:
         with self._connection() as conn, conn.cursor() as cur:
@@ -674,9 +1020,13 @@ class WorldRepository:
                        t.starts_at, t.ends_at, t.precision,
                        ev.evidence_id, evi.locator AS evidence_locator, evi.retrieved_at AS evidence_retrieved_at,
                        s.id AS source_id, s.slug AS source_slug, s.name AS source_name,
-                       ev.confidence, ev.attributes
+                       ev.confidence, ev.attributes,
+                       ST_AsGeoJSON(g.geometry)::json AS geometry,
+                       ST_X(ST_Centroid(g.geometry)) AS longitude,
+                       ST_Y(ST_Centroid(g.geometry)) AS latitude
                 FROM events ev
                 LEFT JOIN entities e ON e.id = ev.subject_entity_id
+                LEFT JOIN geometries g ON g.entity_id = ev.subject_entity_id AND g.geometry_kind IN ('epicenter', 'position', 'point', 'representative_point')
                 JOIN time_intervals t ON t.id = ev.time_interval_id
                 JOIN evidence evi ON evi.id = ev.evidence_id
                 JOIN sources s ON s.id = evi.source_id
@@ -686,7 +1036,15 @@ class WorldRepository:
             """
             ev_values.append(limit)
             cur.execute(ev_sql, ev_values)
-            events_list = [_clean_record(r) for r in cur.fetchall()]
+            events_list = []
+            for r in cur.fetchall():
+                cleaned = _clean_record(r)
+                lon = cleaned.get("longitude")
+                lat = cleaned.get("latitude")
+                if lon is not None and lat is not None:
+                    cleaned["coordinates"] = [lon, lat]
+                    cleaned["point"] = [lon, lat]
+                events_list.append(cleaned)
 
             # Step 6: Relationships Query
             cur.execute(
@@ -914,7 +1272,7 @@ class WorldRepository:
         values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, values)
-            return list(cur.fetchall())
+            return [_clean_record(r) for r in cur.fetchall()]
 
     def relationships(
         self,

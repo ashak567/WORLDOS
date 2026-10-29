@@ -20,6 +20,8 @@ services:
     build: ./backend
     environment:
       WORLDOS_DATABASE_URL: postgresql://worldos:worldos_dev_only@postgres:5432/worldos
+      OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
+      OPENSKY_CLIENT_SECRET: ${OPENSKY_CLIENT_SECRET:-}
     ports:
       - "8000:8000"
     volumes:
