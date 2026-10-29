@@ -5,6 +5,7 @@ import {
   GeoJsonDataSource,
   Ion,
   Math as CesiumMath,
+  NearFarScalar,
   PolylineGlowMaterialProperty,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
@@ -13,6 +14,18 @@ import {
   defined,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
+import {
+  AIRPLANE_ICON_BLUE,
+  AIRPLANE_ICON_GROUND,
+  VESSEL_ICON_CYAN,
+  SATELLITE_ICON_PURPLE,
+  CAMERA_ICON_EMERALD,
+  FIRE_ICON_ORANGE,
+  FIRE_ICON_RED,
+  AIRPORT_ICON_BLUE,
+  PORT_ICON_TEAL,
+  SPACEPORT_ICON_ROSE,
+} from '../utils/icons';
 import {
   BoundingBox,
   GeometryFeature,
@@ -318,13 +331,12 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: isGround ? 6 : 8,
-            color: isGround
-              ? Color.fromCssColorString('#94a3b8')
-              : Color.fromCssColorString('#38bdf8'),
-            outlineColor: Color.WHITE,
-            outlineWidth: 1.5,
+          billboard: {
+            image: isGround ? AIRPLANE_ICON_GROUND : AIRPLANE_ICON_BLUE,
+            rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
+            width: 24,
+            height: 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
           },
         });
         (ent as any)._worldosType = 'aircraft';
@@ -332,17 +344,19 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 2. Maritime Vessels: Water-clamped at altitude 0
+    // 2. Maritime Vessels: Water-clamped at altitude 0 with Heading Rotation
     if (layerMap.get('maritime-vessels') && vessels.length > 0) {
       for (const v of vessels) {
         const position = Cartesian3.fromDegrees(v.longitude, v.latitude, 0);
+        const heading = v.attributes?.heading_degrees || v.attributes?.cog_degrees || 0;
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: 8,
-            color: Color.fromCssColorString('#06b6d4'),
-            outlineColor: Color.WHITE,
-            outlineWidth: 1.5,
+          billboard: {
+            image: VESSEL_ICON_CYAN,
+            rotation: CesiumMath.toRadians(360 - heading),
+            width: 22,
+            height: 22,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.0e7, 0.5),
           },
         });
         (ent as any)._worldosType = 'vessel';
@@ -358,11 +372,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: 10,
-            color: Color.fromCssColorString('#a855f7'),
-            outlineColor: Color.WHITE,
-            outlineWidth: 2,
+          billboard: {
+            image: SATELLITE_ICON_PURPLE,
+            width: 26,
+            height: 26,
+            scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
           },
         });
         (ent as any)._worldosType = 'satellite';
@@ -384,17 +398,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 4. Surveillance & Sensor Cameras: Ground-clamped
+    // 4. Surveillance & Sensor Cameras: Ground-clamped with Camera Icon
     if (layerMap.get('surveillance-cameras') && cameras.length > 0) {
       for (const c of cameras) {
         const position = Cartesian3.fromDegrees(c.longitude, c.latitude, 0);
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: 8,
-            color: Color.fromCssColorString('#10b981'),
-            outlineColor: Color.WHITE,
-            outlineWidth: 1.5,
+          billboard: {
+            image: CAMERA_ICON_EMERALD,
+            width: 20,
+            height: 20,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 5.0e6, 0.4),
           },
         });
         (ent as any)._worldosType = 'camera';
@@ -402,21 +416,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 5. Thermal Anomalies & Wildfires (NASA FIRMS): Ground-clamped with glowing size
+    // 5. Thermal Anomalies & Wildfires (NASA FIRMS): Ground-clamped Flame Icon
     if (layerMap.get('thermal-fires') && thermalEvents.length > 0) {
       for (const f of thermalEvents) {
         const position = Cartesian3.fromDegrees(f.longitude, f.latitude, 0);
-        const size = Math.min(18, Math.max(8, 6 + (f.attributes?.frp_mw || 10) * 0.08));
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: size,
-            color:
-              f.attributes?.confidence_level === 'high'
-                ? Color.fromCssColorString('#ef4444')
-                : Color.fromCssColorString('#f97316'),
-            outlineColor: Color.WHITE,
-            outlineWidth: 1.5,
+          billboard: {
+            image: f.attributes?.confidence_level === 'high' ? FIRE_ICON_RED : FIRE_ICON_ORANGE,
+            width: 24,
+            height: 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 8.0e6, 0.45),
           },
         });
         (ent as any)._worldosType = 'fire';
@@ -459,20 +469,20 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       for (const node of infrastructure) {
         const position = Cartesian3.fromDegrees(node.longitude, node.latitude, Math.max(0, node.attributes?.elevation_m || 0));
         const type = node.attributes?.node_type;
-        const color =
+        const icon =
           type === 'spaceport'
-            ? Color.fromCssColorString('#ec4899')
+            ? SPACEPORT_ICON_ROSE
             : type === 'airport'
-            ? Color.fromCssColorString('#eab308')
-            : Color.fromCssColorString('#3b82f6');
+            ? AIRPORT_ICON_BLUE
+            : PORT_ICON_TEAL;
 
         const ent = viewer.entities.add({
           position,
-          point: {
-            pixelSize: 9,
-            color,
-            outlineColor: Color.WHITE,
-            outlineWidth: 1.5,
+          billboard: {
+            image: icon,
+            width: 24,
+            height: 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.0e7, 0.45),
           },
         });
         (ent as any)._worldosType = 'infrastructure';

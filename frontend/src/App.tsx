@@ -157,6 +157,67 @@ export default function App() {
     };
   }, []);
 
+  // Real-time Dead-Reckoning & Extrapolation Engine (60s physics propagation between snapshots)
+  useEffect(() => {
+    const interval = setInterval(() => {
+      // 1. Advance aircraft along velocity vector (heading + ground speed)
+      setAircraft((prev) =>
+        prev.map((a) => {
+          if (a.attributes?.on_ground) return a;
+          const speedKnots = a.attributes?.velocity ? a.attributes.velocity * 1.94384 : 450;
+          const trackDeg = a.attributes?.true_track ?? 0;
+          const distKm = (speedKnots * 1.852) / 3600; // km in 1 second
+          const trackRad = (trackDeg * Math.PI) / 180;
+          const dLat = (distKm / 111.0) * Math.cos(trackRad);
+          const cosLat = Math.cos((a.latitude * Math.PI) / 180);
+          const dLon = cosLat !== 0 ? (distKm / (111.0 * cosLat)) * Math.sin(trackRad) : 0;
+          return {
+            ...a,
+            latitude: Number((a.latitude + dLat).toFixed(5)),
+            longitude: Number((a.longitude + dLon).toFixed(5)),
+          };
+        })
+      );
+
+      // 2. Advance maritime vessels along course over ground and speed
+      setVessels((prev) =>
+        prev.map((v) => {
+          const speedKnots = v.attributes?.sog_knots ?? 15;
+          const courseDeg = v.attributes?.heading_degrees || v.attributes?.cog_degrees || 0;
+          const distKm = (speedKnots * 1.852) / 3600; // km in 1 second
+          const courseRad = (courseDeg * Math.PI) / 180;
+          const dLat = (distKm / 111.0) * Math.cos(courseRad);
+          const cosLat = Math.cos((v.latitude * Math.PI) / 180);
+          const dLon = cosLat !== 0 ? (distKm / (111.0 * cosLat)) * Math.sin(courseRad) : 0;
+          return {
+            ...v,
+            latitude: Number((v.latitude + dLat).toFixed(5)),
+            longitude: Number((v.longitude + dLon).toFixed(5)),
+          };
+        })
+      );
+
+      // 3. Advance satellites along orbital trajectory (~7.6 km/s orbital speed)
+      setSatellites((prev) =>
+        prev.map((s) => {
+          const periodMin = s.attributes?.period_min || 92.5;
+          const speedDegPerSec = 360 / (periodMin * 60);
+          const incDeg = s.attributes?.inclination_deg || 51.6;
+          const newLon = ((s.longitude + speedDegPerSec + 180) % 360) - 180;
+          const theta = ((newLon + 180) * Math.PI) / 180;
+          const newLat = incDeg * Math.sin(theta);
+          return {
+            ...s,
+            longitude: Number(newLon.toFixed(4)),
+            latitude: Number(newLat.toFixed(4)),
+          };
+        })
+      );
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, []);
+
   // Handle entity selection and automatic historical track lookup
   const handleSelectItem = useCallback((item: SelectedItemPayload) => {
     setSelectedItem(item);
