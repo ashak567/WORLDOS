@@ -63,6 +63,7 @@ interface GlobeEngine3DProps {
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
+  selectedItem?: SelectedItemPayload | null;
   onViewportChange: (bbox: BoundingBox) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -82,6 +83,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   infrastructure = [],
   selectedTrack = null,
   targetLocation,
+  selectedItem = null,
   onViewportChange,
   onSelectItem,
 }) => {
@@ -159,6 +161,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       infoBox: false,
       selectionIndicator: false,
     });
+
+    // Cleanly suppress watermark credit bar for streamlined tactical HUD
+    if ((viewer as any).creditDisplay?.container) {
+      (viewer as any).creditDisplay.container.style.display = 'none';
+    }
 
     applyImageryLayers(viewer, basemapMode);
 
@@ -376,34 +383,40 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 3. Space Satellites: True 3D Orbital Altitude (400 km to 20,200 km) + 3D Orbital Ring
+    // 3. Space Satellites: True 3D Orbital Altitude (400 km to 20,200 km)
     if (layerMap.get('space-satellites') && satellites.length > 0) {
       for (const s of satellites) {
         const altMeters = (s.attributes?.altitude_km || 420) * 1000;
         const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
+        const isSelected =
+          selectedItem?.type === 'satellite' &&
+          (selectedItem.data?.entity_id === s.entity_id ||
+            selectedItem.data?.attributes?.norad_id === s.attributes?.norad_id);
+
         const ent = viewer.entities.add({
           position,
           billboard: {
             image: SATELLITE_ICON_PURPLE,
-            width: 26,
-            height: 26,
+            width: isSelected ? 34 : 22,
+            height: isSelected ? 34 : 22,
             scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
           },
         });
         (ent as any)._worldosType = 'satellite';
         (ent as any)._worldosData = s;
 
-        // 3D Orbital ground track
-        if (s.attributes?.ground_track && s.attributes.ground_track.length > 1) {
+        // ONLY render 3D orbital ground track if this specific satellite is selected!
+        // Suppresses disturbing all-satellite purple mesh web across the globe.
+        if (isSelected && s.attributes?.ground_track && s.attributes.ground_track.length > 1) {
           const trackPositions = s.attributes.ground_track.map(([lon, lat]) =>
             Cartesian3.fromDegrees(lon, lat, altMeters)
           );
           viewer.entities.add({
             polyline: {
               positions: trackPositions,
-              width: 1.5,
-              material: Color.fromCssColorString('#a855f7').withAlpha(0.4),
+              width: 2.5,
+              material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
             },
           });
         }
@@ -414,13 +427,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     if (layerMap.get('surveillance-cameras') && cameras.length > 0) {
       for (const c of cameras) {
         const position = Cartesian3.fromDegrees(c.longitude, c.latitude, 0);
+        const isSelected = selectedItem?.type === 'camera' && selectedItem.data?.entity_id === c.entity_id;
         const ent = viewer.entities.add({
           position,
           billboard: {
             image: CAMERA_ICON_EMERALD,
-            width: 20,
-            height: 20,
-            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 5.0e6, 0.4),
+            width: isSelected ? 32 : 24,
+            height: isSelected ? 32 : 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.3, 2.0e7, 0.55),
           },
         });
         (ent as any)._worldosType = 'camera';
@@ -534,6 +548,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     alerts,
     infrastructure,
     selectedTrack,
+    selectedItem,
   ]);
 
   return <div ref={containerRef} className="globe-container-3d" />;

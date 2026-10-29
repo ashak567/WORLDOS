@@ -47,57 +47,71 @@ export const LayerDock: React.FC<LayerDockProps> = ({
     'intelligence',
   ];
 
+  // When collapsed, show a sleek floating trigger button instead of sliced-off dock contents
+  if (isCollapsed) {
+    return (
+      <button
+        className="layer-dock-floating-btn"
+        onClick={onToggleCollapse}
+        title="Open Intelligence Layers Dock"
+        aria-label="Open Layers Dock"
+      >
+        <Layers size={14} color="var(--cy)" />
+        <span className="layer-dock-floating-text">LAYERS</span>
+        <ChevronRight size={13} color="var(--text-muted)" />
+      </button>
+    );
+  }
+
   return (
     <aside
-      className={`layer-dock ${isCollapsed ? 'collapsed' : ''}`}
+      className="layer-dock expanded"
       aria-label="Intelligence Layer Dock"
     >
       <div className="layer-dock-header">
         <div className="layer-dock-title">
-          <Layers size={13} color="var(--cy)" />
+          <Layers size={14} color="var(--cy)" />
           <span>INTELLIGENCE DOCK</span>
         </div>
         <button
           className="layer-dock-collapse-btn"
           onClick={onToggleCollapse}
-          title={isCollapsed ? 'Expand Dock' : 'Collapse Dock'}
-          aria-label={isCollapsed ? 'Expand Dock' : 'Collapse Dock'}
+          title="Collapse Layer Dock"
+          aria-label="Collapse Layer Dock"
         >
-          {isCollapsed ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+          <ChevronLeft size={15} />
         </button>
       </div>
 
-      {!isCollapsed && (
-        <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
-          <div
+      <div style={{ padding: '8px 12px', borderBottom: '1px solid var(--border-subtle)' }}>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '6px',
+            background: 'rgba(0,0,0,0.3)',
+            borderRadius: '4px',
+            padding: '4px 8px',
+            border: '1px solid var(--border-subtle)',
+          }}
+        >
+          <Search size={12} color="var(--text-muted)" />
+          <input
+            type="text"
+            placeholder="Filter layers & feeds..."
+            value={filterQuery}
+            onChange={(e) => setFilterQuery(e.target.value)}
             style={{
-              display: 'flex',
-              alignItems: 'center',
-              gap: '6px',
-              background: 'rgba(0,0,0,0.3)',
-              borderRadius: '4px',
-              padding: '4px 8px',
-              border: '1px solid var(--border-subtle)',
+              background: 'transparent',
+              border: 'none',
+              color: 'var(--text-primary)',
+              fontSize: '11px',
+              width: '100%',
+              outline: 'none',
             }}
-          >
-            <Search size={12} color="var(--text-muted)" />
-            <input
-              type="text"
-              placeholder="Filter layers & feeds..."
-              value={filterQuery}
-              onChange={(e) => setFilterQuery(e.target.value)}
-              style={{
-                background: 'transparent',
-                border: 'none',
-                color: 'var(--text-primary)',
-                fontSize: '11px',
-                width: '100%',
-                outline: 'none',
-              }}
-            />
-          </div>
+          />
         </div>
-      )}
+      </div>
 
       <div className="layer-list">
         {categories.map((cat) => {
@@ -106,20 +120,18 @@ export const LayerDock: React.FC<LayerDockProps> = ({
 
           return (
             <div key={cat} style={{ marginBottom: '8px' }}>
-              {!isCollapsed && (
-                <div
-                  style={{
-                    fontSize: '9px',
-                    fontWeight: 600,
-                    letterSpacing: '0.08em',
-                    color: 'var(--text-muted)',
-                    padding: '4px 14px',
-                    textTransform: 'uppercase',
-                  }}
-                >
-                  {CATEGORY_TITLES[cat]}
-                </div>
-              )}
+              <div
+                style={{
+                  fontSize: '9px',
+                  fontWeight: 600,
+                  letterSpacing: '0.08em',
+                  color: 'var(--text-muted)',
+                  padding: '4px 14px',
+                  textTransform: 'uppercase',
+                }}
+              >
+                {CATEGORY_TITLES[cat]}
+              </div>
 
               {catLayers.map((layer) => (
                 <div

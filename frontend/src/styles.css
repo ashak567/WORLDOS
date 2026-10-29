@@ -882,3 +882,411 @@ html, body, #root {
   }
 }
 
+/* ==========================================================================
+   CESIUM ION WATERMARK / CREDIT BAR SUPPRESSION
+   ========================================================================== */
+.cesium-widget-credits,
+.cesium-credit-logoContainer,
+.cesium-credit-textContainer,
+.cesium-credit-expand-link {
+  display: none !important;
+  visibility: hidden !important;
+  opacity: 0 !important;
+  pointer-events: none !important;
+  height: 0 !important;
+  width: 0 !important;
+}
+
+/* ==========================================================================
+   FLOATING LAYER DOCK TRIGGER BUTTON
+   ========================================================================== */
+.layer-dock-floating-btn {
+  position: absolute;
+  top: 68px;
+  left: 16px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: var(--bg-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 7px 14px;
+  color: var(--text-primary);
+  font-family: var(--font-brand);
+  font-size: 11px;
+  letter-spacing: 0.1em;
+  cursor: pointer;
+  z-index: 30;
+  box-shadow: var(--shadow-tactical);
+  transition: all 0.18s ease;
+}
+
+.layer-dock-floating-btn:hover {
+  border-color: var(--cy);
+  box-shadow: 0 0 12px var(--cy-glow);
+  transform: translateY(-1px);
+}
+
+.layer-dock-floating-text {
+  font-weight: 600;
+  color: var(--text-primary);
+}
+
+/* ==========================================================================
+   STREET CAMS SELECTOR & DROPDOWN MENU
+   ========================================================================== */
+.street-cam-selector-wrapper {
+  position: relative;
+}
+
+.street-cam-trigger-btn {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #10b981;
+  font-family: var(--font-brand);
+  font-size: 11px;
+  letter-spacing: 0.08em;
+  padding: 4px 10px;
+  border-radius: 4px;
+  cursor: pointer;
+  transition: all 0.18s ease-in-out;
+}
+
+.street-cam-trigger-btn:hover,
+.street-cam-trigger-btn.active {
+  background: rgba(16, 185, 129, 0.22);
+  border-color: #10b981;
+  box-shadow: 0 0 10px rgba(16, 185, 129, 0.35);
+}
+
+.street-cam-badge {
+  background: #10b981;
+  color: #020617;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 10px;
+}
+
+.street-cam-dropdown-menu {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  width: 320px;
+  max-height: 380px;
+  background: var(--bg-surface);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border: 1px solid var(--border-subtle);
+  border-radius: 6px;
+  box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
+  z-index: 50;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+  animation: slide-in-down 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes slide-in-down {
+  from { opacity: 0; transform: translateY(-8px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+.street-cam-dropdown-header {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border-subtle);
+  font-family: var(--font-brand);
+  font-size: 10px;
+  letter-spacing: 0.1em;
+  color: #10b981;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.street-cam-dropdown-list {
+  padding: 6px;
+  overflow-y: auto;
+  max-height: 330px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.street-cam-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: rgba(16, 26, 38, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.04);
+  border-radius: 4px;
+  cursor: pointer;
+  text-align: left;
+  transition: all 0.15s ease;
+}
+
+.street-cam-item:hover {
+  background: rgba(16, 185, 129, 0.1);
+  border-color: rgba(16, 185, 129, 0.3);
+  transform: translateX(2px);
+}
+
+.street-cam-item-info {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  overflow: hidden;
+}
+
+.street-cam-item-name {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--text-primary);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.street-cam-item-region {
+  font-size: 10px;
+  color: var(--text-muted);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+
+.street-cam-item-pill {
+  font-size: 9px;
+  font-family: var(--font-mono);
+  font-weight: 700;
+  color: #10b981;
+  background: rgba(16, 185, 129, 0.15);
+  padding: 2px 6px;
+  border-radius: 3px;
+  letter-spacing: 0.05em;
+}
+
+.street-cam-empty {
+  padding: 16px;
+  font-size: 11px;
+  color: var(--text-muted);
+  text-align: center;
+}
+
+/* ==========================================================================
+   TACTICAL TELEMETRY PILLS IN HUD
+   ========================================================================== */
+.telemetry-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  padding: 3px 8px;
+  border-radius: 3px;
+  background: rgba(16, 26, 38, 0.7);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  color: var(--text-secondary);
+  transition: all 0.15s ease;
+}
+
+.telemetry-badge.sky {
+  color: #38bdf8;
+  border-color: rgba(56, 189, 248, 0.25);
+}
+.telemetry-badge.cyan {
+  color: #06b6d4;
+  border-color: rgba(6, 182, 212, 0.25);
+}
+.telemetry-badge.purple {
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.25);
+}
+.telemetry-badge.red {
+  color: #ef4444;
+  border-color: rgba(239, 68, 68, 0.25);
+}
+.telemetry-badge.gold {
+  color: #eab308;
+  border-color: rgba(234, 179, 8, 0.25);
+}
+.telemetry-badge.time {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.12);
+  background: rgba(0, 0, 0, 0.35);
+}
+
+/* ==========================================================================
+   ENTITY DETAILS DOSSIER ENHANCEMENTS
+   ========================================================================== */
+.details-flyto-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: rgba(11, 211, 211, 0.12);
+  border: 1px solid rgba(11, 211, 211, 0.4);
+  color: var(--cy);
+  font-family: var(--font-brand);
+  font-size: 10px;
+  letter-spacing: 0.08em;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.details-flyto-btn:hover {
+  background: var(--cy);
+  color: #020617;
+  box-shadow: 0 0 10px var(--cy-glow);
+}
+
+.details-quick-stats-grid {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 6px;
+  margin-bottom: 8px;
+}
+
+.quick-stat-card {
+  background: rgba(16, 26, 38, 0.6);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.quick-stat-label {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.quick-stat-val {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+
+.camera-feed-card {
+  border-radius: 6px;
+  overflow: hidden;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+  background: #020617;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+}
+
+.camera-snapshot-img {
+  width: 100%;
+  height: 200px;
+  object-fit: cover;
+  display: block;
+}
+
+.camera-feed-placeholder {
+  height: 180px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  background: repeating-linear-gradient(0deg, rgba(0,0,0,0.6), rgba(0,0,0,0.6) 1px, transparent 1px, transparent 2px), #040d1a;
+  padding: 16px;
+}
+
+.camera-feed-footer {
+  padding: 8px 12px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: rgba(0, 0, 0, 0.6);
+  border-top: 1px solid rgba(255, 255, 255, 0.06);
+}
+
+.camera-portal-link {
+  font-size: 10px;
+  color: #10b981;
+  text-decoration: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: rgba(16, 185, 129, 0.1);
+  padding: 3px 6px;
+  border-radius: 3px;
+  transition: all 0.15s ease;
+}
+
+.camera-portal-link:hover {
+  background: rgba(16, 185, 129, 0.25);
+  color: #34d399;
+}
+
+.live-camera-pulse {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: #10b981;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+}
+
+.live-camera-pulse-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #10b981;
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.8);
+  animation: pulse-beacon 1.4s infinite ease-in-out;
+}
+
+.copy-hash-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  background: transparent;
+  border: 1px solid var(--border-subtle);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  padding: 2px 6px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.copy-hash-btn:hover {
+  color: var(--cy);
+  border-color: var(--cy);
+}
+
+.track-history-list {
+  max-height: 140px;
+  overflow-y: auto;
+  font-size: 10px;
+  font-family: var(--font-mono);
+  border: 1px solid var(--border-subtle);
+  border-radius: 4px;
+  padding: 6px;
+  background: rgba(0, 0, 0, 0.3);
+}
+
+.track-history-item {
+  display: flex;
+  justify-content: space-between;
+  padding: 4px 2px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+}
+

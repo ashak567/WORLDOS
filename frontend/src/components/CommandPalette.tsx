@@ -1,7 +1,8 @@
 import React, { useEffect } from 'react';
 import { Command } from 'cmdk';
 import { LayerDefinition, LayerId } from '../types/layers';
-import { Globe, Map, Layers, Activity, Compass, ShieldAlert, Sparkles, X } from 'lucide-react';
+import { CameraEntity } from '../api';
+import { Globe, Map, Layers, Activity, Compass, ShieldAlert, Sparkles, X, Video, Camera, MapPin } from 'lucide-react';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -13,6 +14,8 @@ interface CommandPaletteProps {
   onOpenSourceHealth: () => void;
   onToggleDock: () => void;
   onJumpToRegion?: (coords: [number, number], zoom: number) => void;
+  cameras?: CameraEntity[];
+  onSelectCamera?: (camera: CameraEntity) => void;
 }
 
 export const CommandPalette: React.FC<CommandPaletteProps> = ({
@@ -25,6 +28,8 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   onOpenSourceHealth,
   onToggleDock,
   onJumpToRegion,
+  cameras = [],
+  onSelectCamera,
 }) => {
   // Global shortcut Ctrl+K / Cmd+K listener
   useEffect(() => {
@@ -182,6 +187,31 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
                 <span className="command-shortcut">WORLD</span>
               </Command.Item>
             </Command.Group>
+
+            {/* Live Street & Traffic Surveillance Cameras */}
+            {cameras.length > 0 && (
+              <Command.Group heading="LIVE STREET & TRAFFIC SURVEILLANCE CAMERAS">
+                {cameras.map((cam) => {
+                  const name = cam.canonical_name || cam.attributes?.camera_id || 'Street Camera';
+                  const region = cam.attributes?.region || 'Global';
+                  return (
+                    <Command.Item
+                      key={cam.entity_id}
+                      className="command-item"
+                      onSelect={() => runAction(() => onSelectCamera && onSelectCamera(cam))}
+                    >
+                      <div className="command-item-left">
+                        <Video size={14} color="var(--grn)" />
+                        <span>{name}</span>
+                      </div>
+                      <span className="command-shortcut" style={{ color: 'var(--text-muted)' }}>
+                        {region}
+                      </span>
+                    </Command.Item>
+                  );
+                })}
+              </Command.Group>
+            )}
 
             {/* Operational Diagnostics & Interface */}
             <Command.Group heading="OPERATIONAL DIAGNOSTICS & SYSTEM">

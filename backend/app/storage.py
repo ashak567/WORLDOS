@@ -226,7 +226,7 @@ class WorldRepository:
                  json.dumps(b.provenance.transformation)),
             )
             if b.geometry:
-                geom_evidence_id = b.geometry.evidence_id or evidence_id
+                geom_evidence_id = evidence_id
                 geom_starts = None
                 geom_ends = None
                 if b.geometry.valid_during:

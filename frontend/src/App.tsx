@@ -325,6 +325,16 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKeyDown);
   }, []);
 
+  // Jump to specific street camera and open its live feed
+  const handleJumpToCamera = useCallback((camera: CameraEntity) => {
+    setLayers((prev) =>
+      prev.map((l) => (l.id === 'surveillance-cameras' ? { ...l, enabled: true } : l))
+    );
+    setTargetLocation({ center: [camera.longitude, camera.latitude], zoom: 15.5 });
+    setSelectedItem({ type: 'camera', data: camera });
+    setSelectedTrack(null);
+  }, []);
+
   return (
     <div className="worldos-app">
       {/* Background Tactical Grid */}
@@ -348,6 +358,8 @@ export default function App() {
         cameraCount={cameras.length}
         fireCount={thermalEvents.length}
         infraCount={infrastructure.length}
+        cameras={cameras}
+        onJumpToCamera={handleJumpToCamera}
       />
 
       {/* Master Geospatial Viewport Stage */}
@@ -368,6 +380,7 @@ export default function App() {
             infrastructure={infrastructure}
             selectedTrack={selectedTrack}
             targetLocation={targetLocation}
+            selectedItem={selectedItem}
             onViewportChange={handleViewportChange}
             onSelectItem={handleSelectItem}
           />
@@ -387,6 +400,7 @@ export default function App() {
             infrastructure={infrastructure}
             selectedTrack={selectedTrack}
             targetLocation={targetLocation}
+            selectedItem={selectedItem}
             onViewportChange={handleViewportChange}
             onSelectItem={handleSelectItem}
           />
@@ -409,6 +423,7 @@ export default function App() {
           setSelectedItem(null);
           setSelectedTrack(null);
         }}
+        onFlyTo={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || (viewMode === '3d' ? 14 : 15) })}
       />
 
       {/* Keyboard-Accessible Command Palette (cmdk) */}
@@ -422,6 +437,8 @@ export default function App() {
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
         onJumpToRegion={(coords, zoom) => setTargetLocation({ center: coords, zoom })}
+        cameras={cameras}
+        onSelectCamera={handleJumpToCamera}
       />
 
       {/* Data Source Health & Freshness Modal */}

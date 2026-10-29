@@ -50,6 +50,7 @@ interface MapEngine2DProps {
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
+  selectedItem?: SelectedItemPayload | null;
   onViewportChange: (bbox: BoundingBox) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -161,6 +162,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
   infrastructure = [],
   selectedTrack = null,
   targetLocation,
+  selectedItem = null,
   onViewportChange,
   onSelectItem,
 }) => {
@@ -497,21 +499,26 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
 
     // 8. Space Satellites & Orbital Ground Tracks
     if (layerMap.get('space-satellites') && satellites.length > 0) {
-      // Predicted orbital ground tracks
-      const satellitesWithTracks = satellites.filter(
-        (s) => s.attributes?.ground_track && s.attributes.ground_track.length > 1
-      );
-      if (satellitesWithTracks.length > 0) {
-        deckLayers.push(
-          new PathLayer({
-            id: 'deck-satellite-ground-tracks',
-            data: satellitesWithTracks,
-            pickable: false,
-            widthMinPixels: 1.5,
-            getPath: (d: SatelliteState) => d.attributes.ground_track!,
-            getColor: [168, 85, 247, 130], // Translucent purple
-          })
+      // ONLY predicted orbital ground tracks for selected satellite!
+      // Suppresses disturbing multi-orbit purple grid across the map.
+      if (selectedItem?.type === 'satellite') {
+        const selectedSat = satellites.find(
+          (s) =>
+            s.entity_id === selectedItem.data?.entity_id ||
+            (s.attributes?.norad_id && s.attributes.norad_id === selectedItem.data?.attributes?.norad_id)
         );
+        if (selectedSat?.attributes?.ground_track && selectedSat.attributes.ground_track.length > 1) {
+          deckLayers.push(
+            new PathLayer({
+              id: 'deck-satellite-ground-track-selected',
+              data: [selectedSat],
+              pickable: false,
+              widthMinPixels: 2.5,
+              getPath: (d: SatelliteState) => d.attributes.ground_track!,
+              getColor: [192, 132, 252, 210], // Soft glowing purple
+            })
+          );
+        }
       }
 
       deckLayers.push(
@@ -526,7 +533,8 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
             height: 24,
             mask: true,
           }),
-          getSize: 24,
+          getSize: (d: SatelliteState) =>
+            selectedItem?.type === 'satellite' && selectedItem.data?.entity_id === d.entity_id ? 28 : 22,
           getColor: [168, 85, 247, 255], // Purple
           onClick: (info) => {
             if (info.object) {
@@ -551,7 +559,8 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
             height: 24,
             mask: true,
           }),
-          getSize: 20,
+          getSize: (d: CameraEntity) =>
+            selectedItem?.type === 'camera' && selectedItem.data?.entity_id === d.entity_id ? 28 : 22,
           getColor: [16, 185, 129, 255], // Emerald green
           onClick: (info) => {
             if (info.object) {
@@ -653,6 +662,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
     thermalEvents,
     infrastructure,
     selectedTrack,
+    selectedItem,
     onSelectItem,
   ]);
 

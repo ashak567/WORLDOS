@@ -1,5 +1,5 @@
-import React, { useEffect, useState } from 'react';
-import { BoundingBox } from '../api';
+import React, { useEffect, useState, useRef } from 'react';
+import { BoundingBox, CameraEntity } from '../api';
 import { BasemapMode } from '../types/layers';
 import {
   Search,
@@ -10,7 +10,14 @@ import {
   Compass,
   Satellite,
   Waves,
-  Eye,
+  Camera,
+  ChevronDown,
+  Plane,
+  Ship,
+  Flame,
+  Building2,
+  Video,
+  MapPin,
 } from 'lucide-react';
 
 interface HudBarProps {
@@ -30,6 +37,8 @@ interface HudBarProps {
   cameraCount: number;
   fireCount: number;
   infraCount: number;
+  cameras?: CameraEntity[];
+  onJumpToCamera?: (camera: CameraEntity) => void;
 }
 
 export const HudBar: React.FC<HudBarProps> = ({
@@ -49,8 +58,12 @@ export const HudBar: React.FC<HudBarProps> = ({
   cameraCount,
   fireCount,
   infraCount,
+  cameras = [],
+  onJumpToCamera,
 }) => {
   const [utcTime, setUtcTime] = useState<string>('');
+  const [isCameraMenuOpen, setIsCameraMenuOpen] = useState(false);
+  const cameraMenuRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     const updateClock = () => {
@@ -62,10 +75,38 @@ export const HudBar: React.FC<HudBarProps> = ({
     return () => clearInterval(interval);
   }, []);
 
-  const formatCoord = (val: number | undefined) => {
-    if (val === undefined || isNaN(val)) return '0.00';
-    return val >= 0 ? `+${val.toFixed(2)}` : val.toFixed(2);
-  };
+  // Close dropdown on outside click
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (cameraMenuRef.current && !cameraMenuRef.current.contains(e.target as Node)) {
+        setIsCameraMenuOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Curated iconic street cameras for instant jump
+  const featuredCameras = cameras.filter((c) => {
+    const cid = c.attributes?.camera_id || '';
+    const name = (c.canonical_name || '').toLowerCase();
+    return (
+      cid.includes('TIMES-SQUARE') ||
+      cid.includes('SHIBUYA') ||
+      cid.includes('5TH-AVE') ||
+      cid.includes('PICCADILLY') ||
+      cid.includes('GOLDEN-GATE') ||
+      cid.includes('CHAMPS-ELYSEES') ||
+      cid.includes('HOLLYWOOD') ||
+      cid.includes('WESTMINSTER') ||
+      cid.includes('OXFORD') ||
+      cid.includes('KILAUEA') ||
+      name.includes('times square') ||
+      name.includes('shibuya')
+    );
+  });
+
+  const displayCameras = featuredCameras.length > 0 ? featuredCameras : cameras.slice(0, 8);
 
   return (
     <header className="hud-topbar">
@@ -113,7 +154,6 @@ export const HudBar: React.FC<HudBarProps> = ({
           className="mode-switcher"
           role="group"
           aria-label="Cartographic Basemap"
-          style={{ marginLeft: '6px' }}
         >
           <button
             className={`mode-btn ${basemapMode === 'dark-tactical' ? 'active' : ''}`}
@@ -144,48 +184,81 @@ export const HudBar: React.FC<HudBarProps> = ({
           </button>
         </div>
 
-        {/* Live Multi-Domain Telemetry Summary Pills */}
-        <div className="hud-telemetry" style={{ display: 'flex', gap: '8px' }}>
-          <div className="telemetry-item" title="Active ADS-B Aircraft Transponders">
-            <span className="telemetry-label" style={{ color: '#38bdf8' }}>
-              ADS-B:
-            </span>
+        {/* Street Cameras Quick-Jump Selector Dropdown */}
+        <div className="street-cam-selector-wrapper" ref={cameraMenuRef}>
+          <button
+            className={`street-cam-trigger-btn ${isCameraMenuOpen ? 'active' : ''}`}
+            onClick={() => setIsCameraMenuOpen((prev) => !prev)}
+            title="Browse & Jump to Global Street Cameras"
+          >
+            <Video size={13} color="var(--grn)" />
+            <span>STREET CAMS</span>
+            <span className="street-cam-badge">{cameraCount}</span>
+            <ChevronDown size={11} />
+          </button>
+
+          {isCameraMenuOpen && (
+            <div className="street-cam-dropdown-menu">
+              <div className="street-cam-dropdown-header">
+                <Video size={12} color="var(--grn)" />
+                <span>LIVE STREET & TRAFFIC CAMERAS</span>
+              </div>
+              <div className="street-cam-dropdown-list">
+                {displayCameras.length === 0 ? (
+                  <div className="street-cam-empty">No cameras loaded in database yet</div>
+                ) : (
+                  displayCameras.map((cam) => {
+                    const name = cam.canonical_name || cam.attributes?.camera_id || 'Street Camera';
+                    const region = cam.attributes?.region || 'Global';
+                    return (
+                      <button
+                        key={cam.entity_id}
+                        className="street-cam-item"
+                        onClick={() => {
+                          if (onJumpToCamera) onJumpToCamera(cam);
+                          setIsCameraMenuOpen(false);
+                        }}
+                      >
+                        <div className="street-cam-item-info">
+                          <span className="street-cam-item-name">{name}</span>
+                          <span className="street-cam-item-region">
+                            <MapPin size={9} /> {region}
+                          </span>
+                        </div>
+                        <span className="street-cam-item-pill">LIVE</span>
+                      </button>
+                    );
+                  })
+                )}
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* Live Multi-Domain Telemetry Tactical Badges */}
+        <div className="hud-telemetry">
+          <div className="telemetry-badge sky" title="Active ADS-B Aircraft Transponders">
+            <Plane size={11} />
             <span className="telemetry-val">{aircraftCount.toLocaleString()}</span>
           </div>
-          <div className="telemetry-item" title="AIS Maritime Vessels in Global Sea Corridors">
-            <span className="telemetry-label" style={{ color: '#06b6d4' }}>
-              AIS:
-            </span>
+          <div className="telemetry-badge cyan" title="AIS Maritime Cargo & Tankers">
+            <Ship size={11} />
             <span className="telemetry-val">{vesselCount}</span>
           </div>
-          <div className="telemetry-item" title="Active Orbital Assets & Ground Tracks">
-            <span className="telemetry-label" style={{ color: '#a855f7' }}>
-              ORBIT:
-            </span>
+          <div className="telemetry-badge purple" title="Active Orbital Assets">
+            <Satellite size={11} />
             <span className="telemetry-val">{satelliteCount}</span>
           </div>
-          <div className="telemetry-item" title="Live Optical CCTV & Sensor Feeds">
-            <span className="telemetry-label" style={{ color: '#10b981' }}>
-              CCTV:
-            </span>
-            <span className="telemetry-val">{cameraCount}</span>
-          </div>
-          <div className="telemetry-item" title="NASA FIRMS Thermal Fire Anomalies">
-            <span className="telemetry-label" style={{ color: '#ef4444' }}>
-              FIRMS:
-            </span>
+          <div className="telemetry-badge red" title="NASA FIRMS Thermal Fire Hotspots">
+            <Flame size={11} />
             <span className="telemetry-val">{fireCount}</span>
           </div>
-          <div className="telemetry-item" title="Airports, Deep-Water Ports & Spaceports">
-            <span className="telemetry-label" style={{ color: '#eab308' }}>
-              INFRA:
-            </span>
+          <div className="telemetry-badge gold" title="Strategic Ports & Spaceports">
+            <Building2 size={11} />
             <span className="telemetry-val">{infraCount}</span>
           </div>
-
-          <div className="telemetry-item">
-            <span className="telemetry-label">TIME:</span>
-            <span className="telemetry-val">{utcTime}</span>
+          <div className="telemetry-badge time" title="Universal Coordinated Time">
+            <span>{utcTime}</span>
           </div>
         </div>
       </div>

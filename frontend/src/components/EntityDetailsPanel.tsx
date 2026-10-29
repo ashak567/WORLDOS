@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useState } from 'react';
 import { SelectedItemPayload } from './MapEngine2D';
 import {
   X,
@@ -8,6 +8,8 @@ import {
   Clock,
   Database,
   Hash,
+  Copy,
+  Check,
   Radio,
   Camera,
   Flame,
@@ -17,6 +19,12 @@ import {
   Building2,
   AlertTriangle,
   History,
+  Crosshair,
+  Compass,
+  Video,
+  Eye,
+  Activity,
+  Layers,
 } from 'lucide-react';
 import { AircraftTrackPoint, TruthClass } from '../api';
 
@@ -24,13 +32,18 @@ interface EntityDetailsPanelProps {
   selectedItem: SelectedItemPayload | null;
   track?: AircraftTrackPoint[] | null;
   onClose: () => void;
+  onFlyTo?: (coords: [number, number], zoom?: number) => void;
 }
 
 export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   selectedItem,
   track,
   onClose,
+  onFlyTo,
 }) => {
+  const [copiedHash, setCopiedHash] = useState(false);
+  const [imgError, setImgError] = useState(false);
+
   if (!selectedItem) return null;
 
   const { type, data } = selectedItem;
@@ -44,12 +57,24 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   let contentHash: string | undefined;
   let properties: Record<string, any> = {};
   let previewImageUrl: string | undefined;
+  let liveStreamUrl: string | undefined;
+  let quickStats: { label: string; value: string; color?: string; icon?: React.ReactNode }[] = [];
+
+  // Spatial coordinates
+  const entityLon: number | undefined =
+    typeof data.longitude === 'number'
+      ? data.longitude
+      : data.attributes?.longitude ?? (data.point && Array.isArray(data.point) ? data.point[0] : undefined);
+  const entityLat: number | undefined =
+    typeof data.latitude === 'number'
+      ? data.latitude
+      : data.attributes?.latitude ?? (data.point && Array.isArray(data.point) ? data.point[1] : undefined);
 
   if (type === 'aircraft') {
     const attr = data.attributes || {};
     const icao = attr.icao24 || data.icao24 || data.entity_id;
     const callsign = attr.callsign || data.callsign;
-    title = callsign ? `Flight ${callsign} · ${icao}` : `Aircraft ${icao}`;
+    title = callsign ? `Flight ${callsign}` : `Aircraft ${icao}`;
     categoryTag = 'AVIATION · ADS-B TRANSPONDER';
     truthClass = (data.truth_class as TruthClass) || 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
@@ -63,136 +88,174 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     const lat = typeof data.latitude === 'number' ? data.latitude : attr.latitude;
     const lon = typeof data.longitude === 'number' ? data.longitude : attr.longitude;
     const baroAlt = attr.baro_altitude ?? data.baro_altitude;
-    const geoAlt = attr.geo_altitude ?? data.geo_altitude;
     const vel = attr.velocity ?? data.velocity;
     const hdg = attr.true_track ?? data.true_track;
     const vRate = attr.vertical_rate ?? data.vertical_rate;
 
+    quickStats = [
+      {
+        label: 'ALTITUDE',
+        value: typeof baroAlt === 'number' ? `${Math.round(baroAlt * 3.28084).toLocaleString()} ft` : 'Ground',
+        color: '#38bdf8',
+      },
+      {
+        label: 'SPEED',
+        value: typeof vel === 'number' ? `${Math.round(vel * 1.94384)} kts` : 'N/A',
+        color: '#06b6d4',
+      },
+      {
+        label: 'TRACK',
+        value: typeof hdg === 'number' ? `${Math.round(hdg)}°` : 'N/A',
+        color: '#a855f7',
+      },
+      {
+        label: 'STATUS',
+        value: attr.on_ground ? 'On Ground' : 'Airborne',
+        color: attr.on_ground ? '#94a3b8' : '#10b981',
+      },
+    ];
+
     properties = {
-      'ICAO 24-bit Hex': icao ? String(icao).toUpperCase() : 'N/A',
-      'Callsign / Flight': callsign || '(Not Broadcast)',
-      'Country of Registry': attr.origin_country || 'N/A',
-      'Coordinates (WGS84)':
-        typeof lat === 'number' && typeof lon === 'number'
-          ? `[${lat.toFixed(4)}°, ${lon.toFixed(4)}°]`
-          : 'N/A',
-      'Barometric Altitude':
-        typeof baroAlt === 'number'
-          ? `${baroAlt.toLocaleString()} m (${Math.round(baroAlt * 3.28084).toLocaleString()} ft)`
-          : 'N/A',
-      'Geometric Altitude':
-        typeof geoAlt === 'number'
-          ? `${geoAlt.toLocaleString()} m (${Math.round(geoAlt * 3.28084).toLocaleString()} ft)`
-          : 'N/A',
-      'Ground Speed':
-        typeof vel === 'number'
-          ? `${vel.toFixed(1)} m/s (${Math.round(vel * 1.94384)} kts)`
-          : 'N/A',
-      'True Track (Heading)': typeof hdg === 'number' ? `${hdg.toFixed(1)}°` : 'N/A',
-      'Vertical Rate':
-        typeof vRate === 'number'
-          ? `${vRate > 0 ? '+' : ''}${vRate.toFixed(1)} m/s`
-          : 'Level Flight',
-      'Flight Status': attr.on_ground ? 'Taxiing / On Ground' : 'En Route / Airborne',
-      'Squawk Transponder': attr.squawk || 'N/A',
-      'Position Telemetry Source': 'ADS-B Transponder Mode-S',
+      'ICAO 24-bit Hex': icao ? String(icao).toUpperCase() : undefined,
+      'Callsign / Flight': callsign || undefined,
+      'Country of Registry': attr.origin_country || undefined,
+      'Coordinates': typeof lat === 'number' && typeof lon === 'number' ? `[${lat.toFixed(4)}°, ${lon.toFixed(4)}°]` : undefined,
+      'Barometric Altitude': typeof baroAlt === 'number' ? `${baroAlt.toLocaleString()} m (${Math.round(baroAlt * 3.28084).toLocaleString()} ft)` : undefined,
+      'Ground Speed': typeof vel === 'number' ? `${vel.toFixed(1)} m/s (${Math.round(vel * 1.94384)} kts)` : undefined,
+      'Heading': typeof hdg === 'number' ? `${hdg.toFixed(1)}°` : undefined,
+      'Vertical Rate': typeof vRate === 'number' ? `${vRate > 0 ? '+' : ''}${vRate.toFixed(1)} m/s` : undefined,
+      'Squawk Code': attr.squawk || undefined,
     };
   } else if (type === 'vessel') {
     const attr = data.attributes || {};
-    title = data.canonical_name || attr.name || `MMSI ${attr.mmsi}`;
-    categoryTag = `MARITIME · ${attr.ship_type || 'VESSEL'} (AIS)`;
+    title = data.canonical_name || attr.name || `Vessel MMSI ${attr.mmsi || 'Unknown'}`;
+    categoryTag = `MARITIME · ${attr.ship_type || 'CARGO/TANKER'} (AIS)`;
     truthClass = (data.truth_class as TruthClass) || 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
-    sourceName = data.source_name || data.source_slug || 'Global Maritime AIS Protocol';
+    sourceName = data.source_name || data.source_slug || 'Global Maritime AIS Protocol (aisstream.io)';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
+    const sog = attr.sog_knots ?? 0;
+    const cog = attr.cog_degrees ?? 0;
+    const hdg = attr.heading_degrees ?? cog;
+    const navStatus = attr.nav_status || 'Under way';
+
+    quickStats = [
+      { label: 'SPEED', value: `${Number(sog).toFixed(1)} kts`, color: '#06b6d4' },
+      { label: 'HEADING', value: `${Math.round(hdg)}°`, color: '#38bdf8' },
+      { label: 'COURSE', value: `${Math.round(cog)}°`, color: '#a855f7' },
+      { label: 'NAV STATUS', value: String(navStatus), color: '#10b981' },
+    ];
+
     properties = {
-      'Vessel Name': data.canonical_name || 'N/A',
-      'MMSI Transponder': attr.mmsi || 'N/A',
-      'IMO Number': attr.imo || 'N/A',
-      'Callsign': attr.callsign || 'N/A',
-      'Flag State': attr.flag || 'N/A',
-      'Vessel Category': attr.ship_type || 'Cargo',
+      'Vessel Name': data.canonical_name || undefined,
+      'MMSI Transponder': attr.mmsi || undefined,
+      'IMO Number': attr.imo || undefined,
+      'Callsign': attr.callsign || undefined,
+      'Flag State': attr.flag && attr.flag !== 'International' ? attr.flag : undefined,
+      'Vessel Category': attr.ship_type || 'Cargo/Tanker',
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
-      'Speed Over Ground': `${attr.sog_knots?.toFixed(1) || 0} knots`,
-      'Course Over Ground': `${attr.cog_degrees?.toFixed(1) || 0}°`,
-      'Compass Heading': `${attr.heading_degrees?.toFixed(1) || 0}°`,
-      'Current Draft': attr.draft_meters ? `${attr.draft_meters} meters` : 'N/A',
-      'Destination Port': attr.destination || 'N/A',
-      'Reported ETA': attr.eta || 'N/A',
-      'Navigation Status': attr.nav_status || 'Under way using engine',
+      'Speed Over Ground': `${Number(sog).toFixed(1)} knots`,
+      'Heading': `${Math.round(hdg)}°`,
+      'Course Over Ground': `${Math.round(cog)}°`,
+      'Destination Port': attr.destination && attr.destination !== 'En Route' ? attr.destination : undefined,
+      'Navigation Status': navStatus,
     };
   } else if (type === 'satellite') {
     const attr = data.attributes || {};
-    title = data.canonical_name || `NORAD ${attr.norad_id}`;
-    categoryTag = `ORBITAL · ${attr.category || 'SATELLITE'}`;
-    truthClass = 'DERIVED'; // Explicitly derived via Keplerian ephemeris
+    title = data.canonical_name || `NORAD ${attr.norad_id || 'Satellite'}`;
+    categoryTag = `ORBITAL · ${attr.category || 'PAYLOAD'}`;
+    truthClass = 'DERIVED';
     timestamp = data.observed_at || data.starts_at;
-    sourceName = data.source_name || 'CelesTrak Orbital Ephemeris';
+    sourceName = data.source_name || 'CelesTrak SGP4 Ephemeris';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
+    const alt = attr.altitude_km ?? 420;
+    const vel = attr.velocity_kms ?? 7.6;
+    const inc = attr.inclination_deg ?? 51.6;
+
+    quickStats = [
+      { label: 'ALTITUDE', value: `${Number(alt).toFixed(0)} km`, color: '#c084fc' },
+      { label: 'VELOCITY', value: `${Number(vel).toFixed(2)} km/s`, color: '#38bdf8' },
+      { label: 'INCLINATION', value: `${Number(inc).toFixed(1)}°`, color: '#eab308' },
+      { label: 'ORBIT PERIOD', value: attr.period_min ? `${attr.period_min}m` : '92m', color: '#10b981' },
+    ];
+
     properties = {
-      'NORAD Catalog ID': attr.norad_id || 'N/A',
-      'COSPAR Designator': attr.designator || 'N/A',
-      'Mission Category': attr.category || 'N/A',
-      'Operating Agency': attr.operator || 'N/A',
-      'Launch Date': attr.launch_date || 'N/A',
+      'NORAD Catalog ID': attr.norad_id || undefined,
+      'COSPAR Designator': attr.designator || undefined,
+      'Mission Class': attr.category || undefined,
+      'Operating Agency': attr.operator || undefined,
+      'Launch Date': attr.launch_date || undefined,
       'Sub-Satellite Position': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
       'Orbital Altitude': `${attr.altitude_km?.toFixed(1)} km`,
       'Orbital Velocity': `${attr.velocity_kms?.toFixed(2)} km/s`,
-      'Apogee / Perigee': `${attr.apogee_km} km / ${attr.perigee_km} km`,
+      'Apogee / Perigee': attr.apogee_km && attr.perigee_km ? `${attr.apogee_km} km / ${attr.perigee_km} km` : undefined,
       'Orbital Inclination': `${attr.inclination_deg}°`,
-      'Orbital Period': `${attr.period_min} minutes`,
-      'Orbit Calculation Method': attr.calculation_method || 'kepler_sgp4_orbit_propagation',
-      'Ephemeris Derivation': 'DERIVED (Physics-based Keplerian Orbit Propagation)',
+      'Ephemeris Method': 'Keplerian SGP4 Orbital Propagation',
     };
   } else if (type === 'camera') {
     const attr = data.attributes || {};
-    title = data.canonical_name || `Camera ${attr.camera_id}`;
-    categoryTag = 'SURVEILLANCE · OPTICAL SENSOR';
+    title = data.canonical_name || `Street Cam ${attr.camera_id || ''}`;
+    categoryTag = 'SURVEILLANCE · STREET CCTV CAMERA';
     truthClass = 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
-    sourceName = data.source_name || attr.operator || 'Public DOT CCTV Feeds';
+    sourceName = data.source_name || attr.operator || 'Open Public CCTV Network';
     locator = data.evidence_locator || attr.snapshot_url;
     contentHash = data.evidence_content_hash;
     previewImageUrl = attr.snapshot_url;
+    liveStreamUrl = attr.stream_url;
+
+    quickStats = [
+      { label: 'STATUS', value: attr.status || 'ONLINE', color: '#10b981' },
+      { label: 'STREAM TYPE', value: (attr.stream_type || 'snapshot').toUpperCase(), color: '#38bdf8' },
+      { label: 'RESOLUTION', value: attr.resolution || '720p', color: '#eab308' },
+    ];
 
     properties = {
-      'Sensor Identifier': attr.camera_id || 'N/A',
-      'Supervising Agency': attr.operator || 'N/A',
-      'Geographic Region': attr.region || 'N/A',
-      'Sensor Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
+      'Sensor Identifier': attr.camera_id || undefined,
+      'Supervising Agency': attr.operator || undefined,
+      'Geographic Region': attr.region || undefined,
+      'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
       'Operational Status': attr.status || 'ONLINE',
-      'Stream Architecture': attr.stream_type || 'snapshot',
-      'Field of View': attr.view_direction || 'N/A',
-      'Frame Resolution': attr.resolution || 'N/A',
+      'Field of View': attr.view_direction || undefined,
+      'Resolution': attr.resolution || undefined,
     };
   } else if (type === 'fire') {
     const attr = data.attributes || {};
-    title = data.canonical_name || `Thermal Anomaly ${attr.fire_id}`;
-    categoryTag = 'ENVIRONMENTAL · THERMAL ANOMALY';
+    title = data.canonical_name || `Thermal Hotspot ${attr.fire_id || ''}`;
+    categoryTag = 'ENVIRONMENTAL · THERMAL RADIOMETRY';
     truthClass = 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
-    sourceName = 'NASA FIRMS / ESDIS Satellite Radiometry';
+    sourceName = 'NASA FIRMS / VIIRS NRT Area Scan';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
+    const frp = attr.frp_mw ?? 0;
+    const tempK = attr.brightness_kelvin ?? 310;
+    const tempC = (tempK - 273.15).toFixed(1);
+
+    quickStats = [
+      { label: 'FRP POWER', value: `${Number(frp).toFixed(1)} MW`, color: '#ef4444' },
+      { label: 'TEMPERATURE', value: `${tempC}°C`, color: '#f97316' },
+      { label: 'CONFIDENCE', value: (attr.confidence_level || 'NOMINAL').toUpperCase(), color: '#eab308' },
+    ];
+
     properties = {
-      'Anomaly ID': attr.fire_id || 'N/A',
-      'Region': attr.region || 'N/A',
-      'Fire Radiative Power (FRP)': `${attr.frp_mw?.toFixed(1)} MW`,
-      'Brightness Temperature': `${attr.brightness_kelvin?.toFixed(1)} K (${(attr.brightness_kelvin - 273.15).toFixed(1)} °C)`,
-      'Detection Confidence': attr.confidence_level?.toUpperCase() || 'NOMINAL',
-      'Observation Satellite': attr.satellite || 'N/A',
-      'Radiometer Sensor': attr.instrument || 'VIIRS',
-      'Scan Mode': attr.daynight === 'D' ? 'Daytime Scan' : 'Nighttime Scan',
+      'Anomaly ID': attr.fire_id || undefined,
+      'Region': attr.region || undefined,
+      'Fire Radiative Power': `${Number(frp).toFixed(1)} MW`,
+      'Brightness Temperature': `${tempK} K (${tempC} °C)`,
+      'Detection Confidence': attr.confidence_level?.toUpperCase() || undefined,
+      'Observation Satellite': attr.satellite || undefined,
+      'Radiometer Instrument': attr.instrument || 'VIIRS',
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
     };
   } else if (type === 'infrastructure') {
     const attr = data.attributes || {};
-    title = data.canonical_name || `Facility ${attr.node_id}`;
+    title = data.canonical_name || `Facility ${attr.node_id || ''}`;
     categoryTag = `INFRASTRUCTURE · ${attr.node_type?.toUpperCase() || 'NODE'}`;
     truthClass = 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
@@ -200,69 +263,86 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
+    quickStats = [
+      { label: 'TYPE', value: (attr.node_type || 'Facility').toUpperCase(), color: '#eab308' },
+      { label: 'COUNTRY', value: attr.country || 'Global', color: '#38bdf8' },
+      { label: 'STATUS', value: attr.status || 'OPERATIONAL', color: '#10b981' },
+    ];
+
     properties = {
-      'Facility ID': attr.node_id || 'N/A',
-      'Facility Classification': attr.node_type?.toUpperCase() || 'N/A',
-      'Sovereign Host': attr.country || 'N/A',
-      'Primary Code': attr.primary_code || 'N/A',
-      'Secondary Code': attr.secondary_code || 'N/A',
-      'Operator Authority': attr.operator || 'N/A',
-      'Surface Elevation': `${attr.elevation_m} meters MSL`,
-      'Operational Status': attr.status || 'OPERATIONAL',
+      'Facility ID': attr.node_id || undefined,
+      'Facility Classification': attr.node_type?.toUpperCase() || undefined,
+      'Host Country': attr.country || undefined,
+      'IATA / Primary Code': attr.primary_code || undefined,
+      'ICAO / Secondary Code': attr.secondary_code || undefined,
+      'Operator': attr.operator || undefined,
+      'Surface Elevation': attr.elevation_m !== undefined ? `${attr.elevation_m} m MSL` : undefined,
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
-      'Key Capabilities': Array.isArray(attr.capabilities) ? attr.capabilities.join(', ') : 'N/A',
     };
   } else if (type === 'geometry') {
-    title = data.canonical_name || data.properties?.name || 'Boundary Geometry';
+    title = data.canonical_name || data.properties?.name || 'Sovereign Boundary';
     categoryTag = `GEOMETRY · ${data.geometry_kind || 'POLYGON'}`;
     truthClass = 'OBSERVED';
-    sourceName = 'Natural Earth v5.1.2 / PostGIS Authoritative Boundaries';
+    sourceName = 'Natural Earth v5.1.2 Authoritative PostGIS Boundaries';
     properties = {
-      'Entity ID': data.entity_id || 'N/A',
+      'Entity ID': data.entity_id || undefined,
       'Geometry Kind': data.geometry_kind || 'sovereign_state',
-      'SRID': '4326 (WGS84)',
+      'Coordinate System': 'SRID 4326 (WGS84)',
       ...data.properties,
     };
   } else if (type === 'event') {
-    title = data.title || `Seismic Event (M${data.magnitude ?? 'N/A'})`;
+    title = data.title || `Seismic Event M${data.magnitude ?? ''}`;
     categoryTag = `EVENT · ${data.category?.toUpperCase() || 'GEOPHYSICAL'}`;
     truthClass = data.truth_class || 'OBSERVED';
     timestamp = data.occurred_at || data.starts_at;
     sourceName = data.source_name || data.source_slug || 'USGS Earthquake Hazards';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
+
+    quickStats = [
+      { label: 'MAGNITUDE', value: data.magnitude ? `M${data.magnitude}` : 'N/A', color: '#ef4444' },
+      { label: 'DEPTH', value: data.properties?.depth ? `${data.properties.depth} km` : '10 km', color: '#eab308' },
+    ];
+
     properties = {
-      'Event ID': data.id || data.event_id || 'N/A',
-      'Magnitude': data.magnitude !== undefined ? `M ${data.magnitude}` : 'N/A',
-      'Depth': data.properties?.depth ? `${data.properties.depth} km` : 'N/A',
-      'Coordinates': data.point ? `[${data.point[1].toFixed(4)}, ${data.point[0].toFixed(4)}]` : 'N/A',
+      'Event ID': data.id || data.event_id || undefined,
+      'Magnitude': data.magnitude !== undefined ? `M ${data.magnitude}` : undefined,
+      'Depth': data.properties?.depth ? `${data.properties.depth} km` : undefined,
+      'Coordinates': data.point ? `[${data.point[1].toFixed(4)}°, ${data.point[0].toFixed(4)}°]` : undefined,
     };
   } else if (type === 'observation') {
-    title = data.canonical_name || data.metric_name || 'Observation Record';
-    categoryTag = `OBSERVATION · ${data.metric_name || 'STATISTICAL'}`;
+    title = data.canonical_name || data.metric_name || 'Statistical Observation';
+    categoryTag = `OBSERVATION · ${data.measure || 'METRIC'}`;
     truthClass = data.truth_class || (data.is_anomaly ? 'DERIVED' : 'OBSERVED');
     timestamp = data.observed_at || data.starts_at;
-    sourceName = data.source_name || data.source_slug || 'World Bank Open Data';
+    sourceName = data.source_name || data.source_slug || 'Authoritative Ingestion Feed';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
+
     properties = {
-      'Metric': data.metric_name || data.measure || 'N/A',
-      'Value': data.value !== undefined ? Number(data.value).toLocaleString() : 'N/A',
+      'Metric': data.metric_name || data.measure || undefined,
+      'Value': data.value !== undefined ? Number(data.value).toLocaleString() : undefined,
       'Unit': data.unit || 'count',
       'Is Anomaly': data.is_anomaly ? 'YES (Statistical Deviation)' : 'NO',
     };
-  } else if (type === 'alert') {
-    title = data.title || 'System Tactical Alert';
-    categoryTag = `ALERT · ${data.severity || 'WARNING'}`;
-    truthClass = data.truth_class || 'INFERRED';
-    timestamp = data.created_at;
-    sourceName = data.source || 'WORLDOS Alert Dispatcher';
-    properties = {
-      'Alert ID': data.id || 'N/A',
-      'Severity': data.severity || 'HIGH',
-      'Description': data.description || 'Threshold breach detected in spatial cell.',
-    };
   }
+
+  // Filter out any undefined, null, or 'N/A' properties
+  const validProperties = Object.entries(properties).filter(
+    ([_, val]) =>
+      val !== undefined &&
+      val !== null &&
+      val !== 'N/A' &&
+      val !== '' &&
+      val !== 'null'
+  );
+
+  const handleCopyHash = () => {
+    if (!contentHash) return;
+    navigator.clipboard.writeText(contentHash);
+    setCopiedHash(true);
+    setTimeout(() => setCopiedHash(false), 2000);
+  };
 
   return (
     <aside className="details-drawer" aria-label="Intelligence Dossier">
@@ -270,7 +350,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
         <div className="details-title-group">
           <span className="details-type-tag">{categoryTag}</span>
           <h2 className="details-title">{title}</h2>
-          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '4px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', marginTop: '6px' }}>
             <span className={`badge-truth ${truthClass.toLowerCase()}`}>{truthClass}</span>
             {timestamp && (
               <span
@@ -287,56 +367,104 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
             )}
           </div>
         </div>
-        <button
-          className="details-close-btn"
-          onClick={onClose}
-          aria-label="Close details dossier"
-          title="Close details"
-        >
-          <X size={16} />
-        </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {typeof entityLon === 'number' && typeof entityLat === 'number' && (
+            <button
+              className="details-flyto-btn"
+              onClick={() => onFlyTo && onFlyTo([entityLon, entityLat], type === 'camera' ? 16 : 9)}
+              title="Fly camera directly to target"
+            >
+              <Crosshair size={13} />
+              <span>FOCUS</span>
+            </button>
+          )}
+
+          <button
+            className="details-close-btn"
+            onClick={onClose}
+            aria-label="Close details dossier"
+            title="Close details"
+          >
+            <X size={16} />
+          </button>
+        </div>
       </div>
 
       <div className="details-content">
-        {/* Live Camera Snapshot Preview Card if Available */}
-        {previewImageUrl && (
+        {/* Quick Stats Summary Grid */}
+        {quickStats.length > 0 && (
+          <div className="details-quick-stats-grid">
+            {quickStats.map((s, idx) => (
+              <div key={idx} className="quick-stat-card">
+                <span className="quick-stat-label">{s.label}</span>
+                <span className="quick-stat-val" style={{ color: s.color || 'var(--cy)' }}>
+                  {s.value}
+                </span>
+              </div>
+            ))}
+          </div>
+        )}
+
+        {/* Live Street Camera Snapshot Card */}
+        {type === 'camera' && previewImageUrl && (
           <section className="details-section">
-            <h3 className="details-section-title">Optical Feed Snapshot</h3>
-            <div
-              style={{
-                borderRadius: '6px',
-                overflow: 'hidden',
-                border: '1px solid var(--border-subtle)',
-                background: '#020617',
-              }}
-            >
-              <img
-                src={previewImageUrl}
-                alt={title}
-                style={{ width: '100%', height: 'auto', display: 'block' }}
-                onError={(e) => {
-                  (e.target as HTMLElement).style.display = 'none';
-                }}
-              />
-              <div
-                style={{
-                  padding: '6px 10px',
-                  fontSize: '10px',
-                  color: 'var(--text-muted)',
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  background: 'rgba(0,0,0,0.5)',
-                }}
-              >
-                <span>Live Public Frame</span>
-                <a
-                  href={data.attributes?.stream_url || locator}
-                  target="_blank"
-                  rel="noreferrer"
-                  style={{ color: 'var(--cy)', textDecoration: 'none' }}
-                >
-                  View Agency Portal &rarr;
-                </a>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+              <h3 className="details-section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '5px' }}>
+                <Video size={12} color="var(--grn)" /> Live Optical Sensor Feed
+              </h3>
+              <span className="live-camera-pulse">
+                <span className="live-camera-pulse-dot" /> LIVE FEED
+              </span>
+            </div>
+
+            <div className="camera-feed-card">
+              {!imgError ? (
+                <img
+                  src={previewImageUrl}
+                  alt={title}
+                  className="camera-snapshot-img"
+                  onError={() => setImgError(true)}
+                />
+              ) : (
+                <div className="camera-feed-placeholder">
+                  <Camera size={36} color="var(--text-muted)" />
+                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                    OPTICAL STREAM ACTIVE
+                  </div>
+                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '240px' }}>
+                    Browser cross-origin snapshot policy requires direct agency viewer.
+                  </div>
+                </div>
+              )}
+
+              <div className="camera-feed-footer">
+                <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                  <MapPin size={10} color="var(--grn)" />
+                  {data.attributes?.region || 'Public Corridor'}
+                </span>
+                <div style={{ display: 'flex', gap: '8px' }}>
+                  {liveStreamUrl && (
+                    <a
+                      href={liveStreamUrl}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="camera-portal-link"
+                    >
+                      <ExternalLink size={10} /> Agency Portal
+                    </a>
+                  )}
+                  {locator && (
+                    <a
+                      href={locator}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="camera-portal-link"
+                    >
+                      <ExternalLink size={10} /> Raw Stream
+                    </a>
+                  )}
+                </div>
               </div>
             </div>
           </section>
@@ -349,30 +477,11 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
               className="details-section-title"
               style={{ display: 'flex', alignItems: 'center', gap: '6px' }}
             >
-              <History size={12} color="var(--cy)" /> Historical Observation Track (
-              {track.length} points)
+              <History size={12} color="var(--cy)" /> Historical Observation Track ({track.length} points)
             </h3>
-            <div
-              style={{
-                maxHeight: '140px',
-                overflowY: 'auto',
-                fontSize: '10px',
-                border: '1px solid var(--border-subtle)',
-                borderRadius: '4px',
-                padding: '6px',
-                background: 'rgba(0,0,0,0.2)',
-              }}
-            >
+            <div className="track-history-list">
               {track.map((pt, idx) => (
-                <div
-                  key={idx}
-                  style={{
-                    display: 'flex',
-                    justifyContent: 'space-between',
-                    padding: '3px 0',
-                    borderBottom: '1px solid rgba(255,255,255,0.05)',
-                  }}
-                >
+                <div key={idx} className="track-history-item">
                   <span style={{ color: 'var(--text-muted)' }}>
                     {new Date(pt.observed_at).toLocaleTimeString()}
                   </span>
@@ -390,18 +499,20 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
           </section>
         )}
 
-        {/* Telemetry & Attributes Grid */}
-        <section className="details-section">
-          <h3 className="details-section-title">Telemetry & Canonical Attributes</h3>
-          <div className="details-prop-grid">
-            {Object.entries(properties).map(([key, value]) => (
-              <React.Fragment key={key}>
-                <span className="details-prop-key">{key}:</span>
-                <span className="details-prop-val">{String(value)}</span>
-              </React.Fragment>
-            ))}
-          </div>
-        </section>
+        {/* Telemetry & Canonical Attributes (Only Valid Fields) */}
+        {validProperties.length > 0 && (
+          <section className="details-section">
+            <h3 className="details-section-title">Telemetry & Verified Attributes</h3>
+            <div className="details-prop-grid">
+              {validProperties.map(([key, value]) => (
+                <React.Fragment key={key}>
+                  <span className="details-prop-key">{key}:</span>
+                  <span className="details-prop-val">{String(value)}</span>
+                </React.Fragment>
+              ))}
+            </div>
+          </section>
+        )}
 
         {/* Cryptographic Evidence & Provenance Section */}
         <section className="details-section">
@@ -454,16 +565,19 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
 
             {contentHash ? (
               <div>
-                <span
-                  style={{
-                    fontSize: '9px',
-                    color: 'var(--text-muted)',
-                    display: 'block',
-                    marginBottom: '2px',
-                  }}
-                >
-                  SHA-256 CONTENT DIGEST:
-                </span>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                  <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                    SHA-256 CONTENT DIGEST:
+                  </span>
+                  <button
+                    onClick={handleCopyHash}
+                    className="copy-hash-btn"
+                    title="Copy SHA-256 Hash"
+                  >
+                    {copiedHash ? <Check size={10} color="var(--grn)" /> : <Copy size={10} />}
+                    <span>{copiedHash ? 'COPIED' : 'COPY'}</span>
+                  </button>
+                </div>
                 <div className="evidence-hash">
                   <Hash size={9} style={{ display: 'inline', marginRight: '3px' }} />
                   {contentHash}
