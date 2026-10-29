@@ -11,6 +11,7 @@ import {
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
   Viewer,
+  createWorldTerrainAsync,
   defined,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
@@ -160,6 +161,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     });
 
     applyImageryLayers(viewer, basemapMode);
+
+    // Enable high-resolution 3D World Terrain when Cesium Ion token is active
+    if (Ion.defaultAccessToken) {
+      createWorldTerrainAsync()
+        .then((terrainProvider) => {
+          if (viewerRef.current) {
+            viewer.terrainProvider = terrainProvider;
+          }
+        })
+        .catch(() => {});
+    }
 
     // Initial camera view
     viewer.camera.setView({

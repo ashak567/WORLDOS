@@ -37,3 +37,47 @@ def get_opensky_settings() -> OpenSkySettings:
     """Factory function returning the active OpenSkySettings instance."""
     return OpenSkySettings.from_env()
 
+
+class AISStreamSettings(BaseModel):
+    """Secure configuration container for AISStream.io API key."""
+
+    model_config = ConfigDict(frozen=True)
+
+    api_key: SecretStr | None = None
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.api_key and self.api_key.get_secret_value())
+
+    @classmethod
+    def from_env(cls) -> AISStreamSettings:
+        raw_key = os.environ.get("AISSTREAM_API_KEY", "").strip() or None
+        return cls(api_key=SecretStr(raw_key) if raw_key else None)
+
+
+class FirmsSettings(BaseModel):
+    """Secure configuration container for NASA FIRMS map key."""
+
+    model_config = ConfigDict(frozen=True)
+
+    map_key: SecretStr | None = None
+
+    @property
+    def is_configured(self) -> bool:
+        return bool(self.map_key and self.map_key.get_secret_value())
+
+    @classmethod
+    def from_env(cls) -> FirmsSettings:
+        raw_key = os.environ.get("NASA_FIRMS_MAP_KEY", "").strip() or None
+        return cls(map_key=SecretStr(raw_key) if raw_key else None)
+
+
+def get_aisstream_settings() -> AISStreamSettings:
+    """Factory function returning the active AISStreamSettings instance."""
+    return AISStreamSettings.from_env()
+
+
+def get_firms_settings() -> FirmsSettings:
+    """Factory function returning the active FirmsSettings instance."""
+    return FirmsSettings.from_env()
+

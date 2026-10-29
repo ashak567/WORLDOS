@@ -148,7 +148,66 @@ AUTHORITATIVE_THERMAL_ANOMALIES: list[dict[str, Any]] = [
 ]
 
 
+import csv
+import urllib.request
+from ..config import get_firms_settings
+
+
+def fetch_live_firms_anomalies(map_key: str, max_records: int = 100) -> list[ThermalAnomalyRecord]:
+    """Retrieve real-time global thermal anomaly detections from NASA FIRMS VIIRS satellite sensor."""
+    url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/VIIRS_NOAA20_NRT/world/1"
+    req = urllib.request.Request(url, headers={"User-Agent": "WORLDOS/1.0"})
+    records: list[ThermalAnomalyRecord] = []
+    with urllib.request.urlopen(req, timeout=15) as resp:
+        text = resp.read().decode("utf-8")
+        reader = csv.DictReader(text.strip().splitlines())
+        for idx, row in enumerate(reader):
+            if idx >= max_records:
+                break
+            try:
+                lat = float(row["latitude"])
+                lon = float(row["longitude"])
+                bright = float(row.get("bright_ti4", 320.0))
+                frp = float(row.get("frp", 10.0))
+                conf_code = str(row.get("confidence", "nominal")).lower()
+                conf = "high" if conf_code in ("h", "high") else ("low" if conf_code in ("l", "low") else "nominal")
+                acq_date = row.get("acq_date", datetime.now(UTC).strftime("%Y-%m-%d"))
+                acq_time = str(row.get("acq_time", "0000")).zfill(4)
+                det_dt = datetime.strptime(f"{acq_date} {acq_time}", "%Y-%m-%d %H%M").replace(tzinfo=UTC)
+                fire_id = f"FIRMS-VIIRS-{idx+1:04d}-{acq_date}"
+                records.append(
+                    ThermalAnomalyRecord(
+                        fire_id=fire_id,
+                        region=f"Active Thermal Hotspot ({lat:.2f}, {lon:.2f})",
+                        latitude=lat,
+                        longitude=lon,
+                        brightness_kelvin=bright,
+                        frp_mw=frp,
+                        confidence_level=conf,
+                        satellite=row.get("satellite", "NOAA-20"),
+                        instrument=row.get("instrument", "VIIRS"),
+                        daynight=row.get("daynight", "D"),
+                        detected_at=det_dt,
+                        source_locator=f"https://firms.modaps.eosdis.nasa.gov/api/active_fire/{fire_id}",
+                    )
+                )
+            except Exception:
+                continue
+    return records
+
+
 def load_authoritative_thermal_anomalies(now: datetime | None = None) -> list[ThermalAnomalyRecord]:
+    """Load thermal anomalies: live from NASA FIRMS if configured, else authoritative reference set."""
+    settings = get_firms_settings()
+    if settings.is_configured and settings.map_key:
+        try:
+            live = fetch_live_firms_anomalies(settings.map_key.get_secret_value(), max_records=80)
+            if live:
+                logger.info("Successfully fetched %d live thermal anomalies from NASA FIRMS API", len(live))
+                return live
+        except Exception as exc:
+            logger.warning("Failed to fetch live NASA FIRMS anomalies, falling back to authoritative set: %s", exc)
+
     obs_time = now or datetime.now(UTC)
     records: list[ThermalAnomalyRecord] = []
     for item in AUTHORITATIVE_THERMAL_ANOMALIES:
