@@ -2388,3 +2388,40 @@ def run_prediction_backtest_endpoint(req: BacktestRequest):
     """Execute a rolling-origin walk-forward backtest to evaluate out-of-sample forecast accuracy."""
     repo = WorldRepository()
     return repo.run_prediction_backtest(req)
+
+
+# =============================================================================
+# Strategic Multi-Modal Route Planning & Threat Avoidance (Phase 1)
+# =============================================================================
+from .routing import (
+    StrategicRouteEngine,
+    RoutePlanRequest,
+    RoutePlanResponse,
+    HubLocation,
+    ConflictZone,
+)
+
+
+@app.get("/routing/hubs", response_model=dict[str, list[HubLocation]])
+def get_routing_hubs_endpoint():
+    """Retrieve curated global aviation airports and maritime seaports for route planning."""
+    engine = StrategicRouteEngine()
+    return engine.list_hubs()
+
+
+@app.get("/routing/conflict-zones", response_model=list[ConflictZone])
+def get_routing_conflict_zones_endpoint():
+    """Retrieve active geopolitical conflict zones and closed airspace/maritime exclusion areas."""
+    engine = StrategicRouteEngine()
+    return engine.list_conflict_zones()
+
+
+@app.post("/routing/plan", response_model=RoutePlanResponse)
+def plan_strategic_route_endpoint(req: RoutePlanRequest):
+    """Compute an optimized multi-modal route with geodesic curvature, threat avoidance, and metrics."""
+    engine = StrategicRouteEngine()
+    try:
+        return engine.plan_route(req)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+

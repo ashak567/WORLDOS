@@ -1290,3 +1290,706 @@ html, body, #root {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
 }
 
+/* ==========================================================================
+   INTERACTIVE CAMERA SURVEILLANCE VIDEO PLAYER
+   ========================================================================== */
+.camera-feed-controls-bar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 8px;
+  background: rgba(4, 9, 15, 0.95);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+
+.camera-feed-mode-toggle,
+.camera-filter-toggle {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.cam-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-brand);
+  font-size: 9px;
+  letter-spacing: 0.06em;
+  padding: 2px 7px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cam-mode-btn.active {
+  background: rgba(16, 185, 129, 0.2);
+  border-color: #10b981;
+  color: #10b981;
+  font-weight: 700;
+}
+
+.cam-filter-btn {
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 3px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 600;
+  padding: 2px 5px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.cam-filter-btn.active {
+  background: rgba(255, 255, 255, 0.2);
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+}
+
+.cam-filter-btn.nvg.active {
+  background: rgba(34, 197, 94, 0.25);
+  border-color: #22c55e;
+  color: #22c55e;
+}
+
+.cam-filter-btn.flir.active {
+  background: rgba(249, 115, 22, 0.25);
+  border-color: #f97316;
+  color: #f97316;
+}
+
+.camera-feed-viewport {
+  position: relative;
+  width: 100%;
+  height: 200px;
+  background: #000;
+  overflow: hidden;
+  transition: filter 0.2s ease;
+}
+
+.camera-video-element {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  border: none;
+  display: block;
+}
+
+.camera-hud-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between;
+  padding: 8px 10px;
+  background: linear-gradient(180deg, rgba(0,0,0,0.4) 0%, transparent 25%, transparent 75%, rgba(0,0,0,0.5) 100%);
+}
+
+.camera-hud-top,
+.camera-hud-bottom {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.camera-hud-rec {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: #ef4444;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-shadow: 0 0 6px rgba(239, 68, 68, 0.8);
+}
+
+.camera-rec-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: #ef4444;
+  animation: pulse-beacon 1s infinite ease-in-out;
+}
+
+.camera-hud-tag,
+.camera-hud-coords,
+.camera-hud-status {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: rgba(255, 255, 255, 0.8);
+  letter-spacing: 0.06em;
+  text-shadow: 0 1px 3px rgba(0,0,0,0.9);
+}
+
+.camera-hud-center {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.camera-reticle {
+  width: 28px;
+  height: 28px;
+  border: 1px dashed rgba(255, 255, 255, 0.25);
+  position: relative;
+}
+
+.camera-reticle::before {
+  content: '';
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 4px;
+  height: 4px;
+  background: rgba(255, 255, 255, 0.6);
+  transform: translate(-50%, -50%);
+  border-radius: 50%;
+}
+
+/* ==========================================================================
+   STRATEGIC MULTI-MODAL ROUTE PLANNER (PHASE 1)
+   ========================================================================== */
+.route-planner-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1200;
+  background: rgba(2, 6, 15, 0.75);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+}
+
+.route-planner-modal {
+  width: 100%;
+  max-width: 780px;
+  max-height: 90vh;
+  background: var(--bg-surface);
+  border: 1px solid var(--border-panel);
+  border-radius: 8px;
+  box-shadow: 0 16px 40px rgba(0, 0, 0, 0.7), 0 0 24px rgba(6, 182, 212, 0.15);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  animation: modal-slide-in 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes modal-slide-in {
+  from {
+    opacity: 0;
+    transform: scale(0.97) translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: scale(1) translateY(0);
+  }
+}
+
+.route-planner-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 12px 18px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border-panel);
+}
+
+.route-planner-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-family: var(--font-brand);
+  font-size: 13px;
+  font-weight: 700;
+  color: var(--text-primary);
+  letter-spacing: 0.08em;
+}
+
+.route-planner-badge {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  background: rgba(6, 182, 212, 0.15);
+  color: var(--cy);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  padding: 1px 6px;
+  border-radius: 3px;
+}
+
+.route-planner-close {
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 4px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.route-planner-close:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.08);
+}
+
+.route-planner-body {
+  padding: 18px;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+/* Mode Selector */
+.route-mode-selector {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  background: var(--bg-panel);
+  padding: 4px;
+  border-radius: 6px;
+  border: 1px solid var(--border-panel);
+}
+
+.route-mode-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 8px 12px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  color: var(--text-secondary);
+  font-family: var(--font-brand);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.route-mode-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.route-mode-btn.active {
+  background: rgba(6, 182, 212, 0.15);
+  border-color: rgba(6, 182, 212, 0.4);
+  color: var(--cy);
+  font-weight: 700;
+  box-shadow: 0 0 10px rgba(6, 182, 212, 0.2);
+}
+
+/* Presets Row */
+.route-presets-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 6px;
+  font-size: 10px;
+}
+
+.route-presets-label {
+  color: var(--text-muted);
+  font-family: var(--font-brand);
+  letter-spacing: 0.06em;
+  font-weight: 600;
+}
+
+.route-preset-chip {
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  border-radius: 12px;
+  color: var(--text-secondary);
+  font-size: 10px;
+  padding: 3px 9px;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.route-preset-chip:hover {
+  background: rgba(6, 182, 212, 0.1);
+  border-color: var(--cy);
+  color: var(--cy);
+}
+
+/* Hub Selectors */
+.route-hub-selectors {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.route-hub-col {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.route-hub-label {
+  font-family: var(--font-brand);
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-secondary);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  letter-spacing: 0.06em;
+}
+
+.route-hub-select {
+  width: 100%;
+  padding: 8px 10px;
+  background: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  color: var(--text-primary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  outline: none;
+  transition: border-color 0.15s ease;
+}
+
+.route-hub-select:focus {
+  border-color: var(--cy);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.25);
+}
+
+.route-swap-wrapper {
+  margin-top: 18px;
+}
+
+.route-swap-btn {
+  background: var(--bg-panel);
+  border: 1px solid var(--border-panel);
+  border-radius: 4px;
+  color: var(--text-secondary);
+  padding: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: all 0.15s ease;
+}
+
+.route-swap-btn:hover {
+  color: var(--cy);
+  border-color: var(--cy);
+}
+
+/* Options Panel */
+.route-options-panel {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: rgba(0, 0, 0, 0.3);
+  padding: 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border-panel);
+}
+
+.route-checkbox-label {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.route-checkbox-label input {
+  display: none;
+}
+
+.route-checkbox-custom {
+  width: 16px;
+  height: 16px;
+  margin-top: 2px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+  border-radius: 3px;
+  background: var(--bg-panel);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  transition: all 0.15s ease;
+}
+
+.route-checkbox-label input:checked + .route-checkbox-custom {
+  background: var(--cy);
+  border-color: var(--cy);
+  box-shadow: 0 0 8px rgba(6, 182, 212, 0.4);
+}
+
+.route-checkbox-label input:checked + .route-checkbox-custom::after {
+  content: '✓';
+  color: #020617;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.route-checkbox-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.route-speed-slider {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.route-slider-input {
+  width: 100%;
+  accent-color: var(--cy);
+  cursor: pointer;
+}
+
+/* Action Compute Button */
+.route-compute-btn {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 10px 16px;
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.25) 0%, rgba(16, 185, 129, 0.25) 100%);
+  border: 1px solid var(--cy);
+  border-radius: 5px;
+  color: var(--text-primary);
+  font-family: var(--font-brand);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  cursor: pointer;
+  transition: all 0.2s ease;
+  box-shadow: 0 0 15px rgba(6, 182, 212, 0.2);
+}
+
+.route-compute-btn:hover:not(:disabled) {
+  background: linear-gradient(135deg, rgba(6, 182, 212, 0.4) 0%, rgba(16, 185, 129, 0.4) 100%);
+  box-shadow: 0 0 20px rgba(6, 182, 212, 0.4);
+  transform: translateY(-1px);
+}
+
+.route-compute-btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.route-error-banner {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(239, 68, 68, 0.15);
+  border: 1px solid rgba(239, 68, 68, 0.4);
+  color: #fca5a5;
+  padding: 8px 12px;
+  border-radius: 4px;
+  font-size: 11px;
+}
+
+/* Results Card */
+.route-results-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  background: var(--bg-panel);
+  border: 1px solid rgba(6, 182, 212, 0.3);
+  border-radius: 6px;
+  padding: 14px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.4);
+}
+
+.route-results-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+  padding-bottom: 8px;
+}
+
+.route-threat-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 3px;
+  letter-spacing: 0.06em;
+}
+
+.route-threat-badge.safe {
+  background: rgba(16, 185, 129, 0.15);
+  color: #10b981;
+  border: 1px solid rgba(16, 185, 129, 0.3);
+}
+
+.route-threat-badge.warning {
+  background: rgba(245, 158, 11, 0.15);
+  color: #f59e0b;
+  border: 1px solid rgba(245, 158, 11, 0.3);
+}
+
+.route-threat-badge.critical {
+  background: rgba(239, 68, 68, 0.2);
+  color: #ef4444;
+  border: 1px solid rgba(239, 68, 68, 0.4);
+}
+
+.route-metrics-grid {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px;
+}
+
+.route-metric-box {
+  background: rgba(0, 0, 0, 0.4);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.route-metric-label {
+  font-family: var(--font-brand);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.route-metric-val {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--cy);
+}
+
+.route-metric-val small {
+  font-size: 9px;
+  color: var(--text-secondary);
+}
+
+.route-metric-sub {
+  font-size: 9px;
+  color: var(--text-muted);
+}
+
+.route-avoidance-notice {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  background: rgba(16, 185, 129, 0.1);
+  border: 1px solid rgba(16, 185, 129, 0.25);
+  border-radius: 4px;
+  padding: 8px 10px;
+  font-size: 11px;
+  color: #a7f3d0;
+}
+
+.route-summary-text {
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.5;
+  margin: 0;
+}
+
+/* Altitude Visualization Bars */
+.route-altitude-viz {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  border: 1px solid rgba(255, 255, 255, 0.06);
+  border-radius: 4px;
+  padding: 8px 10px;
+}
+
+.route-alt-header {
+  font-family: var(--font-mono);
+  font-size: 9px;
+  color: var(--text-muted);
+  letter-spacing: 0.06em;
+}
+
+.route-alt-bars {
+  display: flex;
+  align-items: flex-end;
+  height: 38px;
+  gap: 2px;
+  padding-top: 4px;
+}
+
+.route-alt-bar {
+  flex: 1;
+  background: linear-gradient(180deg, var(--cy) 0%, rgba(6, 182, 212, 0.2) 100%);
+  border-top-left-radius: 2px;
+  border-top-right-radius: 2px;
+  transition: all 0.2s ease;
+}
+
+.route-alt-bar:hover {
+  background: #38bdf8;
+  filter: brightness(1.3);
+}
+
+.route-actions-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: 4px;
+}
+
+.route-action-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 14px;
+  border-radius: 4px;
+  font-family: var(--font-brand);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.06em;
+  cursor: pointer;
+  transition: all 0.15s ease;
+}
+
+.route-action-btn.primary {
+  background: rgba(6, 182, 212, 0.2);
+  border: 1px solid var(--cy);
+  color: var(--cy);
+}
+
+.route-action-btn.primary:hover {
+  background: var(--cy);
+  color: #020617;
+}
+
+.route-action-btn.secondary {
+  background: transparent;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: var(--text-muted);
+}
+
+.route-action-btn.secondary:hover {
+  color: var(--text-primary);
+  border-color: rgba(255, 255, 255, 0.25);
+}
+
+
+

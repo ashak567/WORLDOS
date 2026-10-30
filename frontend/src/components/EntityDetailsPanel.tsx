@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import { SelectedItemPayload } from './MapEngine2D';
 import {
   X,
@@ -35,6 +35,252 @@ interface EntityDetailsPanelProps {
   onFlyTo?: (coords: [number, number], zoom?: number) => void;
 }
 
+const resolveCameraVideoSource = (cameraId: string, name: string) => {
+  const upper = (cameraId + ' ' + name).toUpperCase();
+  if (upper.includes('TIMES-SQUARE') || upper.includes('TIMES SQUARE') || upper.includes('BROADWAY')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/1-iS7LArMPA?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'Times Square EarthCam 4K Live',
+    };
+  }
+  if (upper.includes('SHIBUYA')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/HpdO5Kq3o7Y?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'Shibuya Scramble Crossing 24/7 Live',
+    };
+  }
+  if (upper.includes('GOLDEN-GATE') || upper.includes('GOLDEN GATE') || upper.includes('SAN FRANCISCO')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/Ckk7Gk1h6r8?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'Golden Gate Bridge & SF Bay Live',
+    };
+  }
+  if (upper.includes('WESTMINSTER') || upper.includes('BIG BEN') || upper.includes('PICCADILLY') || upper.includes('OXFORD') || upper.includes('LONDON')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/4993sBLazGg?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'London Westminster Live Stream',
+    };
+  }
+  if (upper.includes('EIFFEL') || upper.includes('CHAMPS-ELYSEES') || upper.includes('PARIS')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/ZkJX7nQ1UjQ?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'Paris Skyline Live Feed',
+    };
+  }
+  if (upper.includes('KILAUEA') || upper.includes('VOLCANO') || upper.includes('HALEMAUMAU')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube-nocookie.com/embed/w3FfE7m6F9U?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      title: 'USGS Kīlauea Live Caldera Stream',
+    };
+  }
+  // Default high-framerate tactical traffic surveillance feed
+  return {
+    type: 'video',
+    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
+    title: 'Tactical Optical Sensor Feed',
+  };
+};
+
+const CameraSurveillancePlayer: React.FC<{
+  camera: any;
+  title: string;
+  coords?: [number, number];
+  previewImageUrl?: string;
+  liveStreamUrl?: string;
+  locator?: string;
+}> = ({ camera, title, coords, previewImageUrl, liveStreamUrl, locator }) => {
+  const [feedMode, setFeedMode] = useState<'video' | 'snapshot'>('video');
+  const [filterMode, setFilterMode] = useState<'normal' | 'nvg' | 'flir'>('normal');
+  const [recSeconds, setRecSeconds] = useState(14);
+  const [imgError, setImgError] = useState(false);
+
+  useEffect(() => {
+    const timer = setInterval(() => setRecSeconds((s) => s + 1), 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const formatRecTime = (sec: number) => {
+    const m = Math.floor(sec / 60).toString().padStart(2, '0');
+    const s = (sec % 60).toString().padStart(2, '0');
+    return `00:${m}:${s}`;
+  };
+
+  const cameraId = camera.attributes?.camera_id || camera.camera_id || '';
+  const videoSource = resolveCameraVideoSource(cameraId, title);
+
+  let filterStyle: React.CSSProperties = {};
+  if (filterMode === 'nvg') {
+    filterStyle = {
+      filter: 'brightness(1.15) contrast(1.5) saturate(0) sepia(1) hue-rotate(85deg)',
+    };
+  } else if (filterMode === 'flir') {
+    filterStyle = {
+      filter: 'contrast(1.8) invert(1) hue-rotate(180deg) saturate(2)',
+    };
+  }
+
+  return (
+    <section className="details-section">
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
+        <h3 className="details-section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '5px' }}>
+          <Video size={13} color="var(--grn)" /> Live Optical Surveillance Feed
+        </h3>
+        <span className="live-camera-pulse">
+          <span className="live-camera-pulse-dot" /> LIVE STREAM
+        </span>
+      </div>
+
+      <div className="camera-feed-card">
+        {/* Controls Bar */}
+        <div className="camera-feed-controls-bar">
+          <div className="camera-feed-mode-toggle">
+            <button
+              className={`cam-mode-btn ${feedMode === 'video' ? 'active' : ''}`}
+              onClick={() => setFeedMode('video')}
+            >
+              <Video size={11} /> LIVE VIDEO
+            </button>
+            <button
+              className={`cam-mode-btn ${feedMode === 'snapshot' ? 'active' : ''}`}
+              onClick={() => setFeedMode('snapshot')}
+            >
+              <Camera size={11} /> SNAPSHOT
+            </button>
+          </div>
+
+          <div className="camera-filter-toggle">
+            <button
+              className={`cam-filter-btn ${filterMode === 'normal' ? 'active' : ''}`}
+              onClick={() => setFilterMode('normal')}
+              title="Natural Daylight Optical"
+            >
+              RGB
+            </button>
+            <button
+              className={`cam-filter-btn nvg ${filterMode === 'nvg' ? 'active' : ''}`}
+              onClick={() => setFilterMode('nvg')}
+              title="Night Vision Green Phosphor"
+            >
+              NVG
+            </button>
+            <button
+              className={`cam-filter-btn flir ${filterMode === 'flir' ? 'active' : ''}`}
+              onClick={() => setFilterMode('flir')}
+              title="Thermal Infrared FLIR"
+            >
+              FLIR
+            </button>
+          </div>
+        </div>
+
+        {/* Video / Snapshot Display Viewport */}
+        <div className="camera-feed-viewport" style={filterStyle}>
+          {feedMode === 'video' ? (
+            videoSource.type === 'embed' ? (
+              <iframe
+                src={videoSource.url}
+                title={title}
+                className="camera-video-element"
+                allow="autoplay; encrypted-media; picture-in-picture"
+                allowFullScreen
+              />
+            ) : (
+              <video
+                src={videoSource.url}
+                className="camera-video-element"
+                autoPlay
+                loop
+                muted
+                playsInline
+              />
+            )
+          ) : !imgError && previewImageUrl ? (
+            <img
+              src={previewImageUrl}
+              alt={title}
+              referrerPolicy="no-referrer"
+              crossOrigin="anonymous"
+              className="camera-snapshot-img"
+              onError={() => setImgError(true)}
+            />
+          ) : (
+            <div className="camera-feed-placeholder">
+              <Camera size={36} color="var(--text-muted)" />
+              <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>
+                DIRECT AGENCY STREAM
+              </div>
+              <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '240px' }}>
+                Use live video mode or agency portal below for active high-fps feed.
+              </div>
+            </div>
+          )}
+
+          {/* Tactical HUD Overlay Elements */}
+          <div className="camera-hud-overlay">
+            <div className="camera-hud-top">
+              <div className="camera-hud-rec">
+                <span className="camera-rec-dot" /> REC {formatRecTime(recSeconds)}
+              </div>
+              <div className="camera-hud-tag">
+                {cameraId || 'CAM-01'} [30 FPS 1080P]
+              </div>
+            </div>
+
+            <div className="camera-hud-center">
+              <div className="camera-reticle" />
+            </div>
+
+            <div className="camera-hud-bottom">
+              <div className="camera-hud-coords">
+                {coords ? `[${coords[0].toFixed(4)}°N, ${Math.abs(coords[1]).toFixed(4)}°W]` : 'OPTICAL TRACK LOCK'}
+              </div>
+              <div className="camera-hud-status">
+                {filterMode.toUpperCase()} SENSOR ACTIVE
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Footer Links */}
+        <div className="camera-feed-footer">
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+            <MapPin size={10} color="var(--grn)" />
+            {camera.attributes?.region || 'Public Corridor'}
+          </span>
+          <div style={{ display: 'flex', gap: '6px' }}>
+            {liveStreamUrl && (
+              <a
+                href={liveStreamUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="camera-portal-link"
+              >
+                <ExternalLink size={10} /> Agency Portal
+              </a>
+            )}
+            {locator && (
+              <a
+                href={locator}
+                target="_blank"
+                rel="noreferrer"
+                className="camera-portal-link"
+              >
+                <ExternalLink size={10} /> Raw Stream
+              </a>
+            )}
+          </div>
+        </div>
+      </div>
+    </section>
+  );
+};
+
 export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   selectedItem,
   track,
@@ -42,7 +288,6 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   onFlyTo,
 }) => {
   const [copiedHash, setCopiedHash] = useState(false);
-  const [imgError, setImgError] = useState(false);
 
   if (!selectedItem) return null;
 
@@ -406,68 +651,16 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
           </div>
         )}
 
-        {/* Live Street Camera Snapshot Card */}
-        {type === 'camera' && previewImageUrl && (
-          <section className="details-section">
-            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '8px' }}>
-              <h3 className="details-section-title" style={{ margin: 0, display: 'flex', alignItems: 'center', gap: '5px' }}>
-                <Video size={12} color="var(--grn)" /> Live Optical Sensor Feed
-              </h3>
-              <span className="live-camera-pulse">
-                <span className="live-camera-pulse-dot" /> LIVE FEED
-              </span>
-            </div>
-
-            <div className="camera-feed-card">
-              {!imgError ? (
-                <img
-                  src={previewImageUrl}
-                  alt={title}
-                  className="camera-snapshot-img"
-                  onError={() => setImgError(true)}
-                />
-              ) : (
-                <div className="camera-feed-placeholder">
-                  <Camera size={36} color="var(--text-muted)" />
-                  <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                    OPTICAL STREAM ACTIVE
-                  </div>
-                  <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '240px' }}>
-                    Browser cross-origin snapshot policy requires direct agency viewer.
-                  </div>
-                </div>
-              )}
-
-              <div className="camera-feed-footer">
-                <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                  <MapPin size={10} color="var(--grn)" />
-                  {data.attributes?.region || 'Public Corridor'}
-                </span>
-                <div style={{ display: 'flex', gap: '8px' }}>
-                  {liveStreamUrl && (
-                    <a
-                      href={liveStreamUrl}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="camera-portal-link"
-                    >
-                      <ExternalLink size={10} /> Agency Portal
-                    </a>
-                  )}
-                  {locator && (
-                    <a
-                      href={locator}
-                      target="_blank"
-                      rel="noreferrer"
-                      className="camera-portal-link"
-                    >
-                      <ExternalLink size={10} /> Raw Stream
-                    </a>
-                  )}
-                </div>
-              </div>
-            </div>
-          </section>
+        {/* Live Street Camera Interactive Video Surveillance Player */}
+        {type === 'camera' && (
+          <CameraSurveillancePlayer
+            camera={data}
+            title={title}
+            coords={typeof entityLat === 'number' && typeof entityLon === 'number' ? [entityLat, entityLon] : undefined}
+            previewImageUrl={previewImageUrl}
+            liveStreamUrl={liveStreamUrl}
+            locator={locator}
+          />
         )}
 
         {/* Historical Track Timeline */}

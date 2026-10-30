@@ -17,6 +17,7 @@ import {
   ThermalAnomalyEvent,
   InfrastructureNode,
   AircraftTrackPoint,
+  RoutePlanResponse,
 } from '../api';
 import { BasemapMode, LayerDefinition } from '../types/layers';
 
@@ -49,6 +50,7 @@ interface MapEngine2DProps {
   thermalEvents?: ThermalAnomalyEvent[];
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
+  activeRoute?: RoutePlanResponse | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
   onViewportChange: (bbox: BoundingBox) => void;
@@ -161,6 +163,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
   thermalEvents = [],
   infrastructure = [],
   selectedTrack = null,
+  activeRoute = null,
   targetLocation,
   selectedItem = null,
   onViewportChange,
@@ -646,6 +649,46 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
       );
     }
 
+    // 13. Strategic Multi-Modal Route (Phase 1)
+    if (activeRoute && activeRoute.waypoints.length > 1) {
+      const routeColor: [number, number, number, number] =
+        activeRoute.mode === 'air'
+          ? [6, 182, 212, 240] // Neon Cyan
+          : activeRoute.mode === 'sea'
+          ? [16, 185, 129, 240] // Emerald Green
+          : [245, 158, 11, 240]; // Amber Gold
+
+      deckLayers.push(
+        new PathLayer({
+          id: 'deck-strategic-route-path',
+          data: [{ path: activeRoute.waypoints.map((w) => [w.lon, w.lat]) }],
+          pickable: true,
+          widthMinPixels: 4,
+          getPath: (d) => d.path,
+          getColor: routeColor,
+        })
+      );
+
+      deckLayers.push(
+        new ScatterplotLayer({
+          id: 'deck-route-endpoints',
+          data: [
+            { pos: [activeRoute.origin.longitude, activeRoute.origin.latitude], isOrigin: true },
+            { pos: [activeRoute.destination.longitude, activeRoute.destination.latitude], isOrigin: false },
+          ],
+          pickable: true,
+          getPosition: (d: any) => d.pos,
+          getRadius: 45000,
+          radiusMinPixels: 7,
+          radiusMaxPixels: 20,
+          getFillColor: (d: any) => (d.isOrigin ? [6, 182, 212, 230] : [16, 185, 129, 230]),
+          getLineColor: [255, 255, 255, 255],
+          stroked: true,
+          lineWidthMinPixels: 2,
+        })
+      );
+    }
+
     overlayRef.current.setProps({
       layers: deckLayers,
     });
@@ -662,6 +705,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
     thermalEvents,
     infrastructure,
     selectedTrack,
+    activeRoute,
     selectedItem,
     onSelectItem,
   ]);

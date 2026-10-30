@@ -12,6 +12,7 @@ import {
   ThermalAnomalyEvent,
   InfrastructureNode,
   AircraftTrackPoint,
+  RoutePlanResponse,
   fetchWorldContext,
   fetchAlerts,
   fetchEvents,
@@ -33,6 +34,7 @@ import { LayerDock } from './components/LayerDock';
 import { CommandPalette } from './components/CommandPalette';
 import { EntityDetailsPanel } from './components/EntityDetailsPanel';
 import { SourceHealthModal } from './components/SourceHealthModal';
+import { RoutePlannerModal } from './components/RoutePlannerModal';
 import './styles.css';
 
 export default function App() {
@@ -59,6 +61,8 @@ export default function App() {
   const [targetLocation, setTargetLocation] = useState<{ center: [number, number]; zoom?: number } | null>(null);
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isSourceHealthOpen, setIsSourceHealthOpen] = useState(false);
+  const [isRoutePlannerOpen, setIsRoutePlannerOpen] = useState(false);
+  const [activeRoute, setActiveRoute] = useState<RoutePlanResponse | null>(null);
   const [isDockCollapsed, setIsDockCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
 
@@ -350,6 +354,8 @@ export default function App() {
         isLoading={isLoading}
         onOpenCommandPalette={() => setIsCommandOpen(true)}
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
+        onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
+        isRouteActive={activeRoute !== null}
         isDockCollapsed={isDockCollapsed}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
         aircraftCount={aircraft.length}
@@ -379,6 +385,7 @@ export default function App() {
             thermalEvents={thermalEvents}
             infrastructure={infrastructure}
             selectedTrack={selectedTrack}
+            activeRoute={activeRoute}
             targetLocation={targetLocation}
             selectedItem={selectedItem}
             onViewportChange={handleViewportChange}
@@ -399,6 +406,7 @@ export default function App() {
             thermalEvents={thermalEvents}
             infrastructure={infrastructure}
             selectedTrack={selectedTrack}
+            activeRoute={activeRoute}
             targetLocation={targetLocation}
             selectedItem={selectedItem}
             onViewportChange={handleViewportChange}
@@ -435,6 +443,7 @@ export default function App() {
         layers={layers}
         onToggleLayer={handleToggleLayer}
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
+        onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
         onJumpToRegion={(coords, zoom) => setTargetLocation({ center: coords, zoom })}
         cameras={cameras}
@@ -445,6 +454,15 @@ export default function App() {
       <SourceHealthModal
         isOpen={isSourceHealthOpen}
         onClose={() => setIsSourceHealthOpen(false)}
+      />
+
+      {/* Strategic Multi-Modal Route Planner (Phase 1) */}
+      <RoutePlannerModal
+        isOpen={isRoutePlannerOpen}
+        onClose={() => setIsRoutePlannerOpen(false)}
+        activeRoute={activeRoute}
+        onSelectRoute={setActiveRoute}
+        onFlyToRoute={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || (viewMode === '3d' ? 5 : 4) })}
       />
     </div>
   );

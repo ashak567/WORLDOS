@@ -40,6 +40,7 @@ import {
   ThermalAnomalyEvent,
   InfrastructureNode,
   AircraftTrackPoint,
+  RoutePlanResponse,
 } from '../api';
 import { BasemapMode, LayerDefinition } from '../types/layers';
 import { SelectedItemPayload } from './MapEngine2D';
@@ -62,6 +63,7 @@ interface GlobeEngine3DProps {
   thermalEvents?: ThermalAnomalyEvent[];
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
+  activeRoute?: RoutePlanResponse | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
   onViewportChange: (bbox: BoundingBox) => void;
@@ -82,6 +84,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   thermalEvents = [],
   infrastructure = [],
   selectedTrack = null,
+  activeRoute = null,
   targetLocation,
   selectedItem = null,
   onViewportChange,
@@ -536,6 +539,53 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         },
       });
     }
+
+    // 9. Strategic Multi-Modal Route in 3D Geodesic Space (Phase 1)
+    if (activeRoute && activeRoute.waypoints.length > 1) {
+      const routePositions = activeRoute.waypoints.map((w) =>
+        Cartesian3.fromDegrees(w.lon, w.lat, Math.max(100, w.altitude_m))
+      );
+      const glowColor =
+        activeRoute.mode === 'air'
+          ? Color.fromCssColorString('#06b6d4') // Neon Cyan
+          : activeRoute.mode === 'sea'
+          ? Color.fromCssColorString('#10b981') // Emerald
+          : Color.fromCssColorString('#f59e0b'); // Amber
+
+      viewer.entities.add({
+        name: `Strategic Route ${activeRoute.origin.code} - ${activeRoute.destination.code}`,
+        polyline: {
+          positions: routePositions,
+          width: activeRoute.mode === 'air' ? 5 : 4,
+          material: new PolylineGlowMaterialProperty({
+            glowPower: 0.35,
+            color: glowColor,
+          }),
+        },
+      });
+
+      // Origin Point
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(activeRoute.origin.longitude, activeRoute.origin.latitude, 500),
+        point: {
+          pixelSize: 12,
+          color: Color.fromCssColorString('#06b6d4'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+      });
+
+      // Destination Point
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(activeRoute.destination.longitude, activeRoute.destination.latitude, 500),
+        point: {
+          pixelSize: 12,
+          color: Color.fromCssColorString('#10b981'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+      });
+    }
   }, [
     layers,
     aircraft,
@@ -548,6 +598,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     alerts,
     infrastructure,
     selectedTrack,
+    activeRoute,
     selectedItem,
   ]);
 

@@ -646,3 +646,91 @@ export async function fetchInfrastructure(nodeType?: string, limit: number = 100
   return response.json();
 }
 
+// -----------------------------------------------------------------------------
+// Strategic Multi-Modal Route Planning (Phase 1)
+// -----------------------------------------------------------------------------
+
+export interface HubLocation {
+  id: string;
+  name: string;
+  code: string;
+  category: 'airport' | 'seaport' | 'intermodal';
+  city: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  runway_or_draft_info?: string;
+}
+
+export interface ConflictZone {
+  id: string;
+  name: string;
+  category: string;
+  threat_level: 'LOW' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+  description: string;
+  active: boolean;
+  polygon: [number, number][];
+}
+
+export interface RoutePoint {
+  lat: number;
+  lon: number;
+  altitude_m: number;
+  distance_km: number;
+  distance_nm: number;
+  segment_note?: string;
+}
+
+export interface RoutePlanRequest {
+  origin_id: string;
+  destination_id: string;
+  mode: 'air' | 'sea' | 'multimodal';
+  avoid_conflict_zones?: boolean;
+  cruise_speed_kts?: number;
+}
+
+export interface RoutePlanResponse {
+  route_id: string;
+  mode: 'air' | 'sea' | 'multimodal';
+  origin: HubLocation;
+  destination: HubLocation;
+  total_distance_km: number;
+  total_distance_nm: number;
+  estimated_duration_hours: number;
+  estimated_duration_formatted: string;
+  fuel_estimate_tons: number;
+  co2_estimate_tons: number;
+  threat_level: 'LOW' | 'ELEVATED' | 'HIGH' | 'CRITICAL';
+  conflict_zones_avoided: string[];
+  waypoints: RoutePoint[];
+  altitude_profile: { dist_km: number; alt_m: number; lat: number; lon: number }[];
+  geojson: any;
+  summary: string;
+}
+
+export async function fetchRoutingHubs(): Promise<{ airports: HubLocation[]; seaports: HubLocation[] }> {
+  const response = await fetch(`${apiBase}/routing/hubs`);
+  if (!response.ok) throw new Error(`API returned ${response.status} fetching routing hubs`);
+  return response.json();
+}
+
+export async function fetchConflictZones(): Promise<ConflictZone[]> {
+  const response = await fetch(`${apiBase}/routing/conflict-zones`);
+  if (!response.ok) throw new Error(`API returned ${response.status} fetching conflict zones`);
+  return response.json();
+}
+
+export async function planStrategicRoute(req: RoutePlanRequest): Promise<RoutePlanResponse> {
+  const response = await fetch(`${apiBase}/routing/plan`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(req),
+  });
+  if (!response.ok) {
+    const err = await response.json().catch(() => ({ detail: 'Failed to plan route' }));
+    throw new Error(err.detail || `Route planning error (${response.status})`);
+  }
+  return response.json();
+}
+
+

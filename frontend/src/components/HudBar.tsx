@@ -18,6 +18,7 @@ import {
   Building2,
   Video,
   MapPin,
+  Navigation,
 } from 'lucide-react';
 
 interface HudBarProps {
@@ -29,6 +30,8 @@ interface HudBarProps {
   isLoading: boolean;
   onOpenCommandPalette: () => void;
   onOpenSourceHealth: () => void;
+  onOpenRoutePlanner?: () => void;
+  isRouteActive?: boolean;
   isDockCollapsed: boolean;
   onToggleDock: () => void;
   aircraftCount: number;
@@ -50,6 +53,8 @@ export const HudBar: React.FC<HudBarProps> = ({
   isLoading,
   onOpenCommandPalette,
   onOpenSourceHealth,
+  onOpenRoutePlanner,
+  isRouteActive = false,
   isDockCollapsed,
   onToggleDock,
   aircraftCount,
@@ -264,6 +269,16 @@ export const HudBar: React.FC<HudBarProps> = ({
       </div>
 
       <div className="hud-actions">
+        <button
+          className="hud-btn"
+          onClick={onOpenRoutePlanner}
+          title="Open Strategic Multi-Modal Route Planner"
+          style={isRouteActive ? { borderColor: 'var(--cy)', background: 'rgba(6, 182, 212, 0.2)' } : {}}
+        >
+          <Navigation size={13} color="var(--cy)" />
+          <span>ROUTES</span>
+        </button>
+
         <button
           className="hud-btn"
           onClick={onOpenCommandPalette}

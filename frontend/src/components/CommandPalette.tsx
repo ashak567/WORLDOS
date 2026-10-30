@@ -2,7 +2,7 @@ import React, { useEffect } from 'react';
 import { Command } from 'cmdk';
 import { LayerDefinition, LayerId } from '../types/layers';
 import { CameraEntity } from '../api';
-import { Globe, Map, Layers, Activity, Compass, ShieldAlert, Sparkles, X, Video, Camera, MapPin } from 'lucide-react';
+import { Globe, Map, Layers, Activity, Compass, ShieldAlert, Sparkles, X, Video, Camera, MapPin, Navigation } from 'lucide-react';
 
 interface CommandPaletteProps {
   isOpen: boolean;
@@ -12,6 +12,7 @@ interface CommandPaletteProps {
   layers: LayerDefinition[];
   onToggleLayer: (id: LayerId) => void;
   onOpenSourceHealth: () => void;
+  onOpenRoutePlanner?: () => void;
   onToggleDock: () => void;
   onJumpToRegion?: (coords: [number, number], zoom: number) => void;
   cameras?: CameraEntity[];
@@ -26,6 +27,7 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
   layers,
   onToggleLayer,
   onOpenSourceHealth,
+  onOpenRoutePlanner,
   onToggleDock,
   onJumpToRegion,
   cameras = [],
@@ -78,6 +80,20 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
 
           <Command.List className="command-list">
             <Command.Empty className="command-empty">No matching commands found.</Command.Empty>
+
+            {/* Strategic Decision Support & Routing */}
+            <Command.Group heading="STRATEGIC DECISION SUPPORT & ROUTING">
+              <Command.Item
+                className="command-item"
+                onSelect={() => runAction(() => onOpenRoutePlanner && onOpenRoutePlanner())}
+              >
+                <div className="command-item-left">
+                  <Navigation size={14} color="var(--cy)" />
+                  <span>Strategic Multi-Modal Route Planner (Air & Sea Geodesic)</span>
+                </div>
+                <span className="command-shortcut">PHASE 1</span>
+              </Command.Item>
+            </Command.Group>
 
             {/* Projection Mode Commands */}
             <Command.Group heading="GEOSPATIAL PROJECTION">
