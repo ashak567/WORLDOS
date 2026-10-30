@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import asyncio
+import logging
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
@@ -77,6 +80,7 @@ from .domain import (
     PredictionRun,
     PredictionStatus,
 )
+from .config import get_aisstream_settings, get_firms_settings, get_opensky_settings
 from .alerts import AlertEngine
 from .anomalies import (
     AnomalyConfigurationError,
@@ -88,6 +92,7 @@ from .benchmarks import AnalyticalBenchmarkSuite
 from .constraints import ConstraintEngine, ConstraintViolationError
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
+from .ingestion.fires import fetch_live_firms_anomalies
 from .ingestion.opensky import (
     AircraftStateRecord,
     OpenSkyAuthError,
@@ -99,13 +104,22 @@ from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
 from .ingestion import (
     camera_to_world_bundle,
+    fetch_maritime_vessels,
+    fetch_current_satellites,
+    fetch_satellite_ground_track,
+    fetch_gdacs_alerts,
+    fetch_open_natural_events,
+    fetch_recent_earthquakes,
     infrastructure_to_world_bundle,
     load_authoritative_cameras,
     load_authoritative_infrastructure,
-    load_authoritative_satellites,
-    load_authoritative_thermal_anomalies,
-    load_sample_vessels,
     maritime_vessel_bundle,
+    SatelliteFeedError,
+    LiveHazardFeedError,
+    LiveContextFeedError,
+    fetch_global_climate,
+    fetch_global_news,
+    satellite_to_api_state,
     satellite_to_world_bundle,
     thermal_anomaly_to_world_bundle,
 )
@@ -124,7 +138,48 @@ from .storage import WorldRepository
 
 from fastapi.middleware.cors import CORSMiddleware
 
-app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API")
+logger = logging.getLogger(__name__)
+
+
+async def _scheduled_ingestion(
+    name: str,
+    ingest: Any,
+    configured: Any,
+    interval_seconds: int,
+) -> None:
+    await asyncio.sleep(30)
+    while True:
+        if configured():
+            try:
+                result = await asyncio.to_thread(ingest)
+                if isinstance(result, dict):
+                    fetched = result.get("records_fetched", 0)
+                    persisted = result.get("records_persisted", 0)
+                else:
+                    fetched = getattr(result, "records_fetched", 0)
+                    persisted = getattr(result, "records_persisted", 0)
+                logger.info("Scheduled %s ingestion completed: fetched=%s persisted=%s", name, fetched, persisted)
+            except Exception:
+                logger.exception("Scheduled %s ingestion failed", name)
+        await asyncio.sleep(interval_seconds)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    tasks = [
+        asyncio.create_task(_scheduled_ingestion("OpenSky", lambda: ingest_opensky_states(global_snapshot=True), lambda: get_opensky_settings().is_configured, 30 * 60)),
+        asyncio.create_task(_scheduled_ingestion("AISStream", ingest_maritime_vessels, lambda: get_aisstream_settings().is_configured, 5 * 60)),
+        asyncio.create_task(_scheduled_ingestion("NASA FIRMS", ingest_thermal_anomalies, lambda: get_firms_settings().is_configured, 15 * 60)),
+    ]
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        await asyncio.gather(*tasks, return_exceptions=True)
+
+
+app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API", lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -852,7 +907,7 @@ def list_aircraft_states(
     min_lat: float | None = Query(default=None),
     max_lon: float | None = Query(default=None),
     max_lat: float | None = Query(default=None),
-    limit: int = Query(default=500, ge=1, le=10000),
+    limit: int = Query(default=500, ge=1, le=20000),
 ):
     min_lon_v = _clean_param(min_lon)
     min_lat_v = _clean_param(min_lat)
@@ -906,7 +961,7 @@ def list_maritime_vessels(
 @app.post("/ingest/maritime/vessels")
 def ingest_maritime_vessels() -> dict[str, Any]:
     repo = WorldRepository()
-    records = load_sample_vessels()
+    records = fetch_maritime_vessels()
     now = datetime.now(UTC)
     persisted = 0
     for r in records:
@@ -917,14 +972,31 @@ def ingest_maritime_vessels() -> dict[str, Any]:
 
 
 @app.get("/space/satellites")
-def list_satellites(limit: int = Query(default=50, ge=1, le=200)):
-    return WorldRepository().satellites(limit=_clean_param(limit, 50))
+def list_satellites(limit: int = Query(default=20_000, ge=1, le=20_000)):
+    try:
+        records = fetch_current_satellites(limit=_clean_param(limit, 20_000))
+    except SatelliteFeedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return [satellite_to_api_state(record) for record in records]
+
+
+@app.get("/space/satellites/{norad_id}/ground-track")
+def satellite_ground_track(norad_id: str, points: int = Query(default=72, ge=12, le=360)):
+    try:
+        return {"norad_id": norad_id, "points": fetch_satellite_ground_track(norad_id, points=points)}
+    except SatelliteFeedError as exc:
+        message = str(exc)
+        status_code = 400 if message.startswith("Invalid") else 404 if "not in the active catalog" in message else 503
+        raise HTTPException(status_code=status_code, detail=message) from exc
 
 
 @app.post("/ingest/space/satellites")
-def ingest_satellites() -> dict[str, Any]:
+def ingest_satellites(limit: int = Query(default=1_000, ge=1, le=20_000)) -> dict[str, Any]:
     repo = WorldRepository()
-    records = load_authoritative_satellites()
+    try:
+        records = fetch_current_satellites(limit=_clean_param(limit, 1_000))
+    except SatelliteFeedError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     now = datetime.now(UTC)
     persisted = 0
     for r in records:
@@ -948,13 +1020,24 @@ def list_cameras(
     max_lat_v = _clean_param(max_lat)
     limit_v = _clean_param(limit, 100)
 
-    return WorldRepository().cameras(
+    records = WorldRepository().cameras(
         min_lon=float(min_lon_v) if min_lon_v is not None else None,
         min_lat=float(min_lat_v) if min_lat_v is not None else None,
         max_lon=float(max_lon_v) if max_lon_v is not None else None,
         max_lat=float(max_lat_v) if max_lat_v is not None else None,
         limit=limit_v,
     )
+    for record in records:
+        record["truth_class"] = "SIMULATED"
+        record["value"] = None
+        record["confidence"] = 0.25
+        record["evidence_locator"] = None
+        record["source_name"] = "WORLDOS curated camera examples"
+        attributes = record.get("attributes") or {}
+        attributes["status"] = "UNVERIFIED"
+        attributes["truth_class"] = "SIMULATED"
+        record["attributes"] = attributes
+    return records
 
 
 @app.post("/ingest/cameras")
@@ -995,8 +1078,17 @@ def list_thermal_anomalies(
 
 @app.post("/ingest/nasa-firms/fires")
 def ingest_thermal_anomalies() -> dict[str, Any]:
+    settings = get_firms_settings()
+    if not settings.is_configured or settings.map_key is None:
+        raise HTTPException(
+            status_code=503,
+            detail="NASA FIRMS requires a free NASA_FIRMS_MAP_KEY; use the NASA EONET Global Natural Events layer for keyless wildfire indicators.",
+        )
     repo = WorldRepository()
-    records = load_authoritative_thermal_anomalies()
+    try:
+        records = fetch_live_firms_anomalies(settings.map_key.get_secret_value(), max_records=500)
+    except (OSError, TimeoutError, UnicodeError, ValueError) as exc:
+        raise HTTPException(status_code=503, detail="NASA FIRMS feed is unavailable; verify the key and try again.") from exc
     now = datetime.now(UTC)
     persisted = 0
     for r in records:
@@ -1011,10 +1103,22 @@ def list_infrastructure(
     node_type: str | None = Query(default=None),
     limit: int = Query(default=100, ge=1, le=500),
 ):
-    return WorldRepository().infrastructure_nodes(
+    records = WorldRepository().infrastructure_nodes(
         node_type=node_type,
         limit=_clean_param(limit, 100),
     )
+    for record in records:
+        record["truth_class"] = "SIMULATED"
+        record["value"] = None
+        record["confidence"] = 0.25
+        record["evidence_locator"] = None
+        record["source_name"] = "WORLDOS curated infrastructure examples"
+        attributes = record.get("attributes") or {}
+        attributes["status"] = "UNVERIFIED"
+        attributes["capabilities_status"] = "UNVERIFIED"
+        attributes["truth_class"] = "SIMULATED"
+        record["attributes"] = attributes
+    return records
 
 
 @app.post("/ingest/infrastructure")
@@ -1106,6 +1210,53 @@ def events(
         end=end,
         limit=limit,
     )
+
+
+@app.get("/events/live")
+def live_events():
+    """Return current public earthquake and NASA EONET event indicators."""
+    now = datetime.now(UTC)
+    feeds: dict[str, Any] = {}
+    earthquakes: list[dict[str, Any]] = []
+    natural_events: list[dict[str, Any]] = []
+    failures = 0
+
+    for key, fetcher, target in (
+        ("usgs", fetch_recent_earthquakes, earthquakes),
+        ("nasa_eonet", fetch_open_natural_events, natural_events),
+        ("gdacs", fetch_gdacs_alerts, natural_events),
+    ):
+        try:
+            records, retrieved_at, status = fetcher(now)
+            target.extend(records)
+            feeds[key] = {"status": status, "retrieved_at": retrieved_at.isoformat(), "count": len(records)}
+        except LiveHazardFeedError as exc:
+            failures += 1
+            feeds[key] = {"status": "unavailable", "error": str(exc), "count": 0}
+
+    if failures == len(feeds):
+        raise HTTPException(status_code=503, detail={"message": "Live event feeds are unavailable", "sources": feeds})
+    return {"earthquakes": earthquakes, "natural_events": natural_events, "sources": feeds, "as_of": now.isoformat()}
+
+
+@app.get("/context/live")
+def live_context():
+    """Return sourced news headlines and the latest monthly NASA climate anomaly."""
+    now = datetime.now(UTC)
+    result: dict[str, Any] = {"sources": {}, "as_of": now.isoformat()}
+    failures = 0
+    for key, fetcher in (("news", fetch_global_news), ("climate", fetch_global_climate)):
+        try:
+            data, retrieved_at, status = fetcher(now)
+            result[key] = data
+            result["sources"][key] = {"status": status, "retrieved_at": retrieved_at.isoformat(), "count": len(data) if isinstance(data, list) else 1}
+        except LiveContextFeedError as exc:
+            failures += 1
+            result[key] = [] if key == "news" else None
+            result["sources"][key] = {"status": "unavailable", "error": str(exc), "count": 0}
+    if failures == 2:
+        raise HTTPException(status_code=503, detail={"message": "Live context feeds are unavailable", "sources": result["sources"]})
+    return result
 
 
 @app.get("/entities/{entity_id}/context")

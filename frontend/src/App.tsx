@@ -3,6 +3,8 @@ import {
   BoundingBox,
   GeometryFeature,
   Event,
+  LiveEventsResponse,
+  LiveContextResponse,
   Observation,
   Alert,
   AircraftState,
@@ -16,10 +18,13 @@ import {
   fetchWorldContext,
   fetchAlerts,
   fetchEvents,
+  fetchLiveEvents,
+  fetchLiveContext,
   fetchAircraftStates,
   fetchAircraftTrack,
   fetchMaritimeVessels,
   fetchSatellites,
+  fetchSatelliteGroundTrack,
   fetchCameras,
   fetchThermalEvents,
   fetchInfrastructure,
@@ -37,15 +42,78 @@ import { SourceHealthModal } from './components/SourceHealthModal';
 import { RoutePlannerModal } from './components/RoutePlannerModal';
 import './styles.css';
 
+function withLiveFeedHealth(layers: LayerDefinition[], sources: LiveEventsResponse['sources']): LayerDefinition[] {
+  const naturalFeeds = [sources.nasa_eonet, sources.gdacs];
+  const unavailable = naturalFeeds.filter((source) => source.status === 'unavailable').length;
+  const status = unavailable === naturalFeeds.length ? 'unavailable'
+    : unavailable ? 'partial'
+      : naturalFeeds.some((source) => source.status === 'stale') ? 'stale' : 'fresh';
+  const timestamps = naturalFeeds.flatMap((source) => source.retrieved_at ? [source.retrieved_at] : []).sort().reverse();
+  return layers.map((layer) => {
+    if (layer.id === 'earthquake-events') {
+      const source = sources.usgs;
+      return { ...layer, error: source.status === 'unavailable' ? 'Feed unavailable' : undefined, feedStatus: source.status, lastUpdated: source.retrieved_at };
+    }
+    if (layer.id === 'natural-hazards') {
+      return {
+        ...layer,
+        error: unavailable ? 'One or more hazard feeds unavailable' : undefined,
+        feedStatus: status,
+        lastUpdated: timestamps[0],
+      };
+    }
+    return layer;
+  });
+}
+
+function withSatelliteFeedHealth(layers: LayerDefinition[], states: SatelliteState[] | null, error?: string): LayerDefinition[] {
+  const first = states?.[0];
+  const status = first?.attributes?.element_set_status;
+  return layers.map((layer) => layer.id === 'space-satellites'
+    ? {
+        ...layer,
+        error,
+        feedStatus: error ? 'unavailable' : status === 'stale' ? 'stale' : states?.length ? 'fresh' : undefined,
+        lastUpdated: first?.attributes?.elements_retrieved_at,
+      }
+    : layer);
+}
+
+function withSnapshotFeedHealth(
+  layers: LayerDefinition[],
+  layerId: 'aircraft-states' | 'maritime-vessels',
+  observedAt: string[],
+  staleAfterMs: number,
+  unavailableMessage: string,
+): LayerDefinition[] {
+  const timestamps = observedAt.map(Date.parse).filter(Number.isFinite);
+  const newest = timestamps.length ? Math.max(...timestamps) : undefined;
+  const freshCount = timestamps.filter((timestamp) => Date.now() - timestamp <= staleAfterMs).length;
+  const status = !timestamps.length ? 'unavailable' : freshCount === timestamps.length ? 'fresh' : freshCount ? 'partial' : 'stale';
+  return layers.map((layer) => layer.id === layerId
+    ? {
+        ...layer,
+        feedStatus: status,
+        lastUpdated: newest === undefined ? undefined : new Date(newest).toISOString(),
+        error: status === 'unavailable' ? unavailableMessage : undefined,
+      }
+    : layer);
+}
+
 export default function App() {
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('2d');
-  const [basemapMode, setBasemapMode] = useState<BasemapMode>('dark-tactical');
+  const [viewMode, setViewMode] = useState<'2d' | '3d'>('3d');
+  const [basemapMode, setBasemapMode] = useState<BasemapMode>('satellite-hybrid');
   const [layers, setLayers] = useState<LayerDefinition[]>(INITIAL_LAYERS);
   const [viewportBbox, setViewportBbox] = useState<BoundingBox | null>(null);
+  const [viewportZoom, setViewportZoom] = useState(0);
+  const [streetViewCenter, setStreetViewCenter] = useState<[number, number] | null>(null);
 
   // Multi-domain intelligence collections
   const [geometries, setGeometries] = useState<GeometryFeature[]>([]);
   const [events, setEvents] = useState<Event[]>([]);
+  const [naturalEvents, setNaturalEvents] = useState<Event[]>([]);
+  const [liveContext, setLiveContext] = useState<LiveContextResponse | null>(null);
+  const [liveContextError, setLiveContextError] = useState(false);
   const [observations, setObservations] = useState<Observation[]>([]);
   const [alerts, setAlerts] = useState<Alert[]>([]);
   const [aircraft, setAircraft] = useState<AircraftState[]>([]);
@@ -78,12 +146,33 @@ export default function App() {
     );
   }, []);
 
+  useEffect(() => {
+    if (viewportZoom >= 15.5 && viewportBbox && !streetViewCenter) {
+      setStreetViewCenter([
+        (viewportBbox.min_lon + viewportBbox.max_lon) / 2,
+        (viewportBbox.min_lat + viewportBbox.max_lat) / 2,
+      ]);
+    } else if (viewportZoom < 14.5 && streetViewCenter) {
+      setStreetViewCenter(null);
+    }
+  }, [viewportBbox, viewportZoom, streetViewCenter]);
+
+  useEffect(() => {
+    const refreshSnapshotHealth = () => {
+      setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', aircraft.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
+      setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vessels.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
+    };
+    const interval = setInterval(refreshSnapshotHealth, 60_000);
+    return () => clearInterval(interval);
+  }, [aircraft, vessels]);
+
   // Update real-time counts on all layers
   useEffect(() => {
     setLayers((prev) =>
       prev.map((l) => {
         if (l.id === 'country-boundaries') return { ...l, count: geometries.length };
-        if (l.id === 'earthquake-events') return { ...l, count: events.length };
+        if (l.id === 'earthquake-events') return { ...l, count: events.filter((event) => event.event_type === 'earthquake' || event.kind === 'earthquake' || event.source_slug === 'usgs-earthquakes').length };
+        if (l.id === 'natural-hazards') return { ...l, count: naturalEvents.length };
         if (l.id === 'population-observations') return { ...l, count: observations.length };
         if (l.id === 'aircraft-states') return { ...l, count: aircraft.length };
         if (l.id === 'maritime-vessels') return { ...l, count: vessels.length };
@@ -102,6 +191,7 @@ export default function App() {
   }, [
     geometries,
     events,
+    naturalEvents,
     observations,
     alerts,
     aircraft,
@@ -121,18 +211,20 @@ export default function App() {
       geometryFeatures(),
       populationObservations(),
       fetchEvents(100),
+      fetchLiveEvents(),
       fetchAlerts(undefined, undefined, 30),
-      fetchAircraftStates(undefined, 1000),
-      fetchMaritimeVessels(undefined, 200),
-      fetchSatellites(50),
+      fetchAircraftStates(undefined, 20_000),
+      fetchMaritimeVessels(undefined, 1000),
+      fetchSatellites(20_000),
       fetchCameras(undefined, 100),
-      fetchThermalEvents(undefined, 200),
+      fetchThermalEvents(undefined, 1000),
       fetchInfrastructure(undefined, 100),
     ]).then(
       ([
         geoRes,
         popRes,
         evRes,
+        liveRes,
         alRes,
         acRes,
         vesRes,
@@ -145,10 +237,31 @@ export default function App() {
         if (geoRes.status === 'fulfilled' && geoRes.value) setGeometries(geoRes.value);
         if (popRes.status === 'fulfilled' && popRes.value) setObservations(popRes.value);
         if (evRes.status === 'fulfilled' && evRes.value) setEvents(evRes.value);
+        if (liveRes.status === 'fulfilled') {
+          setEvents((current) => {
+            const stored = evRes.status === 'fulfilled' ? evRes.value : current;
+            return [...liveRes.value.earthquakes, ...stored.filter((event) => event.source_slug !== 'usgs-earthquakes')];
+          });
+          setNaturalEvents(liveRes.value.natural_events);
+          setLayers((prev) => withLiveFeedHealth(prev, liveRes.value.sources));
+        } else {
+          setLayers((prev) => prev.map((layer) =>
+            layer.id === 'earthquake-events' || layer.id === 'natural-hazards'
+              ? { ...layer, error: 'Live event feeds unavailable', feedStatus: 'unavailable' }
+              : layer
+          ));
+        }
         if (alRes.status === 'fulfilled' && alRes.value) setAlerts(alRes.value);
         if (acRes.status === 'fulfilled' && acRes.value) setAircraft(acRes.value);
         if (vesRes.status === 'fulfilled' && vesRes.value) setVessels(vesRes.value);
+        setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', acRes.status === 'fulfilled' ? acRes.value.map((a) => a.observed_at) : [], 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
+        setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesRes.status === 'fulfilled' ? vesRes.value.map((v) => v.observed_at) : [], 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
         if (satRes.status === 'fulfilled' && satRes.value) setSatellites(satRes.value);
+        setLayers((prev) => withSatelliteFeedHealth(
+          prev,
+          satRes.status === 'fulfilled' ? satRes.value : null,
+          satRes.status === 'rejected' ? 'Satellite feed unavailable' : undefined,
+        ));
         if (camRes.status === 'fulfilled' && camRes.value) setCameras(camRes.value);
         if (firRes.status === 'fulfilled' && firRes.value) setThermalEvents(firRes.value);
         if (infRes.status === 'fulfilled' && infRes.value) setInfrastructure(infRes.value);
@@ -161,64 +274,65 @@ export default function App() {
     };
   }, []);
 
-  // Real-time Dead-Reckoning & Extrapolation Engine (60s physics propagation between snapshots)
+  useEffect(() => {
+    let mounted = true;
+    const refreshSnapshots = async () => {
+      const [aircraftResult, vesselResult, fireResult] = await Promise.allSettled([
+        fetchAircraftStates(undefined, 20_000),
+        fetchMaritimeVessels(undefined, 1000),
+        fetchThermalEvents(undefined, 1000),
+      ]);
+      if (!mounted) return;
+      if (aircraftResult.status === 'fulfilled') {
+        setAircraft(aircraftResult.value);
+        setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', aircraftResult.value.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
+      }
+      if (vesselResult.status === 'fulfilled') {
+        setVessels(vesselResult.value);
+        setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesselResult.value.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
+      }
+      if (fireResult.status === 'fulfilled') setThermalEvents(fireResult.value);
+    };
+    const interval = setInterval(() => { void refreshSnapshots(); }, 5 * 60_000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+
+  useEffect(() => {
+    let mounted = true;
+    const refresh = () => fetchLiveContext().then((value) => {
+      if (mounted) { setLiveContext(value); setLiveContextError(false); }
+    }).catch(() => { if (mounted) setLiveContextError(true); });
+    refresh();
+    const interval = setInterval(refresh, 5 * 60_000);
+    return () => { mounted = false; clearInterval(interval); };
+  }, []);
+
   useEffect(() => {
     const interval = setInterval(() => {
-      // 1. Advance aircraft along velocity vector (heading + ground speed)
-      setAircraft((prev) =>
-        prev.map((a) => {
-          if (a.attributes?.on_ground) return a;
-          const speedKnots = a.attributes?.velocity ? a.attributes.velocity * 1.94384 : 450;
-          const trackDeg = a.attributes?.true_track ?? 0;
-          const distKm = (speedKnots * 1.852) / 3600; // km in 1 second
-          const trackRad = (trackDeg * Math.PI) / 180;
-          const dLat = (distKm / 111.0) * Math.cos(trackRad);
-          const cosLat = Math.cos((a.latitude * Math.PI) / 180);
-          const dLon = cosLat !== 0 ? (distKm / (111.0 * cosLat)) * Math.sin(trackRad) : 0;
-          return {
-            ...a,
-            latitude: Number((a.latitude + dLat).toFixed(5)),
-            longitude: Number((a.longitude + dLon).toFixed(5)),
-          };
-        })
-      );
+      fetchLiveEvents().then((live) => {
+        setEvents((current) => [...live.earthquakes, ...current.filter((event) => event.source_slug !== 'usgs-earthquakes')]);
+        setNaturalEvents(live.natural_events);
+        setLayers((prev) => withLiveFeedHealth(prev, live.sources));
+      }).catch(() => setLayers((prev) => prev.map((layer) =>
+        layer.id === 'earthquake-events' || layer.id === 'natural-hazards'
+          ? { ...layer, error: 'Live event feeds unavailable', feedStatus: 'unavailable' }
+          : layer
+      )));
+    }, 60_000);
+    return () => clearInterval(interval);
+  }, []);
 
-      // 2. Advance maritime vessels along course over ground and speed
-      setVessels((prev) =>
-        prev.map((v) => {
-          const speedKnots = v.attributes?.sog_knots ?? 15;
-          const courseDeg = v.attributes?.heading_degrees || v.attributes?.cog_degrees || 0;
-          const distKm = (speedKnots * 1.852) / 3600; // km in 1 second
-          const courseRad = (courseDeg * Math.PI) / 180;
-          const dLat = (distKm / 111.0) * Math.cos(courseRad);
-          const cosLat = Math.cos((v.latitude * Math.PI) / 180);
-          const dLon = cosLat !== 0 ? (distKm / (111.0 * cosLat)) * Math.sin(courseRad) : 0;
-          return {
-            ...v,
-            latitude: Number((v.latitude + dLat).toFixed(5)),
-            longitude: Number((v.longitude + dLon).toFixed(5)),
-          };
+  // Refresh propagated positions from current orbital elements; the backend caches provider data.
+  useEffect(() => {
+    const refreshSatellites = () => {
+      fetchSatellites(20_000)
+        .then((states) => {
+          setSatellites(states);
+          setLayers((prev) => withSatelliteFeedHealth(prev, states));
         })
-      );
-
-      // 3. Advance satellites along orbital trajectory (~7.6 km/s orbital speed)
-      setSatellites((prev) =>
-        prev.map((s) => {
-          const periodMin = s.attributes?.period_min || 92.5;
-          const speedDegPerSec = 360 / (periodMin * 60);
-          const incDeg = s.attributes?.inclination_deg || 51.6;
-          const newLon = ((s.longitude + speedDegPerSec + 180) % 360) - 180;
-          const theta = ((newLon + 180) * Math.PI) / 180;
-          const newLat = incDeg * Math.sin(theta);
-          return {
-            ...s,
-            longitude: Number(newLon.toFixed(4)),
-            latitude: Number(newLat.toFixed(4)),
-          };
-        })
-      );
-    }, 1000);
-
+        .catch(() => setLayers((prev) => withSatelliteFeedHealth(prev, null, 'Satellite feed unavailable')));
+    };
+    const interval = setInterval(refreshSatellites, 60_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -243,11 +357,23 @@ export default function App() {
           .catch(() => {});
       }
     }
+    if (item.type === 'satellite') {
+      const noradId = item.data?.attributes?.norad_id;
+      if (noradId) fetchSatelliteGroundTrack(String(noradId)).then((groundTrack) => {
+        setSatellites((current) => current.map((satellite) => satellite.attributes?.norad_id === noradId
+          ? { ...satellite, attributes: { ...satellite.attributes, ground_track: groundTrack } }
+          : satellite));
+        setSelectedItem((current) => current?.type === 'satellite' && current.data?.attributes?.norad_id === noradId
+          ? { ...current, data: { ...current.data, attributes: { ...current.data.attributes, ground_track: groundTrack } } }
+          : current);
+      }).catch(() => {});
+    }
   }, []);
 
   // Viewport-aware context querying with debouncing
-  const handleViewportChange = useCallback((bbox: BoundingBox) => {
+  const handleViewportChange = useCallback((bbox: BoundingBox, zoom?: number) => {
     setViewportBbox(bbox);
+    if (zoom !== undefined) setViewportZoom(zoom);
 
     if (debounceTimerRef.current) {
       clearTimeout(debounceTimerRef.current);
@@ -267,8 +393,8 @@ export default function App() {
             limit: 200,
             signal: abortControllerRef.current.signal,
           }),
-          fetchAircraftStates(bbox, 500).catch(() => null),
-          fetchMaritimeVessels(bbox, 100).catch(() => null),
+          fetchAircraftStates(bbox, 20_000).catch(() => null),
+          fetchMaritimeVessels(bbox, 1000).catch(() => null),
         ]);
 
         if (context) {
@@ -295,17 +421,13 @@ export default function App() {
             setObservations(context.observations);
           }
         }
-        if (acStates && acStates.length > 0) {
+        if (acStates) {
           setAircraft(acStates);
+          setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', acStates.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
         }
-        if (vesStates && vesStates.length > 0) {
-          setVessels((prev) => {
-            const map = new Map(prev.map((v) => [v.entity_id, v]));
-            for (const v of vesStates) {
-              map.set(v.entity_id, v);
-            }
-            return Array.from(map.values());
-          });
+        if (vesStates) {
+          setVessels(vesStates);
+          setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesStates.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {
@@ -376,6 +498,7 @@ export default function App() {
             basemapMode={basemapMode}
             geometries={geometries}
             events={events}
+            naturalEvents={naturalEvents}
             observations={observations}
             alerts={alerts}
             aircraft={aircraft}
@@ -397,6 +520,7 @@ export default function App() {
             basemapMode={basemapMode}
             geometries={geometries}
             events={events}
+            naturalEvents={naturalEvents}
             observations={observations}
             alerts={alerts}
             aircraft={aircraft}
@@ -415,9 +539,29 @@ export default function App() {
         )}
       </main>
 
+      {viewportZoom >= 14.5 && streetViewCenter && (
+        <section className="street-view-panel" aria-label="Community street-level imagery">
+          <header className="street-view-panel-header">
+            <div>
+              <strong>STREET LEVEL</strong>
+              <span>Community photo coverage · Panoramax</span>
+            </div>
+          </header>
+          <iframe
+            title="Panoramax street-level photo map"
+            src={`https://explore.panoramax.fr/?map=17/${streetViewCenter[1]}/${streetViewCenter[0]}&focus=map`}
+            loading="lazy"
+            allowFullScreen
+          />
+          <p>Zoom out to return to globe view. Street photos appear only where contributors have mapped them.</p>
+        </section>
+      )}
+
       {/* Floating Tactical Layer Dock */}
       <LayerDock
         layers={layers}
+        liveContext={liveContext}
+        contextError={liveContextError}
         onToggleLayer={handleToggleLayer}
         isCollapsed={isDockCollapsed}
         onToggleCollapse={() => setIsDockCollapsed((prev) => !prev)}

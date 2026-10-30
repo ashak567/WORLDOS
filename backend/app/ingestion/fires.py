@@ -174,7 +174,9 @@ def fetch_live_firms_anomalies(map_key: str, max_records: int = 100) -> list[The
                 acq_date = row.get("acq_date", datetime.now(UTC).strftime("%Y-%m-%d"))
                 acq_time = str(row.get("acq_time", "0000")).zfill(4)
                 det_dt = datetime.strptime(f"{acq_date} {acq_time}", "%Y-%m-%d %H%M").replace(tzinfo=UTC)
-                fire_id = f"FIRMS-VIIRS-{idx+1:04d}-{acq_date}"
+                satellite = row.get("satellite", "NOAA-20")
+                fire_key = f"{satellite}:{acq_date}:{acq_time}:{lat:.4f}:{lon:.4f}"
+                fire_id = f"FIRMS-{hashlib.sha256(fire_key.encode('utf-8')).hexdigest()[:16]}"
                 records.append(
                     ThermalAnomalyRecord(
                         fire_id=fire_id,
@@ -184,11 +186,11 @@ def fetch_live_firms_anomalies(map_key: str, max_records: int = 100) -> list[The
                         brightness_kelvin=bright,
                         frp_mw=frp,
                         confidence_level=conf,
-                        satellite=row.get("satellite", "NOAA-20"),
+                        satellite=satellite,
                         instrument=row.get("instrument", "VIIRS"),
                         daynight=row.get("daynight", "D"),
                         detected_at=det_dt,
-                        source_locator=f"https://firms.modaps.eosdis.nasa.gov/api/active_fire/{fire_id}",
+                        source_locator="https://firms.modaps.eosdis.nasa.gov/active_fire/",
                     )
                 )
             except Exception:

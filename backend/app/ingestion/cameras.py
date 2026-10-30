@@ -543,15 +543,14 @@ def load_authoritative_cameras(now: datetime | None = None) -> list[CameraRecord
 
 def camera_to_world_bundle(record: CameraRecord, retrieved_at: datetime) -> WorldBundle:
     """Normalize camera infrastructure into a canonical WorldBundle."""
-    source_id = stable_id("source", "open-camera-network")
+    source_id = stable_id("source", "worldos-curated-camera-directory")
     source = Source(
         id=source_id,
-        slug="open-camera-network",
-        name="Open Public DOT and Sensor Camera Feeds",
-        publisher="Regional Transport Authorities & Geological Surveys",
-        license="Public Domain / Open Data Transportation Portal",
-        homepage="https://511ny.org/",
-        refresh_policy="Public endpoint inspection with explicit attribution",
+        slug="worldos-curated-camera-directory",
+        name="WORLDOS Curated Camera Examples",
+        publisher="WORLDOS project maintainers",
+        license="Per-source terms are unverified; confirm before reuse",
+        refresh_policy="Static examples; camera availability and location are not verified",
     )
 
     entity_id = stable_id("entity", "camera", record.camera_id)
@@ -572,7 +571,7 @@ def camera_to_world_bundle(record: CameraRecord, retrieved_at: datetime) -> Worl
             "view_direction": record.view_direction,
             "resolution": record.resolution,
         },
-        confidence=Confidence(value=1.0, method="dot_authority_asserted"),
+        confidence=Confidence(value=0.25, method="curated_unverified_example"),
     )
 
     identifiers = [
@@ -581,7 +580,7 @@ def camera_to_world_bundle(record: CameraRecord, retrieved_at: datetime) -> Worl
             source_key=record.camera_id,
             scheme="camera_registry",
             value=record.camera_id,
-            confidence=Confidence(value=1.0, method="agency_verified"),
+            confidence=Confidence(value=0.25, method="curated_unverified_example"),
         )
     ]
 
@@ -633,7 +632,7 @@ def camera_to_world_bundle(record: CameraRecord, retrieved_at: datetime) -> Worl
         source_id=source_id,
         evidence_id=evidence_id,
         valid_during=interval,
-        confidence=Confidence(value=1.0, method="survey_coordinates"),
+        confidence=Confidence(value=0.25, method="curated_unverified_example"),
     )
 
     observation = Observation(

@@ -297,7 +297,7 @@ def load_authoritative_infrastructure(now: datetime | None = None) -> list[Infra
                 primary_code=item["primary_code"],
                 secondary_code=item["secondary_code"],
                 capabilities=item["capabilities"],
-                source_locator=f"https://worldos.intelligence/infrastructure/{item['node_id']}",
+                source_locator=f"curated://worldos/infrastructure/{item['node_id']}",
             )
         )
     return records
@@ -305,15 +305,14 @@ def load_authoritative_infrastructure(now: datetime | None = None) -> list[Infra
 
 def infrastructure_to_world_bundle(record: InfrastructureRecord, retrieved_at: datetime) -> WorldBundle:
     """Normalize critical infrastructure into a canonical WorldBundle."""
-    source_id = stable_id("source", "global-infrastructure-registry")
+    source_id = stable_id("source", "worldos-curated-infrastructure-directory")
     source = Source(
         id=source_id,
-        slug="global-infrastructure-registry",
-        name="Global Strategic Infrastructure Registry",
-        publisher="ICAO / IMO / UN-LOCODE / Global Space Agencies",
-        license="Open Geopolitical & Transport Registry",
-        homepage="https://icao.int/",
-        refresh_policy="Authoritative facility registry synchronization",
+        slug="worldos-curated-infrastructure-directory",
+        name="WORLDOS Curated Infrastructure Examples",
+        publisher="WORLDOS project maintainers",
+        license="Per-source terms are unverified; confirm before reuse",
+        refresh_policy="Static examples; facility details are not verified",
     )
 
     entity_id = stable_id("entity", "infrastructure", record.node_id)
@@ -334,7 +333,7 @@ def infrastructure_to_world_bundle(record: InfrastructureRecord, retrieved_at: d
             "secondary_code": record.secondary_code,
             "capabilities": record.capabilities,
         },
-        confidence=Confidence(value=1.0, method="official_registry_entry"),
+        confidence=Confidence(value=0.25, method="curated_unverified_example"),
     )
 
     identifiers = [
@@ -343,7 +342,7 @@ def infrastructure_to_world_bundle(record: InfrastructureRecord, retrieved_at: d
             source_key=record.node_id,
             scheme="facility_code",
             value=record.primary_code,
-            confidence=Confidence(value=1.0, method="icao_imo_verified"),
+            confidence=Confidence(value=0.25, method="curated_unverified_example"),
         )
     ]
 
@@ -394,7 +393,7 @@ def infrastructure_to_world_bundle(record: InfrastructureRecord, retrieved_at: d
         source_id=source_id,
         evidence_id=evidence_id,
         valid_during=interval,
-        confidence=Confidence(value=1.0, method="geodetic_survey"),
+        confidence=Confidence(value=0.25, method="curated_unverified_example"),
     )
 
     observation = Observation(

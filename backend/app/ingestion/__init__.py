@@ -2,17 +2,32 @@
 from .cameras import camera_to_world_bundle, load_authoritative_cameras
 from .fires import load_authoritative_thermal_anomalies, thermal_anomaly_to_world_bundle
 from .infrastructure import infrastructure_to_world_bundle, load_authoritative_infrastructure
+from .live_hazards import LiveHazardFeedError, fetch_gdacs_alerts, fetch_open_natural_events, fetch_recent_earthquakes
+from .live_context import LiveContextFeedError, fetch_global_climate, fetch_global_news
 from .maritime import fetch_maritime_vessels, load_sample_vessels, maritime_vessel_bundle
 from .natural_earth import fetch_country_boundary, parse_country_boundary
 from .opensky import fetch_aircraft_states
-from .satellites import load_authoritative_satellites, satellite_to_world_bundle
+from .satellites import (
+    SatelliteFeedError,
+    fetch_current_satellites,
+    fetch_satellite_ground_track,
+    load_authoritative_satellites,
+    satellite_to_api_state,
+    satellite_to_world_bundle,
+)
 from .usgs import EarthquakeRecord, fetch_earthquake
 from .world_bank import fetch_country_point, fetch_population
 
 __all__ = [
     "EarthquakeRecord",
+    "SatelliteFeedError",
     "camera_to_world_bundle",
     "fetch_aircraft_states",
+    "fetch_current_satellites",
+    "fetch_satellite_ground_track",
+    "fetch_gdacs_alerts",
+    "fetch_open_natural_events",
+    "fetch_recent_earthquakes",
     "fetch_country_boundary",
     "fetch_country_point",
     "fetch_earthquake",
@@ -24,8 +39,13 @@ __all__ = [
     "load_authoritative_satellites",
     "load_authoritative_thermal_anomalies",
     "load_sample_vessels",
+    "LiveHazardFeedError",
+    "LiveContextFeedError",
+    "fetch_global_climate",
+    "fetch_global_news",
     "maritime_vessel_bundle",
     "parse_country_boundary",
     "satellite_to_world_bundle",
+    "satellite_to_api_state",
     "thermal_anomaly_to_world_bundle",
 ]

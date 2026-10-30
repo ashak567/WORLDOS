@@ -4,6 +4,7 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import math
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -116,7 +117,7 @@ class AircraftStateRecord:
     longitude: float
     latitude: float
     baro_altitude: float | None
-    on_ground: bool
+    on_ground: bool | None
     velocity: float | None
     true_track: float | None
     vertical_rate: float | None
@@ -170,7 +171,7 @@ def parse_state_vector(raw: list[Any], locator: str, payload_hash: str) -> Aircr
     except (ValueError, TypeError):
         return None
 
-    if not (-180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
+    if not (math.isfinite(lon) and math.isfinite(lat) and -180.0 <= lon <= 180.0 and -90.0 <= lat <= 90.0):
         return None
 
     time_pos_raw = raw[3]
@@ -187,15 +188,17 @@ def parse_state_vector(raw: list[Any], locator: str, payload_hash: str) -> Aircr
     except (ValueError, TypeError, OSError):
         last_contact = datetime.now(UTC)
 
-    baro_alt = float(raw[7]) if raw[7] is not None else None
-    on_ground = bool(raw[8]) if raw[8] is not None else False
-    velocity = float(raw[9]) if raw[9] is not None else None
-    true_track = float(raw[10]) if raw[10] is not None else None
-    vertical_rate = float(raw[11]) if raw[11] is not None else None
-    geo_alt = float(raw[13]) if raw[13] is not None else None
-    squawk = str(raw[14]).strip() if raw[14] is not None else None
-    position_source = int(raw[16]) if raw[16] is not None else 0
-    category = int(raw[17]) if len(raw) > 17 and raw[17] is not None else None
+    try:
+        numeric = [float(raw[i]) if raw[i] is not None else None for i in (7, 9, 10, 11, 13)]
+        baro_alt, velocity, true_track, vertical_rate, geo_alt = [
+            value if value is None or math.isfinite(value) else None for value in numeric
+        ]
+        on_ground = bool(raw[8]) if raw[8] is not None else None
+        squawk = str(raw[14]).strip() if raw[14] is not None else None
+        position_source = int(raw[16]) if raw[16] is not None else 0
+        category = int(raw[17]) if len(raw) > 17 and raw[17] is not None else None
+    except (ValueError, TypeError, OverflowError):
+        return None
 
     return AircraftStateRecord(
         icao24=icao24,

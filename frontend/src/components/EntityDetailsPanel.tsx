@@ -340,7 +340,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     quickStats = [
       {
         label: 'ALTITUDE',
-        value: typeof baroAlt === 'number' ? `${Math.round(baroAlt * 3.28084).toLocaleString()} ft` : 'Ground',
+        value: typeof baroAlt === 'number' ? `${Math.round(baroAlt * 3.28084).toLocaleString()} ft` : attr.on_ground === true ? 'Ground' : 'N/A',
         color: '#38bdf8',
       },
       {
@@ -355,7 +355,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
       },
       {
         label: 'STATUS',
-        value: attr.on_ground ? 'On Ground' : 'Airborne',
+        value: attr.on_ground === true ? 'On Ground' : attr.on_ground === false ? 'Airborne' : 'Unknown',
         color: attr.on_ground ? '#94a3b8' : '#10b981',
       },
     ];
@@ -374,22 +374,22 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   } else if (type === 'vessel') {
     const attr = data.attributes || {};
     title = data.canonical_name || attr.name || `Vessel MMSI ${attr.mmsi || 'Unknown'}`;
-    categoryTag = `MARITIME · ${attr.ship_type || 'CARGO/TANKER'} (AIS)`;
+    categoryTag = `MARITIME · ${attr.ship_type || 'UNKNOWN'} (AIS)`;
     truthClass = (data.truth_class as TruthClass) || 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
     sourceName = data.source_name || data.source_slug || 'Global Maritime AIS Protocol (aisstream.io)';
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
-    const sog = attr.sog_knots ?? 0;
-    const cog = attr.cog_degrees ?? 0;
+    const sog = attr.sog_knots;
+    const cog = attr.cog_degrees;
     const hdg = attr.heading_degrees ?? cog;
-    const navStatus = attr.nav_status || 'Under way';
+    const navStatus = attr.nav_status || 'Unknown';
 
     quickStats = [
-      { label: 'SPEED', value: `${Number(sog).toFixed(1)} kts`, color: '#06b6d4' },
-      { label: 'HEADING', value: `${Math.round(hdg)}°`, color: '#38bdf8' },
-      { label: 'COURSE', value: `${Math.round(cog)}°`, color: '#a855f7' },
+      { label: 'SPEED', value: typeof sog === 'number' ? `${sog.toFixed(1)} kts` : 'N/A', color: '#06b6d4' },
+      { label: 'HEADING', value: typeof hdg === 'number' ? `${Math.round(hdg)}°` : 'N/A', color: '#38bdf8' },
+      { label: 'COURSE', value: typeof cog === 'number' ? `${Math.round(cog)}°` : 'N/A', color: '#a855f7' },
       { label: 'NAV STATUS', value: String(navStatus), color: '#10b981' },
     ];
 
@@ -399,11 +399,11 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
       'IMO Number': attr.imo || undefined,
       'Callsign': attr.callsign || undefined,
       'Flag State': attr.flag && attr.flag !== 'International' ? attr.flag : undefined,
-      'Vessel Category': attr.ship_type || 'Cargo/Tanker',
+      'Vessel Category': attr.ship_type || 'Unknown',
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
-      'Speed Over Ground': `${Number(sog).toFixed(1)} knots`,
-      'Heading': `${Math.round(hdg)}°`,
-      'Course Over Ground': `${Math.round(cog)}°`,
+      'Speed Over Ground': typeof sog === 'number' ? `${sog.toFixed(1)} knots` : undefined,
+      'Heading': typeof hdg === 'number' ? `${Math.round(hdg)}°` : undefined,
+      'Course Over Ground': typeof cog === 'number' ? `${Math.round(cog)}°` : undefined,
       'Destination Port': attr.destination && attr.destination !== 'En Route' ? attr.destination : undefined,
       'Navigation Status': navStatus,
     };
@@ -417,15 +417,11 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
-    const alt = attr.altitude_km ?? 420;
-    const vel = attr.velocity_kms ?? 7.6;
-    const inc = attr.inclination_deg ?? 51.6;
-
     quickStats = [
-      { label: 'ALTITUDE', value: `${Number(alt).toFixed(0)} km`, color: '#c084fc' },
-      { label: 'VELOCITY', value: `${Number(vel).toFixed(2)} km/s`, color: '#38bdf8' },
-      { label: 'INCLINATION', value: `${Number(inc).toFixed(1)}°`, color: '#eab308' },
-      { label: 'ORBIT PERIOD', value: attr.period_min ? `${attr.period_min}m` : '92m', color: '#10b981' },
+      { label: 'ALTITUDE', value: Number.isFinite(attr.altitude_km) ? `${attr.altitude_km.toFixed(0)} km` : 'N/A', color: '#c084fc' },
+      { label: 'VELOCITY', value: Number.isFinite(attr.velocity_kms) ? `${attr.velocity_kms.toFixed(2)} km/s` : 'N/A', color: '#38bdf8' },
+      { label: 'INCLINATION', value: Number.isFinite(attr.inclination_deg) ? `${attr.inclination_deg.toFixed(1)}°` : 'N/A', color: '#eab308' },
+      { label: 'ORBIT PERIOD', value: Number.isFinite(attr.period_min) ? `${attr.period_min}m` : 'N/A', color: '#10b981' },
     ];
 
     properties = {
@@ -435,11 +431,15 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
       'Operating Agency': attr.operator || undefined,
       'Launch Date': attr.launch_date || undefined,
       'Sub-Satellite Position': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
-      'Orbital Altitude': `${attr.altitude_km?.toFixed(1)} km`,
-      'Orbital Velocity': `${attr.velocity_kms?.toFixed(2)} km/s`,
+      'Orbital Altitude': Number.isFinite(attr.altitude_km) ? `${attr.altitude_km.toFixed(1)} km` : undefined,
+      'Orbital Velocity': Number.isFinite(attr.velocity_kms) ? `${attr.velocity_kms.toFixed(2)} km/s` : undefined,
       'Apogee / Perigee': attr.apogee_km && attr.perigee_km ? `${attr.apogee_km} km / ${attr.perigee_km} km` : undefined,
-      'Orbital Inclination': `${attr.inclination_deg}°`,
-      'Ephemeris Method': 'Keplerian SGP4 Orbital Propagation',
+      'Orbital Inclination': Number.isFinite(attr.inclination_deg) ? `${attr.inclination_deg}°` : undefined,
+      'Orbital Elements Epoch': attr.elements_epoch || undefined,
+      'Elements Retrieved': attr.elements_retrieved_at || undefined,
+      'Elements Age': Number.isFinite(attr.elements_age_hours) ? `${attr.elements_age_hours.toFixed(1)} hours` : undefined,
+      'Feed Status': attr.element_set_status || undefined,
+      'Ephemeris Method': attr.calculation_method || undefined,
     };
   } else if (type === 'camera') {
     const attr = data.attributes || {};
@@ -544,15 +544,33 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     locator = data.evidence_locator;
     contentHash = data.evidence_content_hash;
 
-    quickStats = [
-      { label: 'MAGNITUDE', value: data.magnitude ? `M${data.magnitude}` : 'N/A', color: '#ef4444' },
-      { label: 'DEPTH', value: data.properties?.depth ? `${data.properties.depth} km` : '10 km', color: '#eab308' },
-    ];
+    const isNaturalHazard = data.event_type === 'natural_hazard';
+    quickStats = isNaturalHazard
+      ? [
+          { label: 'ALERT LEVEL', value: data.attributes?.alert_level || 'EVENT', color: data.attributes?.alert_level?.toLowerCase() === 'red' ? '#ef4444' : '#f59e0b' },
+          { label: 'SEVERITY', value: data.attributes?.severity != null ? `${data.attributes.severity} ${data.attributes.severity_unit || ''}`.trim() : 'N/A', color: '#38bdf8' },
+        ]
+      : [
+          { label: 'MAGNITUDE', value: Number.isFinite(data.magnitude) ? `M${data.magnitude}` : 'N/A', color: '#ef4444' },
+          { label: 'DEPTH', value: Number.isFinite(data.attributes?.depth_km) ? `${data.attributes.depth_km} km` : 'N/A', color: '#eab308' },
+          { label: 'USGS TSUNAMI FLAG', value: data.attributes?.tsunami === true ? 'FLAGGED' : data.attributes?.tsunami === false ? 'NO FLAG' : 'N/A', color: '#22d3ee' },
+        ];
 
     properties = {
-      'Event ID': data.id || data.event_id || undefined,
-      'Magnitude': data.magnitude !== undefined ? `M ${data.magnitude}` : undefined,
-      'Depth': data.properties?.depth ? `${data.properties.depth} km` : undefined,
+      'Event ID': data.event_id || data.id || undefined,
+      'Magnitude': Number.isFinite(data.magnitude) ? `M ${data.magnitude}` : undefined,
+      'Depth': Number.isFinite(data.attributes?.depth_km) ? `${data.attributes.depth_km} km` : undefined,
+      'USGS Tsunami Flag': data.attributes?.tsunami === true ? 'Flag set by USGS' : undefined,
+      'GDACS Tsunami Alert': data.attributes?.tsunami_alert === true ? 'GDACS tsunami alert' : undefined,
+      'Alert Level': data.attributes?.alert_level || undefined,
+      'Alert Score': data.attributes?.alert_score ?? undefined,
+      'Severity': data.attributes?.severity != null ? `${data.attributes.severity} ${data.attributes.severity_unit || ''}`.trim() : undefined,
+      'Country': data.attributes?.country || undefined,
+      'Feed Data Status': data.attributes?.feed_status || undefined,
+      'Feed Retrieved': data.attributes?.feed_retrieved_at || undefined,
+      'Event Type': data.attributes?.gdacs_event_type || data.category || data.event_type || data.kind || undefined,
+      'Categories': Array.isArray(data.attributes?.categories) ? data.attributes.categories.join(', ') : undefined,
+      'Description': data.attributes?.description || undefined,
       'Coordinates': data.point ? `[${data.point[1].toFixed(4)}°, ${data.point[0].toFixed(4)}°]` : undefined,
     };
   } else if (type === 'observation') {

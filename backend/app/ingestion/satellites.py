@@ -1,14 +1,20 @@
-"""Space and orbital object ingestion adapter with Keplerian propagation and ground tracks."""
+"""CelesTrak orbital-element ingestion and satellite position propagation."""
 from __future__ import annotations
 
 import hashlib
 import json
 import logging
 import math
-from dataclasses import dataclass
-from datetime import UTC, datetime
+import threading
+from dataclasses import dataclass, field
+from datetime import UTC, datetime, timedelta
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 from uuid import UUID, uuid5
+
+from sgp4 import omm
+from sgp4.api import Satrec, jday
 
 from ..domain import (
     Confidence,
@@ -26,6 +32,15 @@ from ..domain import (
 logger = logging.getLogger(__name__)
 
 NAMESPACE_WORLDOS = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
+CELESTRAK_ACTIVE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=ACTIVE&FORMAT=JSON"
+CELESTRAK_CACHE_SECONDS = 6 * 60 * 60
+CELESTRAK_MAX_RESPONSE_BYTES = 25_000_000
+WGS84_EQUATORIAL_RADIUS_KM = 6378.137
+WGS84_ECCENTRICITY_SQUARED = 6.69437999014e-3
+EARTH_MU_KM3_S2 = 398600.4418
+_catalog_lock = threading.Lock()
+_catalog_payload: list[dict[str, Any]] | None = None
+_catalog_retrieved_at: datetime | None = None
 
 
 def stable_id(kind: str, *parts: str) -> UUID:
@@ -53,6 +68,10 @@ class SatelliteRecord:
     ground_track: list[list[float]]  # Array of [lon, lat] along current orbit
     epoch: datetime
     calculation_method: str = "kepler_sgp4_orbit_propagation"
+    elements_epoch: datetime | None = None
+    elements_retrieved_at: datetime | None = None
+    feed_status: str = "sample"
+    raw_payload: dict[str, Any] = field(default_factory=dict)
 
 
 def generate_orbital_ground_track(
@@ -304,18 +323,17 @@ def load_authoritative_satellites(now: datetime | None = None) -> list[Satellite
 def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -> WorldBundle:
     """Normalize a satellite record into a canonical WorldBundle.
     
-    CRITICAL: Positions and ground tracks are classified as DERIVED,
-    derived via Keplerian orbit equations from CelesTrak TLE elements.
+    Positions are DERIVED from the provider's General Perturbations elements.
     """
-    source_id = stable_id("source", "celestrak-orbital")
+    source_id = stable_id("source", "celestrak-active")
     source = Source(
         id=source_id,
-        slug="celestrak-orbital",
-        name="CelesTrak Orbital Ephemeris",
-        publisher="CelesTrak / Dr. T.S. Kelso",
-        license="Public Domain / Open Orbital Data",
+        slug="celestrak-active",
+        name="CelesTrak Active GP Elements",
+        publisher="CelesTrak",
+        license=None,
         homepage="https://celestrak.org/",
-        refresh_policy="Keplerian orbit propagation with published two-line elements",
+        refresh_policy="Six-hour cached OMM catalog; positions propagated at request time",
     )
 
     entity_id = stable_id("entity", "satellite", record.norad_id)
@@ -337,6 +355,8 @@ def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -
             "period_min": record.period_min,
             "eccentricity": record.eccentricity,
             "calculation_method": record.calculation_method,
+            "elements_epoch": record.elements_epoch.isoformat() if record.elements_epoch else None,
+            "elements_retrieved_at": record.elements_retrieved_at.isoformat() if record.elements_retrieved_at else None,
         },
         confidence=Confidence(value=1.0, method="tle_catalog_asserted"),
     )
@@ -382,13 +402,16 @@ def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -
         "epoch": time_str,
         "method": record.calculation_method,
     }
-    content_hash = hashlib.sha256(json.dumps(payload_dict, sort_keys=True).encode("utf-8")).hexdigest()
+    evidence_payload = record.raw_payload or payload_dict
+    content_hash = hashlib.sha256(
+        json.dumps(evidence_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
 
     evidence = Evidence(
         id=evidence_id,
         source_id=source_id,
-        locator=f"https://celestrak.org/NORAD/elements/gp.php?CATNR={record.norad_id}&FORMAT=TLE",
-        retrieved_at=retrieved_at,
+        locator=f"{CELESTRAK_ACTIVE_URL}#NORAD_CAT_ID={record.norad_id}",
+        retrieved_at=record.elements_retrieved_at or retrieved_at,
         content_hash=content_hash,
     )
 
@@ -399,7 +422,7 @@ def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -
         transformation={
             "measure": "orbital.ephemeris_state",
             "method": record.calculation_method,
-            "inputs": ["NORAD TLE", "epoch"],
+            "inputs": ["CelesTrak OMM element record", "propagation timestamp"],
             "truth_class": "DERIVED",
         },
     )
@@ -443,6 +466,9 @@ def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -
             "derivation_class": "DERIVED",
             "operator": record.operator,
             "category": record.category,
+            "elements_epoch": record.elements_epoch.isoformat() if record.elements_epoch else None,
+            "elements_retrieved_at": record.elements_retrieved_at.isoformat() if record.elements_retrieved_at else None,
+            "element_set_status": record.feed_status,
         },
     )
 
@@ -456,3 +482,238 @@ def satellite_to_world_bundle(record: SatelliteRecord, retrieved_at: datetime) -
         geometry=geometry,
         observation=observation,
     )
+
+
+class SatelliteFeedError(RuntimeError):
+    """Raised when CelesTrak cannot provide a catalog and no cached copy exists."""
+
+
+def _julian_date(value: datetime) -> tuple[float, float]:
+    value = value.astimezone(UTC)
+    second = value.second + value.microsecond / 1_000_000
+    return jday(value.year, value.month, value.day, value.hour, value.minute, second)
+
+
+def _teme_to_geodetic(position_km: tuple[float, float, float], julian_date: float) -> tuple[float, float, float]:
+    """Convert an SGP4 TEME position to WGS-84 longitude, latitude, and altitude."""
+    t = (julian_date - 2451545.0) / 36525.0
+    sidereal_seconds = (
+        67310.54841
+        + (876600.0 * 3600 + 8640184.812866) * t
+        + 0.093104 * t * t
+        - 6.2e-6 * t * t * t
+    )
+    theta = math.radians((sidereal_seconds / 240.0) % 360.0)
+    x_teme, y_teme, z = position_km
+    x = math.cos(theta) * x_teme + math.sin(theta) * y_teme
+    y = -math.sin(theta) * x_teme + math.cos(theta) * y_teme
+    longitude = math.atan2(y, x)
+    p = math.hypot(x, y)
+    latitude = math.atan2(z, p * (1.0 - WGS84_ECCENTRICITY_SQUARED))
+
+    for _ in range(5):
+        sin_lat = math.sin(latitude)
+        normal_radius = WGS84_EQUATORIAL_RADIUS_KM / math.sqrt(
+            1.0 - WGS84_ECCENTRICITY_SQUARED * sin_lat * sin_lat
+        )
+        altitude = p / max(math.cos(latitude), 1e-12) - normal_radius
+        latitude = math.atan2(
+            z,
+            p * (1.0 - WGS84_ECCENTRICITY_SQUARED * normal_radius / (normal_radius + altitude)),
+        )
+
+    sin_lat = math.sin(latitude)
+    normal_radius = WGS84_EQUATORIAL_RADIUS_KM / math.sqrt(
+        1.0 - WGS84_ECCENTRICITY_SQUARED * sin_lat * sin_lat
+    )
+    altitude = p / max(math.cos(latitude), 1e-12) - normal_radius
+    return math.degrees(longitude), math.degrees(latitude), altitude
+
+
+def _get_active_catalog(now: datetime) -> tuple[list[dict[str, Any]], datetime, str]:
+    """Fetch CelesTrak OMM JSON at most once per six hours; retain cache on outages."""
+    global _catalog_payload, _catalog_retrieved_at
+    with _catalog_lock:
+        if (
+            _catalog_payload is not None
+            and _catalog_retrieved_at is not None
+            and (now - _catalog_retrieved_at).total_seconds() < CELESTRAK_CACHE_SECONDS
+        ):
+            return _catalog_payload, _catalog_retrieved_at, "fresh"
+
+        request = Request(
+            CELESTRAK_ACTIVE_URL,
+            headers={"Accept": "application/json", "User-Agent": "WORLDOS/0.1 satellite catalog"},
+        )
+        try:
+            with urlopen(request, timeout=30) as response:  # nosec B310: fixed HTTPS provider URL
+                raw = response.read(CELESTRAK_MAX_RESPONSE_BYTES + 1)
+            if len(raw) > CELESTRAK_MAX_RESPONSE_BYTES:
+                raise SatelliteFeedError("CelesTrak active catalog exceeded the 25 MB response limit")
+            payload = json.loads(raw.decode("utf-8"))
+            if not isinstance(payload, list):
+                raise SatelliteFeedError("CelesTrak returned an unexpected catalog format")
+            _catalog_payload = [row for row in payload if isinstance(row, dict)]
+            _catalog_retrieved_at = now
+            return _catalog_payload, now, "fresh"
+        except (URLError, TimeoutError, json.JSONDecodeError, SatelliteFeedError) as exc:
+            if _catalog_payload is not None and _catalog_retrieved_at is not None:
+                logger.warning("CelesTrak unavailable; serving cached orbital elements: %s", exc)
+                return _catalog_payload, _catalog_retrieved_at, "stale"
+            raise SatelliteFeedError(f"CelesTrak active satellite feed is unavailable: {exc}") from exc
+
+
+def fetch_current_satellites(
+    now: datetime | None = None,
+    limit: int = 20_000,
+) -> list[SatelliteRecord]:
+    """Fetch the active CelesTrak catalog and propagate every supported OMM record."""
+    calculated_at = now or datetime.now(UTC)
+    payload, retrieved_at, feed_status = _get_active_catalog(calculated_at)
+    jd, fr = _julian_date(calculated_at)
+    result: list[SatelliteRecord] = []
+    failed = 0
+
+    for item in payload:
+        if len(result) >= limit:
+            break
+        try:
+            satrec = Satrec()
+            omm.initialize(satrec, item)
+            error, position_km, velocity_kms = satrec.sgp4(jd, fr)
+            if error:
+                failed += 1
+                continue
+
+            longitude, latitude, altitude_km = _teme_to_geodetic(position_km, jd + fr)
+            mean_motion = float(item["MEAN_MOTION"])
+            eccentricity = float(item["ECCENTRICITY"])
+            inclination = float(item["INCLINATION"])
+            if not (-180.0 <= longitude <= 180.0 and -90.0 <= latitude <= 90.0 and altitude_km > 0):
+                failed += 1
+                continue
+            period_min = 1440.0 / mean_motion
+            semi_major_km = (EARTH_MU_KM3_S2 / ((mean_motion * 2.0 * math.pi / 86400.0) ** 2)) ** (1.0 / 3.0)
+            perigee_km = semi_major_km * (1.0 - eccentricity) - WGS84_EQUATORIAL_RADIUS_KM
+            apogee_km = semi_major_km * (1.0 + eccentricity) - WGS84_EQUATORIAL_RADIUS_KM
+            element_epoch = datetime.fromisoformat(str(item["EPOCH"]).replace("Z", "+00:00"))
+            norad_id = str(item.get("NORAD_CAT_ID") or satrec.satnum_str)
+            result.append(
+                SatelliteRecord(
+                    norad_id=norad_id,
+                    name=str(item.get("OBJECT_NAME") or f"NORAD {norad_id}"),
+                    designator=str(item.get("OBJECT_ID") or "Unknown"),
+                    category=str(item.get("OBJECT_TYPE") or "Active satellite"),
+                    operator="",
+                    launch_date="",
+                    apogee_km=round(apogee_km, 1),
+                    perigee_km=round(perigee_km, 1),
+                    inclination_deg=inclination,
+                    period_min=period_min,
+                    eccentricity=eccentricity,
+                    current_lat=round(latitude, 5),
+                    current_lon=round(longitude, 5),
+                    current_alt_km=round(altitude_km, 2),
+                    current_velocity_kms=round(math.sqrt(sum(component * component for component in velocity_kms)), 4),
+                    ground_track=[],
+                    epoch=calculated_at,
+                    calculation_method="SGP4 (CelesTrak OMM)",
+                    elements_epoch=element_epoch,
+                    elements_retrieved_at=retrieved_at,
+                    feed_status=feed_status,
+                    raw_payload=item,
+                )
+            )
+        except (KeyError, TypeError, ValueError, ZeroDivisionError):
+            failed += 1
+
+    if not result:
+        raise SatelliteFeedError("CelesTrak returned no propagatable active satellite records")
+    logger.info("Propagated %d CelesTrak active satellites; skipped %d invalid records", len(result), failed)
+    return result
+
+
+def fetch_satellite_ground_track(
+    norad_id: str,
+    now: datetime | None = None,
+    points: int = 72,
+) -> list[list[float]]:
+    """Propagate one catalog object over its next orbit for a selectable map track."""
+    if not norad_id.isdecimal() or len(norad_id) > 8 or not 12 <= points <= 360:
+        raise SatelliteFeedError("Invalid NORAD catalog ID or ground-track point count")
+    calculated_at = now or datetime.now(UTC)
+    catalog, _, _ = _get_active_catalog(calculated_at)
+    item = next((row for row in catalog if str(row.get("NORAD_CAT_ID")) == norad_id), None)
+    if item is None:
+        raise SatelliteFeedError(f"NORAD catalog ID {norad_id} is not in the active catalog")
+    try:
+        satrec = Satrec()
+        omm.initialize(satrec, item)
+        mean_motion = float(item["MEAN_MOTION"])
+        if not math.isfinite(mean_motion) or mean_motion <= 0:
+            raise ValueError("invalid mean motion")
+        period_seconds = 86400.0 / mean_motion
+        track: list[list[float]] = []
+        for index in range(points + 1):
+            track_time = calculated_at + timedelta(seconds=period_seconds * index / points)
+            jd, fraction = _julian_date(track_time)
+            error, position_km, _ = satrec.sgp4(jd, fraction)
+            if error:
+                continue
+            longitude, latitude, altitude = _teme_to_geodetic(position_km, jd + fraction)
+            if math.isfinite(longitude) and math.isfinite(latitude) and altitude > 0:
+                track.append([round(longitude, 4), round(latitude, 4)])
+    except (KeyError, TypeError, ValueError, OverflowError) as exc:
+        raise SatelliteFeedError(f"Could not calculate NORAD {norad_id} ground track: {exc}") from exc
+    if len(track) < max(2, points // 2):
+        raise SatelliteFeedError(f"NORAD {norad_id} did not produce enough valid ground-track points")
+    return track
+
+
+def satellite_to_api_state(record: SatelliteRecord) -> dict[str, Any]:
+    """Build the live map row while keeping the orbital-element age explicit."""
+    payload_hash = hashlib.sha256(
+        json.dumps(record.raw_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+    ).hexdigest()
+    element_age_hours = max(0.0, (record.epoch - record.elements_epoch).total_seconds() / 3600.0)
+    locator = f"{CELESTRAK_ACTIVE_URL}#NORAD_CAT_ID={record.norad_id}"
+    entity_id = stable_id("entity", "satellite", record.norad_id)
+
+    return {
+        "observation_id": stable_id("live-orbit", record.norad_id, record.epoch.isoformat()),
+        "entity_id": entity_id,
+        "canonical_name": f"{record.name} (NORAD {record.norad_id})",
+        "measure": "orbital.ephemeris_state",
+        "value": record.current_alt_km,
+        "unit": "km",
+        "truth_class": "DERIVED",
+        "observed_at": record.epoch.isoformat(),
+        "longitude": record.current_lon,
+        "latitude": record.current_lat,
+        "evidence_locator": locator,
+        "evidence_content_hash": payload_hash,
+        "source_slug": "celestrak-active",
+        "source_name": "CelesTrak Active GP Elements",
+        "attributes": {
+            "norad_id": record.norad_id,
+            "designator": record.designator,
+            "category": record.category,
+            "operator": record.operator,
+            "launch_date": record.launch_date,
+            "altitude_km": record.current_alt_km,
+            "velocity_kms": record.current_velocity_kms,
+            "apogee_km": record.apogee_km,
+            "perigee_km": record.perigee_km,
+            "inclination_deg": record.inclination_deg,
+            "period_min": round(record.period_min, 2),
+            "eccentricity": record.eccentricity,
+            "calculation_method": record.calculation_method,
+            "derivation_class": "DERIVED",
+            "element_set_status": record.feed_status,
+            "elements_retrieved_at": record.elements_retrieved_at.isoformat(),
+            "elements_epoch": record.elements_epoch.isoformat(),
+            "elements_age_hours": round(element_age_hours, 2),
+            "position_calculated_at": record.epoch.isoformat(),
+            "ground_track": record.ground_track,
+        },
+    }

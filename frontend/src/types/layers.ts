@@ -8,6 +8,7 @@ export type LayerId =
   | 'space-satellites'
   | 'surveillance-cameras'
   | 'earthquake-events'
+  | 'natural-hazards'
   | 'thermal-fires'
   | 'critical-infrastructure'
   | 'anomalies'
@@ -38,6 +39,7 @@ export interface LayerDefinition {
   truthClass: TruthClass;
   loading: boolean;
   error?: string;
+  feedStatus?: 'fresh' | 'stale' | 'partial' | 'unavailable';
 }
 
 export const INITIAL_LAYERS: LayerDefinition[] = [
@@ -69,8 +71,8 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     id: 'aircraft-states',
     name: 'Aircraft (ADS-B)',
     category: 'aviation',
-    description: 'Live aircraft state vectors, callsigns, altitudes, velocities, headings, and transponder coordinates.',
-    source: 'OpenSky Network Association',
+    description: 'Stored OpenSky state-vector snapshots; age is shown and old coordinates are not extrapolated.',
+    source: 'OpenSky Network · authenticated ingestion snapshots',
     color: '#38bdf8', // Sky blue
     enabled: true,
     count: 0,
@@ -81,8 +83,8 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     id: 'maritime-vessels',
     name: 'Maritime Vessels (AIS)',
     category: 'maritime',
-    description: 'Class A transponder telemetry across international maritime trade corridors, choke points, and EEZs.',
-    source: 'Global AIS / UN-IMO Transponder Protocol',
+    description: 'Stored AIS positions; demo records are excluded. A free AISStream key is required for live vessel updates.',
+    source: 'AISStream · live key required',
     color: '#06b6d4', // Cyan
     enabled: true,
     count: 0,
@@ -93,8 +95,8 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     id: 'space-satellites',
     name: 'Satellites & Orbit Tracks',
     category: 'space',
-    description: 'Active orbital assets, Keplerian SGP4 propagation ephemeris, and 360° predicted ground tracks.',
-    source: 'CelesTrak / NORAD Ephemeris',
+    description: 'Active CelesTrak catalog positions propagated from current orbital elements; selected satellite ground track is computed on demand.',
+    source: 'CelesTrak Active GP Elements · SGP4',
     color: '#a855f7', // Purple
     enabled: true,
     count: 0,
@@ -103,23 +105,35 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
   },
   {
     id: 'surveillance-cameras',
-    name: 'DOT & Sensor Feeds',
+    name: 'Curated Camera Directory',
     category: 'surveillance',
-    description: 'Public transportation department CCTV cameras and geological observatory optical nodes.',
-    source: 'Caltrans / NYSDOT 511 / TfL / USGS',
+    description: 'Static camera links and approximate locations; online status and worldwide coverage are not verified.',
+    source: 'Curated examples · check each operator',
     color: '#10b981', // Emerald green
-    enabled: true,
+    enabled: false,
     count: 0,
-    truthClass: 'OBSERVED',
+    truthClass: 'SIMULATED',
     loading: false,
   },
   {
     id: 'earthquake-events',
     name: 'Seismic Events (USGS)',
     category: 'disasters',
-    description: 'Real-time seismic activity, epicenter coordinates, depths, and magnitude observations.',
-    source: 'USGS Earthquake Hazards API',
+    description: 'USGS magnitude 2.5+ earthquake events from the past 24 hours, including the publisher tsunami flag where present.',
+    source: 'USGS Real-Time GeoJSON Feed',
     color: '#f97316', // Orange
+    enabled: true,
+    count: 0,
+    truthClass: 'OBSERVED',
+    loading: false,
+  },
+  {
+    id: 'natural-hazards',
+    name: 'Global Hazards & Alerts',
+    category: 'disasters',
+    description: 'NASA EONET point events and track endpoints plus GDACS alerts, including cyclones, tsunami alerts, volcanoes, floods, and wildfires.',
+    source: 'NASA EONET · GDACS',
+    color: '#fb7185',
     enabled: true,
     count: 0,
     truthClass: 'OBSERVED',
@@ -129,8 +143,8 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     id: 'thermal-fires',
     name: 'Active Fires (NASA FIRMS)',
     category: 'disasters',
-    description: 'Near-real-time satellite thermal anomaly detections, Fire Radiative Power (MW), and brightness.',
-    source: 'NASA FIRMS (VIIRS / MODIS)',
+    description: 'NASA FIRMS satellite thermal anomalies with Fire Radiative Power and brightness; requires a free FIRMS map key. Keyless wildfire events are in Global Hazards & Alerts.',
+    source: 'NASA FIRMS (VIIRS / MODIS) · key required',
     color: '#ef4444', // Red
     enabled: true,
     count: 0,
@@ -139,22 +153,22 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
   },
   {
     id: 'critical-infrastructure',
-    name: 'Strategic Infrastructure',
+    name: 'Curated Infrastructure Examples',
     category: 'infrastructure',
-    description: 'International hub airports, deep-water container ports, and global orbital spaceports.',
-    source: 'ICAO / IMO / Space Agency Registries',
+    description: 'Small hand-curated list of airports, ports, and launch sites; not a live or complete registry.',
+    source: 'WORLDOS sample directory · verify facility details',
     color: '#eab308', // Yellow
-    enabled: true,
+    enabled: false,
     count: 0,
-    truthClass: 'OBSERVED',
+    truthClass: 'SIMULATED',
     loading: false,
   },
   {
     id: 'anomalies',
-    name: 'Cross-Domain Anomalies',
+    name: 'Flagged Observations',
     category: 'intelligence',
-    description: 'Statistical deviations and cross-domain anomalies computed across observation series.',
-    source: 'Engine 8 / Anomaly Detection Bus',
+    description: 'Stored observations carrying an anomaly flag; detection runs and findings are not automatically included.',
+    source: 'Stored observation flags',
     color: '#facc15', // Gold
     enabled: true,
     count: 0,
@@ -163,10 +177,10 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
   },
   {
     id: 'system-alerts',
-    name: 'Tactical Alerts',
+    name: 'Stored Rule Alerts',
     category: 'intelligence',
-    description: 'High-severity system warnings, threshold breaches, and intelligence flags.',
-    source: 'WORLDOS Alert Dispatcher',
+    description: 'Previously stored alert-engine results; these are not a live global warning feed.',
+    source: 'WORLDOS alert rules · stored results',
     color: '#f43f5e', // Rose
     enabled: true,
     count: 0,

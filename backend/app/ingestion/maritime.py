@@ -43,17 +43,18 @@ class VesselRecord:
     latitude: float
     longitude: float
     sog_knots: float  # Speed over ground
-    cog_degrees: float  # Course over ground
-    heading_degrees: float
+    cog_degrees: float | None  # Course over ground; unavailable AIS codes remain null
+    heading_degrees: float | None
     draft_meters: float | None
     destination: str
     eta: str | None
     nav_status: str
     observed_at: datetime
     source_locator: str
+    truth_class: str = "OBSERVED"
 
 
-# Authoritative sample records across primary global commercial shipping corridors
+# Static demonstration records. These are not vessel observations.
 SAMPLE_GLOBAL_VESSELS: list[dict[str, Any]] = [
     # Malacca & Singapore Straits Choke Point
     {
@@ -245,26 +246,36 @@ async def _collect_live_aisstream(api_key: str, max_vessels: int = 35, timeout_s
                     name = raw_name if raw_name else f"Vessel {mmsi}"
                     if mmsi and lat is not None and lon is not None:
                         pos_report = data.get("Message", {}).get("PositionReport", {})
-                        sog = float(pos_report.get("Sog", 12.0) or 12.0)
-                        cog = float(pos_report.get("Cog", 0.0) or 0.0)
-                        heading = float(pos_report.get("TrueHeading", cog) or cog)
+                        raw_sog = pos_report.get("Sog")
+                        sog = float(raw_sog) if raw_sog is not None else None
+                        if pos_report.get("Valid") is False or sog is None or not 0 <= sog < 102.2:
+                            continue
+                        raw_cog = pos_report.get("Cog")
+                        cog_value = float(raw_cog) if raw_cog is not None else None
+                        cog = cog_value if cog_value is not None and 0 <= cog_value < 360 else None
+                        raw_heading = pos_report.get("TrueHeading")
+                        heading_value = float(raw_heading) if raw_heading is not None else None
+                        heading = heading_value if heading_value is not None and 0 <= heading_value < 360 else None
+                        latitude, longitude = float(lat), float(lon)
+                        if not (-90 <= latitude <= 90 and -180 <= longitude <= 180):
+                            continue
                         locator = f"ais://aisstream.io/vessel/{mmsi}@{now.strftime('%Y%m%dT%H%M%SZ')}"
                         vessels[mmsi] = VesselRecord(
                             mmsi=mmsi,
                             imo=None,
                             name=name,
                             callsign=None,
-                            flag="International",
-                            ship_type="Cargo/Tanker",
-                            latitude=float(lat),
-                            longitude=float(lon),
+                            flag="Unknown",
+                            ship_type="Unknown",
+                            latitude=latitude,
+                            longitude=longitude,
                             sog_knots=sog,
                             cog_degrees=cog,
                             heading_degrees=heading,
                             draft_meters=None,
-                            destination="En Route",
+                            destination="Unknown",
                             eta=None,
-                            nav_status="Under way",
+                            nav_status="Unknown",
                             observed_at=now,
                             source_locator=locator,
                         )
@@ -276,7 +287,7 @@ async def _collect_live_aisstream(api_key: str, max_vessels: int = 35, timeout_s
 
 
 def fetch_maritime_vessels() -> list[VesselRecord]:
-    """Retrieve verified maritime AIS vessel state vectors (live from AISStream if configured, else authoritative corridors)."""
+    """Read live AISStream positions when configured; return no records otherwise."""
     settings = get_aisstream_settings()
     if settings.is_configured and settings.api_key:
         try:
@@ -291,10 +302,15 @@ def fetch_maritime_vessels() -> list[VesselRecord]:
         except Exception as exc:
             logger.warning("Failed to collect live AISStream vessels, falling back to authoritative set: %s", exc)
 
+    return []
+
+
+def load_sample_vessels() -> list[VesselRecord]:
+    """Return explicitly simulated corridor examples for demos and normalization tests."""
     now = datetime.now(UTC)
     records: list[VesselRecord] = []
     for item in SAMPLE_GLOBAL_VESSELS:
-        locator = f"ais://imo-itu/vessel/{item['mmsi']}@{now.strftime('%Y%m%dT%H%M%SZ')}"
+        locator = f"simulated://worldos/vessel/{item['mmsi']}"
         record = VesselRecord(
             mmsi=str(item["mmsi"]),
             imo=str(item["imo"]) if item.get("imo") else None,
@@ -313,33 +329,33 @@ def fetch_maritime_vessels() -> list[VesselRecord]:
             nav_status=item["status"],
             observed_at=now,
             source_locator=locator,
+            truth_class="SIMULATED",
         )
         records.append(record)
     return records
 
 
-load_sample_vessels = fetch_maritime_vessels
-
-
 def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> WorldBundle:
     """Normalize a VesselRecord into a canonical WORLDOS WorldBundle with strict provenance."""
-    source_id = stable_id("source", "maritime-ais")
+    simulated = record.truth_class == "SIMULATED"
+    source_key = "worldos-sample-vessels" if simulated else "aisstream"
+    source_id = stable_id("source", source_key)
     entity_id = stable_id("entity", "vessel", record.mmsi)
     time_str = record.observed_at.isoformat()
     interval_id = stable_id("time", "vessel", record.mmsi, time_str)
-    evidence_id = stable_id("evidence", "maritime-ais", record.source_locator)
-    provenance_id = stable_id("provenance", "maritime-ais-v1", record.source_locator)
+    evidence_id = stable_id("evidence", source_key, record.source_locator)
+    provenance_id = stable_id("provenance", source_key, record.source_locator)
     observation_id = stable_id("observation", "vessel", record.mmsi, time_str)
     geometry_id = stable_id("geometry", "vessel", record.mmsi, time_str)
 
     source = Source(
         id=source_id,
-        slug="maritime-ais",
-        name="Global Automatic Identification System (AIS)",
-        publisher="Norwegian Coastal Administration / US Coast Guard MarineCadastre",
-        license="Open Government Licence / Public Domain (UN/IMO AIS Standard)",
-        homepage="https://www.barentswatch.no/en/",
-        refresh_policy="continuous international maritime transponder broadcast",
+        slug=source_key,
+        name="WORLDOS Simulated Vessel Examples" if simulated else "AISStream Live AIS",
+        publisher="WORLDOS demonstration data" if simulated else "AISStream.io",
+        license=None,
+        homepage="https://github.com/ashak567/WORLDOS" if simulated else "https://aisstream.io/",
+        refresh_policy="static demonstration positions" if simulated else "AISStream position broadcasts",
     )
 
     entity = Entity(
@@ -359,7 +375,7 @@ def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> Worl
             "draft_meters": record.draft_meters,
             "nav_status": record.nav_status,
         },
-        confidence=Confidence(value=1.0, method="ais_transponder_broadcast"),
+        confidence=Confidence(value=1.0 if not simulated else 0.0, method="ais_transponder_broadcast" if not simulated else "simulated_demo"),
     )
 
     identifiers = [
@@ -413,7 +429,7 @@ def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> Worl
         id=provenance_id,
         evidence_id=evidence_id,
         pipeline_version="maritime-ais-v1",
-        transformation={"measure": "maritime.vessel_state", "ais_class": "Class A"},
+        transformation={"measure": "maritime.vessel_state", "truth_class": record.truth_class},
     )
 
     geometry = Geometry(
@@ -424,7 +440,7 @@ def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> Worl
         source_id=source_id,
         evidence_id=evidence_id,
         valid_during=interval,
-        confidence=Confidence(value=1.0, method="transponder_asserted"),
+        confidence=Confidence(value=1.0 if not simulated else 0.0, method="transponder_asserted" if not simulated else "simulated_demo"),
     )
 
     observation = Observation(
@@ -433,10 +449,11 @@ def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> Worl
         measure="maritime.vessel_state",
         value=record.sog_knots,
         unit="knots",
+        truth_class="OBSERVED",
         time_interval_id=interval_id,
         evidence_id=evidence_id,
         provenance_id=provenance_id,
-        confidence=Confidence(value=1.0, method="source_asserted"),
+        confidence=Confidence(value=1.0 if not simulated else 0.0, method="source_asserted" if not simulated else "simulated_demo"),
         attributes={
             "sog_knots": record.sog_knots,
             "cog_degrees": record.cog_degrees,
@@ -446,6 +463,7 @@ def maritime_vessel_bundle(record: VesselRecord, retrieved_at: datetime) -> Worl
             "destination": record.destination,
             "flag": record.flag,
             "ship_type": record.ship_type,
+            "truth_class": record.truth_class,
         },
     )
 

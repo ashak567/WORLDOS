@@ -1080,6 +1080,59 @@ html, body, #root {
   text-align: center;
 }
 
+.street-view-panel {
+  position: absolute;
+  z-index: 35;
+  top: 70px;
+  right: 16px;
+  bottom: 16px;
+  width: min(560px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 6px;
+  background: var(--bg-surface-elevated);
+  box-shadow: var(--shadow-tactical);
+}
+
+.street-view-panel-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.street-view-panel-header div {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.street-view-panel-header strong {
+  color: var(--cy);
+  font: 11px var(--font-brand);
+}
+
+.street-view-panel-header span,
+.street-view-panel p {
+  color: var(--text-muted);
+  font-size: 10px;
+}
+
+.street-view-panel iframe {
+  width: 100%;
+  min-height: 0;
+  flex: 1;
+  border: 0;
+  background: var(--bg-primary);
+}
+
+.street-view-panel p {
+  padding: 7px 12px;
+}
+
 /* ==========================================================================
    TACTICAL TELEMETRY PILLS IN HUD
    ========================================================================== */

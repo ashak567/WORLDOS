@@ -1,9 +1,11 @@
 import React, { useEffect, useRef } from 'react';
 import {
   Cartesian3,
+  Cesium3DTileset,
   Color,
   GeoJsonDataSource,
   Ion,
+  IonGeocodeProviderType,
   Math as CesiumMath,
   NearFarScalar,
   PolylineGlowMaterialProperty,
@@ -11,6 +13,7 @@ import {
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
   Viewer,
+  createGooglePhotorealistic3DTileset,
   createWorldTerrainAsync,
   defined,
 } from 'cesium';
@@ -41,6 +44,7 @@ import {
   InfrastructureNode,
   AircraftTrackPoint,
   RoutePlanResponse,
+  splitTrackAtAntimeridian,
 } from '../api';
 import { BasemapMode, LayerDefinition } from '../types/layers';
 import { SelectedItemPayload } from './MapEngine2D';
@@ -54,6 +58,7 @@ interface GlobeEngine3DProps {
   basemapMode: BasemapMode;
   geometries: GeometryFeature[];
   events: Event[];
+  naturalEvents?: Event[];
   observations: Observation[];
   alerts: Alert[];
   aircraft?: AircraftState[];
@@ -66,7 +71,7 @@ interface GlobeEngine3DProps {
   activeRoute?: RoutePlanResponse | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
-  onViewportChange: (bbox: BoundingBox) => void;
+  onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
 
@@ -75,6 +80,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   basemapMode,
   geometries,
   events,
+  naturalEvents = [],
   observations,
   alerts,
   aircraft = [],
@@ -92,23 +98,58 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  const googleTilesetRef = useRef<Cesium3DTileset | null>(null);
+  const imageryRequestRef = useRef(0);
+  const terrainPromiseRef = useRef<ReturnType<typeof createWorldTerrainAsync> | null>(null);
   const geojsonSourceRef = useRef<GeoJsonDataSource | null>(null);
   const handlerRef = useRef<ScreenSpaceEventHandler | null>(null);
 
-  const applyImageryLayers = (viewer: Viewer, mode: BasemapMode) => {
+  const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
+    const requestId = ++imageryRequestRef.current;
     try {
+      if (googleTilesetRef.current) {
+        viewer.scene.primitives.remove(googleTilesetRef.current);
+        googleTilesetRef.current = null;
+      }
       viewer.imageryLayers.removeAll();
 
+      if (mode === 'satellite-hybrid' && Ion.defaultAccessToken && allowGoogleTiles) {
+        viewer.scene.globe.show = false;
+        createGooglePhotorealistic3DTileset(
+          { onlyUsingWithGoogleGeocoder: true },
+          { showCreditsOnScreen: true }
+        ).then((tileset) => {
+          if (viewer.isDestroyed() || requestId !== imageryRequestRef.current) {
+            tileset.destroy();
+            return;
+          }
+          googleTilesetRef.current = tileset;
+          viewer.scene.primitives.add(tileset);
+        }).catch(() => {
+          if (!viewer.isDestroyed() && requestId === imageryRequestRef.current) {
+            applyImageryLayers(viewer, mode, false);
+          }
+        });
+        return;
+      }
+
+      viewer.scene.globe.show = true;
       if (mode === 'satellite-hybrid') {
+        viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({
+          url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          maximumLevel: 19,
+          credit: '© OpenStreetMap contributors',
+        }));
         const satImagery = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
-          maximumLevel: 18,
+          maximumLevel: 20,
+          credit: 'Esri, Maxar, Earthstar Geographics',
         });
         viewer.imageryLayers.addImageryProvider(satImagery);
 
         const refOverlay = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
-          maximumLevel: 18,
+          maximumLevel: 20,
         });
         viewer.imageryLayers.addImageryProvider(refOverlay);
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
@@ -116,6 +157,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
 
       if (mode === 'oceanic') {
+        viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({
+          url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+          maximumLevel: 19,
+          credit: '© OpenStreetMap contributors',
+        }));
         const oceanBase = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Base/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 16,
@@ -132,6 +178,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
 
       // Default 'dark-tactical'
+      viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({
+        url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
+        maximumLevel: 19,
+        credit: '© OpenStreetMap contributors',
+      }));
       const darkImagery = new UrlTemplateImageryProvider({
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Base/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 16,
@@ -157,7 +208,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       animation: false,
       timeline: false,
       baseLayerPicker: false,
-      geocoder: false,
+      geocoder: IonGeocodeProviderType.GOOGLE,
       homeButton: false,
       sceneModePicker: false,
       navigationHelpButton: false,
@@ -165,23 +216,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       selectionIndicator: false,
     });
 
-    // Cleanly suppress watermark credit bar for streamlined tactical HUD
-    if ((viewer as any).creditDisplay?.container) {
-      (viewer as any).creditDisplay.container.style.display = 'none';
-    }
-
     applyImageryLayers(viewer, basemapMode);
-
-    // Enable high-resolution 3D World Terrain when Cesium Ion token is active
-    if (Ion.defaultAccessToken) {
-      createWorldTerrainAsync()
-        .then((terrainProvider) => {
-          if (viewerRef.current) {
-            viewer.terrainProvider = terrainProvider;
-          }
-        })
-        .catch(() => {});
-    }
+    viewer.scene.globe.enableLighting = true;
 
     // Initial camera view
     viewer.camera.setView({
@@ -201,7 +237,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
             min_lat: Math.max(-85, Math.min(85, south)),
             max_lon: Math.max(-180, Math.min(180, east)),
             max_lat: Math.max(-85, Math.min(85, north)),
-          });
+          }, 1 + Math.log2(20_000_000 / Math.max(viewer.camera.positionCartographic.height, 1)));
         }
       } catch {
         // computeViewRectangle may return undefined if camera looking away from horizon
@@ -244,6 +280,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   useEffect(() => {
     if (viewerRef.current) {
       applyImageryLayers(viewerRef.current, basemapMode);
+      if (basemapMode !== 'satellite-hybrid' && Ion.defaultAccessToken) {
+        terrainPromiseRef.current ??= createWorldTerrainAsync();
+        terrainPromiseRef.current
+          .then((terrainProvider) => {
+            if (viewerRef.current) viewerRef.current.terrainProvider = terrainProvider;
+          })
+          .catch(() => {});
+      }
     }
   }, [basemapMode]);
 
@@ -370,7 +414,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     if (layerMap.get('maritime-vessels') && vessels.length > 0) {
       for (const v of vessels) {
         const position = Cartesian3.fromDegrees(v.longitude, v.latitude, 0);
-        const heading = v.attributes?.heading_degrees || v.attributes?.cog_degrees || 0;
+        const heading = v.attributes?.heading_degrees ?? v.attributes?.cog_degrees ?? 0;
         const ent = viewer.entities.add({
           position,
           billboard: {
@@ -389,7 +433,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     // 3. Space Satellites: True 3D Orbital Altitude (400 km to 20,200 km)
     if (layerMap.get('space-satellites') && satellites.length > 0) {
       for (const s of satellites) {
-        const altMeters = (s.attributes?.altitude_km || 420) * 1000;
+        const altitudeKm = s.attributes?.altitude_km;
+        if (!Number.isFinite(altitudeKm)) continue;
+        const altMeters = altitudeKm * 1000;
         const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
         const isSelected =
@@ -401,8 +447,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           position,
           billboard: {
             image: SATELLITE_ICON_PURPLE,
-            width: isSelected ? 34 : 22,
-            height: isSelected ? 34 : 22,
+            width: isSelected ? 18 : 5,
+            height: isSelected ? 18 : 5,
             scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
           },
         });
@@ -412,17 +458,40 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         // ONLY render 3D orbital ground track if this specific satellite is selected!
         // Suppresses disturbing all-satellite purple mesh web across the globe.
         if (isSelected && s.attributes?.ground_track && s.attributes.ground_track.length > 1) {
-          const trackPositions = s.attributes.ground_track.map(([lon, lat]) =>
-            Cartesian3.fromDegrees(lon, lat, altMeters)
-          );
-          viewer.entities.add({
-            polyline: {
-              positions: trackPositions,
-              width: 2.5,
-              material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
-            },
+          splitTrackAtAntimeridian(s.attributes.ground_track).forEach((segment) => {
+            viewer.entities.add({
+              polyline: {
+                positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 0)),
+                width: 2.5,
+                material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
+              },
+            });
           });
         }
+      }
+    }
+
+    if (layerMap.get('natural-hazards') && naturalEvents.length > 0) {
+      for (const event of naturalEvents) {
+        const point = event.point || event.coordinates;
+        if (!point || point.length < 2 || !point.every(Number.isFinite)) continue;
+        const categories = `${event.category || ''} ${(event.attributes?.categories || []).join(' ')}`.toLowerCase();
+        const alertLevel = String(event.attributes?.alert_level || '').toLowerCase();
+        const color = alertLevel === 'red' ? Color.RED
+          : alertLevel === 'orange' ? Color.ORANGE
+          : alertLevel === 'green' ? Color.LIME
+          : categories.includes('tsunami') ? Color.CYAN
+          : categories.includes('storm') ? Color.DEEPSKYBLUE
+          : categories.includes('fire') ? Color.ORANGE
+            : categories.includes('volcano') ? Color.RED
+              : categories.includes('flood') ? Color.CYAN
+                : Color.HOTPINK;
+        const ent = viewer.entities.add({
+          position: Cartesian3.fromDegrees(point[0], point[1], 0),
+          point: { pixelSize: 8, color, outlineColor: Color.WHITE, outlineWidth: 1 },
+        });
+        (ent as any)._worldosType = 'event';
+        (ent as any)._worldosData = event;
       }
     }
 
@@ -594,6 +663,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     cameras,
     thermalEvents,
     events,
+    naturalEvents,
     observations,
     alerts,
     infrastructure,

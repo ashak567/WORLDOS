@@ -18,6 +18,7 @@ import {
   InfrastructureNode,
   AircraftTrackPoint,
   RoutePlanResponse,
+  splitTrackAtAntimeridian,
 } from '../api';
 import { BasemapMode, LayerDefinition } from '../types/layers';
 
@@ -41,6 +42,7 @@ interface MapEngine2DProps {
   basemapMode: BasemapMode;
   geometries: GeometryFeature[];
   events: Event[];
+  naturalEvents?: Event[];
   observations: Observation[];
   alerts: Alert[];
   aircraft?: AircraftState[];
@@ -53,14 +55,13 @@ interface MapEngine2DProps {
   activeRoute?: RoutePlanResponse | null;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
-  onViewportChange: (bbox: BoundingBox) => void;
+  onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
 
 // Vector SVG Data URLs for Heading-Aware Tactical Rendering
 const AIRPLANE_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/></svg>`;
 const VESSEL_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><path d="M12 2L4 9v7l8 6 8-6V9l-8-7zm0 3.5l5 4.38v4.24l-5 3.75-5-3.75V9.88l5-4.38z"/></svg>`;
-const SATELLITE_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><circle cx="12" cy="12" r="3.5"/><path d="M4 10h3v4H4zm13 0h3v4h-3zM10 4h4v3h-4zm0 13h4v3h-4zM2 11h2v2H2zm18 0h2v2h-2zM11 2h2v2h-2zm0 18h2v2h-2z"/></svg>`;
 const CAMERA_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><path d="M12 15c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0-4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm9-2h-3.17l-1.83-2H8L6.17 9H3c-1.1 0-2 .9-2 2v9c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2v-9c0-1.1-.9-2-2-2zm0 11H3v-9h3.83l1.83-2h6.68l1.83 2H21v9z"/></svg>`;
 const FIRE_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><path d="M12 2C8.13 4.57 6 8.65 6 13c0 3.31 2.69 6 6 6s6-2.69 6-6c0-4.35-2.13-8.43-6-11zm0 15c-1.66 0-3-1.34-3-3 0-1.57.88-3.08 2.25-3.83.39-.21.84.07.84.51v1.5c0 .83.67 1.5 1.5 1.5.44 0 .72.45.51.84A2.99 2.99 0 0 1 12 17z"/></svg>`;
 const AIRPORT_SVG = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="24" height="24" fill="%23ffffff"><path d="M22 16v-2l-8.5-5V3.5c0-.83-.67-1.5-1.5-1.5s-1.5.67-1.5 1.5V9L2 14v2l8.5-2.5V19L8 20.5V22l4-1 4 1v-1.5L13.5 19v-5.5L22 16z"/></svg>`;
@@ -72,6 +73,13 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
     return {
       version: 8,
       sources: {
+        'osm-fallback': {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
+        },
         'esri-imagery': {
           type: 'raster',
           tiles: [
@@ -89,6 +97,7 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
         },
       },
       layers: [
+        { id: 'osm-fallback-layer', type: 'raster', source: 'osm-fallback', minzoom: 0, maxzoom: 22 },
         { id: 'imagery-base', type: 'raster', source: 'esri-imagery', minzoom: 0, maxzoom: 20 },
         { id: 'imagery-ref', type: 'raster', source: 'esri-reference', minzoom: 0, maxzoom: 20 },
       ],
@@ -99,6 +108,13 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
     return {
       version: 8,
       sources: {
+        'osm-fallback': {
+          type: 'raster',
+          tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+          tileSize: 256,
+          maxzoom: 19,
+          attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
+        },
         'esri-ocean': {
           type: 'raster',
           tiles: [
@@ -116,6 +132,7 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
         },
       },
       layers: [
+        { id: 'osm-fallback-layer', type: 'raster', source: 'osm-fallback', minzoom: 0, maxzoom: 22 },
         { id: 'ocean-base', type: 'raster', source: 'esri-ocean', minzoom: 0, maxzoom: 20 },
         { id: 'ocean-ref', type: 'raster', source: 'esri-ocean-ref', minzoom: 0, maxzoom: 20 },
       ],
@@ -126,6 +143,13 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
   return {
     version: 8,
     sources: {
+      'osm-fallback': {
+        type: 'raster',
+        tiles: ['https://tile.openstreetmap.org/{z}/{x}/{y}.png'],
+        tileSize: 256,
+        maxzoom: 19,
+        attribution: '<a href="https://www.openstreetmap.org/copyright" target="_blank">© OpenStreetMap contributors</a>',
+      },
       'esri-dark-base': {
         type: 'raster',
         tiles: [
@@ -143,6 +167,7 @@ const getBasemapStyle = (mode: BasemapMode): maplibregl.StyleSpecification => {
       },
     },
     layers: [
+      { id: 'osm-fallback-layer', type: 'raster', source: 'osm-fallback', minzoom: 0, maxzoom: 22 },
       { id: 'esri-dark-base-layer', type: 'raster', source: 'esri-dark-base', minzoom: 0, maxzoom: 20 },
       { id: 'esri-dark-reference-layer', type: 'raster', source: 'esri-dark-reference', minzoom: 0, maxzoom: 20 },
     ],
@@ -154,6 +179,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
   basemapMode,
   geometries,
   events,
+  naturalEvents = [],
   observations,
   alerts,
   aircraft = [],
@@ -207,7 +233,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
         min_lat: Math.max(-85, Math.min(85, b.getSouth())),
         max_lon: Math.max(-180, Math.min(180, b.getEast())),
         max_lat: Math.max(-85, Math.min(85, b.getNorth())),
-      });
+      }, map.getZoom());
     };
 
     map.on('load', emitBounds);
@@ -289,14 +315,14 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
     const getEventCoords = (e: Event): [number, number] | null => {
       if (e.point && Array.isArray(e.point) && e.point.length >= 2) {
         const [lon, lat] = e.point;
-        if (typeof lon === 'number' && typeof lat === 'number' && !isNaN(lon) && !isNaN(lat)) {
-          if (lon !== 0 || lat !== 0) return [lon, lat];
+        if (Number.isFinite(lon) && Number.isFinite(lat) && lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90) {
+          return [lon, lat];
         }
       }
       if (e.coordinates && Array.isArray(e.coordinates) && e.coordinates.length >= 2) {
         const [lon, lat] = e.coordinates;
-        if (typeof lon === 'number' && typeof lat === 'number' && !isNaN(lon) && !isNaN(lat)) {
-          if (lon !== 0 || lat !== 0) return [lon, lat];
+        if (Number.isFinite(lon) && Number.isFinite(lat) && lon >= -180 && lon <= 180 && lat >= -90 && lat <= 90) {
+          return [lon, lat];
         }
       }
       return null;
@@ -304,7 +330,9 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
 
     // 2. Seismic Events Layer (USGS Earthquakes)
     if (layerMap.get('earthquake-events') && events.length > 0) {
-      const validSeismic = events.filter((e) => getEventCoords(e) !== null);
+      const validSeismic = events.filter((e) =>
+        (e.event_type === 'earthquake' || e.kind === 'earthquake' || e.source_slug === 'usgs-earthquakes') && getEventCoords(e) !== null
+      );
       if (validSeismic.length > 0) {
         deckLayers.push(
           new ScatterplotLayer({
@@ -320,11 +348,13 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
             lineWidthMinPixels: 1.5,
             getPosition: (d: Event) => getEventCoords(d)!,
             getRadius: (d: Event) => {
-              const mag = d.magnitude ?? (d.attributes && (d.attributes.mag || d.attributes.magnitude)) ?? 3.5;
-              return Math.max(12000, Math.pow(mag, 2.3) * 6000);
+              const mag = d.magnitude ?? (d.attributes && (d.attributes.mag ?? d.attributes.magnitude));
+              return Number.isFinite(mag) ? Math.max(12000, Math.pow(mag, 2.3) * 6000) : 12000;
             },
             getFillColor: (d: Event) => {
-              const mag = d.magnitude ?? (d.attributes && (d.attributes.mag || d.attributes.magnitude)) ?? 3.5;
+              if (d.attributes?.tsunami === true) return [34, 211, 238, 230];
+              const mag = d.magnitude ?? (d.attributes && (d.attributes.mag ?? d.attributes.magnitude));
+              if (!Number.isFinite(mag)) return [234, 179, 8, 190];
               if (mag >= 6.0) return [239, 68, 68, 220]; // Red
               if (mag >= 4.5) return [249, 115, 22, 210]; // Orange
               return [234, 179, 8, 190]; // Yellow
@@ -376,7 +406,10 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
 
     // 4. Detected Anomalies
     if (layerMap.get('anomalies')) {
-      const anomalyObs = observations.filter((o) => o.is_anomaly === true);
+      const anomalyObs = observations.filter((o) =>
+        o.is_anomaly === true && o.point && Number.isFinite(o.point[0]) && Number.isFinite(o.point[1]) &&
+        o.point[0] >= -180 && o.point[0] <= 180 && o.point[1] >= -90 && o.point[1] <= 90
+      );
       if (anomalyObs.length > 0) {
         deckLayers.push(
           new ScatterplotLayer({
@@ -389,12 +422,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
             radiusScale: 10,
             radiusMinPixels: 6,
             radiusMaxPixels: 28,
-            getPosition: (d: Observation) => {
-              if (d.point && Array.isArray(d.point) && d.point.length >= 2) {
-                return [d.point[0], d.point[1]];
-              }
-              return [0, 0];
-            },
+            getPosition: (d: Observation) => d.point!,
             getRadius: 45000,
             getFillColor: [250, 204, 21, 190],
             getLineColor: [255, 255, 255, 240],
@@ -413,19 +441,17 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
       deckLayers.push(
         new ScatterplotLayer({
           id: 'deck-alerts',
-          data: alerts,
+          data: alerts.filter((alert) =>
+            alert.point && Number.isFinite(alert.point[0]) && Number.isFinite(alert.point[1]) &&
+            alert.point[0] >= -180 && alert.point[0] <= 180 && alert.point[1] >= -90 && alert.point[1] <= 90
+          ),
           pickable: true,
           opacity: 0.95,
           stroked: true,
           lineWidthMinPixels: 2,
           radiusMinPixels: 7,
           radiusMaxPixels: 30,
-          getPosition: (d: Alert) => {
-            if (d.point && Array.isArray(d.point) && d.point.length >= 2) {
-              return [d.point[0], d.point[1]];
-            }
-            return [0, 0];
-          },
+          getPosition: (d: Alert) => d.point!,
           getRadius: 60000,
           getFillColor: [244, 63, 94, 230],
           getLineColor: [255, 255, 255, 240],
@@ -436,6 +462,37 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
           },
         })
       );
+    }
+
+    if (layerMap.get('natural-hazards') && naturalEvents.length > 0) {
+      deckLayers.push(new ScatterplotLayer({
+        id: 'deck-natural-hazards',
+        data: naturalEvents.filter((event) => getEventCoords(event) !== null),
+        pickable: true,
+        opacity: 0.9,
+        stroked: true,
+        filled: true,
+        radiusMinPixels: 4,
+        radiusMaxPixels: 16,
+        lineWidthMinPixels: 1.5,
+        getPosition: (event: Event) => getEventCoords(event)!,
+        getRadius: 30_000,
+        getFillColor: (event: Event) => {
+          const category = `${event.category || ''} ${(event.attributes?.categories || []).join(' ')}`.toLowerCase();
+          const alertLevel = String(event.attributes?.alert_level || '').toLowerCase();
+          if (alertLevel === 'red') return [239, 68, 68, 235];
+          if (alertLevel === 'orange') return [249, 115, 22, 230];
+          if (alertLevel === 'green') return [34, 197, 94, 210];
+          if (category.includes('tsunami')) return [34, 211, 238, 230];
+          if (category.includes('storm')) return [56, 189, 248, 220];
+          if (category.includes('fire')) return [249, 115, 22, 220];
+          if (category.includes('volcano')) return [239, 68, 68, 220];
+          if (category.includes('flood')) return [6, 182, 212, 220];
+          return [251, 113, 133, 220];
+        },
+        getLineColor: [255, 255, 255, 220],
+        onClick: (info) => { if (info.object) onSelectItem({ type: 'event', data: info.object }); },
+      }));
     }
 
     // 6. Live Aircraft State Vectors with Heading-Aware Rotation
@@ -489,7 +546,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
           }),
           getSize: 22,
           getAngle: (d: VesselState) =>
-            360 - (d.attributes?.heading_degrees || d.attributes?.cog_degrees || 0),
+            360 - (d.attributes?.heading_degrees ?? d.attributes?.cog_degrees ?? 0),
           getColor: [6, 182, 212, 255], // Cyan
           onClick: (info) => {
             if (info.object) {
@@ -502,7 +559,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
 
     // 8. Space Satellites & Orbital Ground Tracks
     if (layerMap.get('space-satellites') && satellites.length > 0) {
-      // ONLY predicted orbital ground tracks for selected satellite!
+      // Draw a propagated ground track only for the selected satellite.
       // Suppresses disturbing multi-orbit purple grid across the map.
       if (selectedItem?.type === 'satellite') {
         const selectedSat = satellites.find(
@@ -514,10 +571,10 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
           deckLayers.push(
             new PathLayer({
               id: 'deck-satellite-ground-track-selected',
-              data: [selectedSat],
+              data: splitTrackAtAntimeridian(selectedSat.attributes.ground_track).map((path, index) => ({ id: index, path })),
               pickable: false,
               widthMinPixels: 2.5,
-              getPath: (d: SatelliteState) => d.attributes.ground_track!,
+              getPath: (d: { path: [number, number][] }) => d.path,
               getColor: [192, 132, 252, 210], // Soft glowing purple
             })
           );
@@ -525,20 +582,24 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
       }
 
       deckLayers.push(
-        new IconLayer({
+        new ScatterplotLayer({
           id: 'deck-satellite-icons',
-          data: satellites,
+          data: satellites.filter((satellite) =>
+            Number.isFinite(satellite.longitude) && Number.isFinite(satellite.latitude) &&
+            satellite.longitude >= -180 && satellite.longitude <= 180 &&
+            satellite.latitude >= -90 && satellite.latitude <= 90
+          ),
           pickable: true,
           getPosition: (d: SatelliteState) => [d.longitude, d.latitude],
-          getIcon: () => ({
-            url: SATELLITE_SVG,
-            width: 24,
-            height: 24,
-            mask: true,
-          }),
-          getSize: (d: SatelliteState) =>
-            selectedItem?.type === 'satellite' && selectedItem.data?.entity_id === d.entity_id ? 28 : 22,
-          getColor: [168, 85, 247, 255], // Purple
+          radiusUnits: 'pixels',
+          radiusMinPixels: 1.25,
+          radiusMaxPixels: 7,
+          getRadius: (d: SatelliteState) =>
+            selectedItem?.type === 'satellite' && selectedItem.data?.entity_id === d.entity_id ? 6 : 1.75,
+          stroked: true,
+          lineWidthMinPixels: 1,
+          getLineColor: [235, 210, 255, 235],
+          getFillColor: [168, 85, 247, 210],
           onClick: (info) => {
             if (info.object) {
               onSelectItem({ type: 'satellite', data: info.object });
@@ -696,6 +757,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
     layers,
     geometries,
     events,
+    naturalEvents,
     observations,
     alerts,
     aircraft,

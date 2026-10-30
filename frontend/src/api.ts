@@ -62,6 +62,7 @@ export type Event = {
   canonical_name?: string;
   title?: string;
   event_type?: string;
+  kind?: string;
   category?: string;
   starts_at?: string;
   ends_at?: string;
@@ -80,6 +81,20 @@ export type Event = {
   point?: [number, number];
   source_slug?: string;
   source_name?: string;
+};
+
+export type LiveEventsResponse = {
+  earthquakes: Event[];
+  natural_events: Event[];
+  sources: Record<string, { status: 'fresh' | 'stale' | 'unavailable'; retrieved_at?: string; count: number; error?: string }>;
+  as_of: string;
+};
+
+export type LiveContextResponse = {
+  news: Array<{ title: string; url: string; domain: string; published_at: string; language: string; source_country: string }>;
+  climate: null | { period: string; global_temperature_anomaly_c: number; unit: string; baseline: string; measure: string; source: string; source_url: string; truth_class: TruthClass; cadence: string };
+  sources: Record<string, { status: 'fresh' | 'stale' | 'unavailable'; retrieved_at?: string; count: number; error?: string }>;
+  as_of: string;
 };
 
 export type AircraftState = {
@@ -109,7 +124,7 @@ export type AircraftState = {
     velocity?: number | null;
     true_track?: number | null;
     vertical_rate?: number | null;
-    on_ground?: boolean;
+    on_ground?: boolean | null;
     squawk?: string | null;
     position_source?: number;
     category?: number | null;
@@ -141,8 +156,8 @@ export type VesselState = {
     flag: string;
     ship_type: string;
     sog_knots: number;
-    cog_degrees: number;
-    heading_degrees: number;
+    cog_degrees?: number | null;
+    heading_degrees?: number | null;
     draft_meters?: number | null;
     destination: string;
     eta?: string | null;
@@ -173,6 +188,7 @@ export type SatelliteState = {
     designator: string;
     category: string;
     operator: string;
+    launch_date?: string;
     altitude_km: number;
     velocity_kms: number;
     apogee_km: number;
@@ -183,6 +199,11 @@ export type SatelliteState = {
     ground_track?: [number, number][];
     calculation_method?: string;
     derivation_class?: string;
+    element_set_status?: 'fresh' | 'stale' | 'sample';
+    elements_retrieved_at?: string;
+    elements_epoch?: string;
+    elements_age_hours?: number;
+    position_calculated_at?: string;
   };
 };
 
@@ -518,6 +539,18 @@ export async function fetchEvents(limit: number = 100): Promise<Event[]> {
   return response.json();
 }
 
+export async function fetchLiveEvents(): Promise<LiveEventsResponse> {
+  const response = await fetch(`${apiBase}/events/live`);
+  if (!response.ok) throw new Error(`API error ${response.status} fetching live events`);
+  return response.json();
+}
+
+export async function fetchLiveContext(): Promise<LiveContextResponse> {
+  const response = await fetch(`${apiBase}/context/live`);
+  if (!response.ok) throw new Error(`API error ${response.status} fetching live context`);
+  return response.json();
+}
+
 export async function fetchEntityContext(entityId: string): Promise<WorldContext> {
   const response = await fetch(`${apiBase}/entities/${encodeURIComponent(entityId)}/context`);
   if (!response.ok) throw new Error(`API error ${response.status} fetching entity context`);
@@ -603,10 +636,31 @@ export async function fetchMaritimeVessels(bbox?: BoundingBox, limit: number = 2
   return response.json();
 }
 
-export async function fetchSatellites(limit: number = 50): Promise<SatelliteState[]> {
+export async function fetchSatellites(limit: number = 20_000): Promise<SatelliteState[]> {
   const response = await fetch(`${apiBase}/space/satellites?limit=${limit}`);
   if (!response.ok) throw new Error(`API returned ${response.status} fetching satellites`);
   return response.json();
+}
+
+export async function fetchSatelliteGroundTrack(noradId: string): Promise<[number, number][]> {
+  const response = await fetch(`${apiBase}/space/satellites/${encodeURIComponent(noradId)}/ground-track`);
+  if (!response.ok) throw new Error(`API returned ${response.status} fetching satellite ground track`);
+  const payload: { points: [number, number][] } = await response.json();
+  return payload.points;
+}
+
+export function splitTrackAtAntimeridian(track: [number, number][]): [number, number][][] {
+  const segments: [number, number][][] = [];
+  let segment: [number, number][] = [];
+  for (const point of track) {
+    if (segment.length && Math.abs(point[0] - segment[segment.length - 1][0]) > 180) {
+      if (segment.length > 1) segments.push(segment);
+      segment = [];
+    }
+    segment.push(point);
+  }
+  if (segment.length > 1) segments.push(segment);
+  return segments;
 }
 
 export async function fetchCameras(bbox?: BoundingBox, limit: number = 100): Promise<CameraEntity[]> {

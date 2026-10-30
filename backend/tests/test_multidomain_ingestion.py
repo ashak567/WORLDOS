@@ -26,7 +26,7 @@ from app.ingestion.infrastructure import (
     load_authoritative_infrastructure,
 )
 from app.ingestion.maritime import (
-    fetch_maritime_vessels,
+    load_sample_vessels,
     maritime_vessel_bundle,
 )
 from app.ingestion.satellites import (
@@ -44,7 +44,7 @@ class MultiDomainIngestionTests(unittest.TestCase):
 
     def test_maritime_vessels_normalization(self) -> None:
         """Verify AIS vessel state normalization and canonical bundle construction."""
-        vessels = fetch_maritime_vessels()
+        vessels = load_sample_vessels()
         self.assertGreater(len(vessels), 0)
 
         first = vessels[0]
@@ -57,7 +57,8 @@ class MultiDomainIngestionTests(unittest.TestCase):
         self.assertEqual(len(bundles), len(vessels))
         for bundle in bundles:
             self.assertEqual(bundle.entity.kind, "asset")
-            self.assertEqual(bundle.observation.truth_class, "OBSERVED")
+            self.assertEqual(bundle.source.slug, "worldos-sample-vessels")
+            self.assertEqual(bundle.observation.attributes["truth_class"], "SIMULATED")
             self.assertIn("mmsi", bundle.entity.attributes)
             self.assertIn("sog_knots", bundle.observation.attributes)
             self.assertEqual(bundle.geometry.geojson["type"], "Point")

@@ -1,9 +1,12 @@
 import React, { useState } from 'react';
 import { LayerCategory, LayerDefinition, LayerId } from '../types/layers';
+import { LiveContextResponse } from '../api';
 import { ChevronLeft, ChevronRight, Layers, Search, Filter } from 'lucide-react';
 
 interface LayerDockProps {
   layers: LayerDefinition[];
+  liveContext: LiveContextResponse | null;
+  contextError: boolean;
   onToggleLayer: (id: LayerId) => void;
   isCollapsed: boolean;
   onToggleCollapse: () => void;
@@ -22,6 +25,8 @@ const CATEGORY_TITLES: Record<LayerCategory, string> = {
 
 export const LayerDock: React.FC<LayerDockProps> = ({
   layers,
+  liveContext,
+  contextError,
   onToggleLayer,
   isCollapsed,
   onToggleCollapse,
@@ -114,6 +119,49 @@ export const LayerDock: React.FC<LayerDockProps> = ({
       </div>
 
       <div className="layer-list">
+        {contextError && !liveContext && (
+          <div role="status" style={{ padding: '8px 10px', color: '#fbbf24', fontSize: 10 }}>
+            Public news and climate feeds are currently unavailable.
+          </div>
+        )}
+        {liveContext && (
+          <section aria-label="Live global context" style={{ padding: '6px 4px 10px', marginBottom: '8px', borderBottom: '1px solid var(--border-subtle)' }}>
+            {liveContext.climate && (
+              <div style={{ padding: '7px 10px', marginBottom: '7px', border: '1px solid var(--border-subtle)', borderRadius: 4 }}>
+                <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em' }}>
+                  GLOBAL CLIMATE · MONTHLY{liveContext.sources.climate?.status !== 'fresh' ? ` · ${liveContext.sources.climate?.status?.toUpperCase() || 'UNAVAILABLE'}` : ''}
+                </div>
+                <div style={{ fontSize: 15, color: '#fbbf24', marginTop: 3 }}>
+                  {liveContext.climate.global_temperature_anomaly_c > 0 ? '+' : ''}{liveContext.climate.global_temperature_anomaly_c.toFixed(2)} °C
+                  <span style={{ fontSize: 10, color: 'var(--text-secondary)' }}> · {liveContext.climate.period}</span>
+                </div>
+                <a href={liveContext.climate.source_url} target="_blank" rel="noreferrer" style={{ fontSize: 9, color: 'var(--text-muted)' }}>
+                  NASA GISTEMP · relative to {liveContext.climate.baseline}
+                </a>
+              </div>
+            )}
+            {!liveContext.climate && (
+              <div role="status" style={{ padding: '6px 10px', color: '#fbbf24', fontSize: 10 }}>
+                NASA monthly climate data unavailable.
+              </div>
+            )}
+            <div style={{ fontSize: 9, color: 'var(--text-muted)', letterSpacing: '0.08em', padding: '2px 6px 5px' }}>
+              GLOBAL NEWS · GDELT · 24H{liveContext.sources.news?.status !== 'fresh' ? ` · ${liveContext.sources.news?.status?.toUpperCase() || 'UNAVAILABLE'}` : ''}
+            </div>
+            {liveContext.news.slice(0, 8).map((article) => (
+              <a key={article.url} href={article.url} target="_blank" rel="noreferrer" title={article.title}
+                style={{ display: 'block', padding: '5px 6px', color: 'var(--text-primary)', fontSize: 10, lineHeight: 1.35, textDecoration: 'none', borderRadius: 3 }}>
+                {article.title}
+                <span style={{ display: 'block', color: 'var(--text-muted)', fontSize: 9, marginTop: 2 }}>
+                  {article.domain}{article.published_at ? ` · ${article.published_at.replace(/^(\d{4})(\d{2})(\d{2})(\d{2})(\d{2})(\d{2})$/, '$1-$2-$3 $4:$5 UTC')}` : ''}
+                </span>
+              </a>
+            ))}
+            {liveContext.news.length === 0 && (
+              <div style={{ padding: '5px 6px', color: 'var(--text-muted)', fontSize: 10 }}>No matching headlines returned.</div>
+            )}
+          </section>
+        )}
         {categories.map((cat) => {
           const catLayers = filteredLayers.filter((l) => l.category === cat);
           if (catLayers.length === 0) return null;
@@ -176,6 +224,13 @@ export const LayerDock: React.FC<LayerDockProps> = ({
                       </span>
                     </div>
                   </div>
+                  {layer.feedStatus && (
+                    <div style={{ fontSize: '9px', padding: '2px 14px 4px', color: layer.feedStatus === 'fresh' ? '#34d399' : layer.feedStatus === 'unavailable' ? '#f87171' : '#fbbf24' }}>
+                      {layer.feedStatus === 'fresh' ? 'FRESH SOURCE DATA' : layer.feedStatus === 'stale' ? 'SOURCE DATA · STALE' : layer.feedStatus === 'partial' ? 'PARTIAL FEEDS' : 'FEED UNAVAILABLE'}
+                      {layer.lastUpdated && ` · ${new Date(layer.lastUpdated).toLocaleTimeString()}`}
+                    </div>
+                  )}
+                  {layer.error && <div role="status" style={{ color: '#f87171', fontSize: '10px', padding: '2px 14px 6px' }}>{layer.error}</div>}
                 </div>
               ))}
             </div>

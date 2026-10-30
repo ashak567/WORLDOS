@@ -431,7 +431,12 @@ class WorldRepository:
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         limit = _extract_int(limit, 200)
-        clauses = ["o.measure = 'maritime.vessel_state'"]
+        clauses = [
+            "o.measure = 'maritime.vessel_state'",
+            "o.truth_class <> 'SIMULATED'",
+            "LEFT(ev.locator, 14) <> 'ais://imo-itu/'",
+            "LEFT(ev.locator, 12) <> 'simulated://'",
+        ]
         values: list[Any] = []
         if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
             clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
@@ -566,7 +571,10 @@ class WorldRepository:
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         limit = _extract_int(limit, 200)
-        clauses = ["o.measure = 'fire.radiative_power'"]
+        clauses = [
+            "o.measure = 'fire.radiative_power'",
+            "COALESCE(o.attributes->>'fire_id', '') !~ '^FIRMS-(VIIRS|MODIS)-[A-Z]{3}-[0-9]{2}$'",
+        ]
         values: list[Any] = []
         if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
             clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
