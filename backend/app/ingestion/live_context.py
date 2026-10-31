@@ -82,15 +82,31 @@ def fetch_global_climate(now: datetime | None = None) -> tuple[dict[str, Any], d
     retrieved_at = now or datetime.now(UTC)
     raw, retrieved_at, status = _download("climate", CLIMATE_URL, retrieved_at, 1_000_000)
     try:
-        rows = csv.DictReader(StringIO(raw.decode("utf-8-sig")))
+        rows = iter(csv.reader(StringIO(raw.decode("utf-8-sig"))))
         months = ("Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec")
+        header = next(
+            (
+                [cell.strip() for cell in row]
+                for row in rows
+                if row and row[0].strip() == "Year" and set(months).issubset({cell.strip() for cell in row})
+            ),
+            None,
+        )
+        if header is None:
+            raise ValueError("monthly year and month columns are missing")
+        year_index = header.index("Year")
+        month_indexes = [(header.index(month), month_number) for month_number, month in enumerate(months, start=1)]
         latest = None
         for row in rows:
-            year = row.get("Year")
-            if not year or not year.isdigit():
+            if year_index >= len(row):
                 continue
-            for month_number, month in enumerate(months, start=1):
-                value = row.get(month, "").strip()
+            year = row[year_index].strip()
+            if not year.isdigit():
+                continue
+            for month_index, month_number in month_indexes:
+                if month_index >= len(row):
+                    continue
+                value = row[month_index].strip()
                 if value and value != "***":
                     parsed = float(value)
                     if math.isfinite(parsed):

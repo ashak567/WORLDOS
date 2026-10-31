@@ -675,19 +675,28 @@ def satellite_to_api_state(record: SatelliteRecord) -> dict[str, Any]:
     payload_hash = hashlib.sha256(
         json.dumps(record.raw_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
-    element_age_hours = max(0.0, (record.epoch - record.elements_epoch).total_seconds() / 3600.0)
+
+    def as_utc(value: datetime) -> datetime:
+        if value.tzinfo is None or value.utcoffset() is None:
+            return value.replace(tzinfo=UTC)
+        return value.astimezone(UTC)
+
+    epoch = as_utc(record.epoch)
+    elements_epoch = as_utc(record.elements_epoch)
+    elements_retrieved_at = as_utc(record.elements_retrieved_at)
+    element_age_hours = max(0.0, (epoch - elements_epoch).total_seconds() / 3600.0)
     locator = f"{CELESTRAK_ACTIVE_URL}#NORAD_CAT_ID={record.norad_id}"
     entity_id = stable_id("entity", "satellite", record.norad_id)
 
     return {
-        "observation_id": stable_id("live-orbit", record.norad_id, record.epoch.isoformat()),
+        "observation_id": stable_id("live-orbit", record.norad_id, epoch.isoformat()),
         "entity_id": entity_id,
         "canonical_name": f"{record.name} (NORAD {record.norad_id})",
         "measure": "orbital.ephemeris_state",
         "value": record.current_alt_km,
         "unit": "km",
         "truth_class": "DERIVED",
-        "observed_at": record.epoch.isoformat(),
+        "observed_at": epoch.isoformat(),
         "longitude": record.current_lon,
         "latitude": record.current_lat,
         "evidence_locator": locator,
@@ -710,10 +719,10 @@ def satellite_to_api_state(record: SatelliteRecord) -> dict[str, Any]:
             "calculation_method": record.calculation_method,
             "derivation_class": "DERIVED",
             "element_set_status": record.feed_status,
-            "elements_retrieved_at": record.elements_retrieved_at.isoformat(),
-            "elements_epoch": record.elements_epoch.isoformat(),
+            "elements_retrieved_at": elements_retrieved_at.isoformat(),
+            "elements_epoch": elements_epoch.isoformat(),
             "elements_age_hours": round(element_age_hours, 2),
-            "position_calculated_at": record.epoch.isoformat(),
+            "position_calculated_at": epoch.isoformat(),
             "ground_track": record.ground_track,
         },
     }

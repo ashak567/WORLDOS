@@ -19,6 +19,7 @@ import {
   Video,
   MapPin,
   Navigation,
+  Mic,
 } from 'lucide-react';
 
 interface HudBarProps {
@@ -31,6 +32,8 @@ interface HudBarProps {
   onOpenCommandPalette: () => void;
   onOpenSourceHealth: () => void;
   onOpenRoutePlanner?: () => void;
+  onOpenAssistant: () => void;
+  isAssistantOpen: boolean;
   isRouteActive?: boolean;
   isDockCollapsed: boolean;
   onToggleDock: () => void;
@@ -54,6 +57,8 @@ export const HudBar: React.FC<HudBarProps> = ({
   onOpenCommandPalette,
   onOpenSourceHealth,
   onOpenRoutePlanner,
+  onOpenAssistant,
+  isAssistantOpen,
   isRouteActive = false,
   isDockCollapsed,
   onToggleDock,
@@ -269,6 +274,16 @@ export const HudBar: React.FC<HudBarProps> = ({
       </div>
 
       <div className="hud-actions">
+        <button
+          className="hud-btn"
+          onClick={onOpenAssistant}
+          title="Talk to the local WORLDOS assistant"
+          aria-expanded={isAssistantOpen}
+        >
+          <Mic size={13} color="var(--cy)" />
+          <span>ASSISTANT</span>
+        </button>
+
         <button
           className="hud-btn"
           onClick={onOpenRoutePlanner}

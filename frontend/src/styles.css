@@ -1136,6 +1136,155 @@ html, body, #root {
 /* ==========================================================================
    TACTICAL TELEMETRY PILLS IN HUD
    ========================================================================== */
+.assistant-panel {
+  position: absolute; z-index: 80; top: 70px; right: 16px; bottom: 16px;
+  width: min(390px, calc(100vw - 32px)); display: flex; flex-direction: column;
+  overflow: hidden; border: 1px solid var(--border-strong); border-radius: 6px;
+  background: var(--bg-surface-elevated); box-shadow: var(--shadow-tactical);
+}
+.assistant-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--border-subtle); }
+.assistant-panel-header > div { display: flex; flex-direction: column; gap: 4px; }
+.assistant-panel-header strong { color: var(--cy); font: 11px var(--font-brand); }
+.assistant-panel-header span, .assistant-privacy-note { color: var(--text-muted); font-size: 11px; }
+.assistant-icon-button { display: inline-flex; align-items: center; justify-content: center; width: 30px; height: 30px; color: var(--text-secondary); background: transparent; border: 1px solid var(--border-subtle); border-radius: 4px; cursor: pointer; }
+.assistant-panel-body { display: flex; flex: 1; min-height: 0; flex-direction: column; gap: 12px; overflow-y: auto; padding: 12px; }
+.assistant-panel form { display: flex; flex-direction: column; gap: 8px; }
+.assistant-panel label { color: var(--text-secondary); font-size: 12px; }
+.assistant-panel textarea { width: 100%; min-height: 76px; resize: vertical; padding: 9px; color: var(--text-primary); background: rgba(0,0,0,.28); border: 1px solid var(--border-subtle); border-radius: 4px; font: 13px var(--font-ui); }
+.assistant-panel textarea:focus-visible, .assistant-icon-button:focus-visible, .assistant-control-button:focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+.assistant-controls { display: flex; flex-wrap: wrap; gap: 6px; }
+.assistant-control-button { display: inline-flex; align-items: center; gap: 6px; padding: 7px 9px; color: var(--text-secondary); background: rgba(16,26,38,.8); border: 1px solid var(--border-subtle); border-radius: 4px; font-size: 11px; cursor: pointer; }
+.assistant-control-button.primary { color: var(--text-inverse); background: var(--cy); border-color: var(--cy); }
+.assistant-control-button:disabled { cursor: not-allowed; opacity: .55; }
+.assistant-status { min-height: 16px; color: var(--text-muted); font-size: 11px; line-height: 1.4; }
+.assistant-answer { padding: 11px; color: var(--text-primary); background: rgba(0,0,0,.22); border: 1px solid var(--border-subtle); border-radius: 4px; font-size: 13px; line-height: 1.55; white-space: pre-wrap; }
+.assistant-evidence { display: flex; flex-direction: column; gap: 6px; margin-top: 12px; padding-top: 9px; border-top: 1px solid var(--border-subtle); }
+.assistant-evidence > strong { color: var(--cy); font-size: 10px; text-transform: uppercase; letter-spacing: .06em; }
+.assistant-evidence-item { display: grid; grid-template-columns: 1fr auto; gap: 3px 8px; color: var(--text-secondary); font-size: 10px; }
+.assistant-evidence-item time, .assistant-evidence-item small { color: var(--text-muted); }
+.assistant-evidence-item small { grid-column: 1 / -1; }
+.assistant-preferences { padding: 9px 0; color: var(--text-secondary); border-bottom: 1px solid var(--border-subtle); font-size: 11px; }
+.assistant-preferences summary { cursor: pointer; }
+.assistant-preferences form { display: grid; gap: 6px; margin-top: 9px; }
+.assistant-preferences input, .assistant-preferences select { width: 100%; padding: 7px; color: var(--text-primary); background: rgba(0,0,0,.22); border: 1px solid var(--border-subtle); border-radius: 4px; }
+.assistant-preference-item { display: flex; justify-content: space-between; align-items: center; gap: 8px; padding-top: 7px; }
+.assistant-preference-item button { color: var(--text-muted); background: transparent; border: 0; cursor: pointer; text-decoration: underline; }
+.assistant-preferences :focus-visible { outline: 2px solid var(--border-focus); outline-offset: 2px; }
+@media (max-width: 720px) { .assistant-panel { top: 66px; right: 8px; bottom: 8px; width: calc(100vw - 16px); } }
+
+/* Tablet and mobile layouts */
+@media (max-width: 1024px) {
+  .hud-topbar {
+    height: auto;
+    min-height: 52px;
+    flex-wrap: wrap;
+    gap: 6px 12px;
+    padding: 6px 10px;
+  }
+
+  .hud-center-group {
+    order: 3;
+    flex: 1 0 100%;
+    min-width: 0;
+    gap: 8px;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+
+  .hud-center-group::-webkit-scrollbar,
+  .hud-actions::-webkit-scrollbar { display: none; }
+
+  .hud-actions { margin-left: auto; gap: 6px; }
+  .hud-telemetry { display: none; }
+  .layer-dock { width: min(300px, calc(100vw - 24px)); max-height: calc(100dvh - 112px); }
+  .layer-list { min-height: 0; max-height: none; }
+  .details-drawer { max-height: calc(100dvh - 112px); }
+  .street-cam-dropdown-menu { width: min(320px, calc(100vw - 24px)); }
+}
+
+@media (max-width: 720px) {
+  .worldos-app { height: 100vh; height: 100dvh; }
+
+  .hud-topbar {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) auto;
+    grid-template-areas: "brand actions" "controls controls";
+    gap: 5px 8px;
+    padding: max(6px, env(safe-area-inset-top)) 8px 6px;
+  }
+
+  .hud-brand { grid-area: brand; min-width: 0; gap: 6px; }
+  .hud-brand-title { font-size: 12px; letter-spacing: 0.08em; }
+  .hud-brand-tag { display: none; }
+  .hud-center-group { grid-area: controls; width: 100%; gap: 6px; }
+  .hud-center-group > * { flex: 0 0 auto; }
+  .mode-btn { padding: 6px 8px; font-size: 9px; white-space: nowrap; }
+  .street-cam-trigger-btn { padding: 6px 8px; font-size: 9px; white-space: nowrap; }
+  .hud-actions { grid-area: actions; max-width: calc(100vw - 130px); overflow-x: auto; gap: 4px; scrollbar-width: none; }
+  .hud-actions .hud-btn { flex: 0 0 34px; width: 34px; height: 34px; justify-content: center; padding: 5px; }
+  .hud-actions .hud-btn > span,
+  .hud-actions .hud-btn > kbd { display: none; }
+
+  .layer-dock {
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-height: min(52dvh, 460px);
+  }
+
+  .layer-dock.collapsed { transform: translateY(calc(100% - 44px)); }
+  .layer-dock-floating-btn { top: auto; bottom: max(12px, env(safe-area-inset-bottom)); left: 8px; }
+  .details-drawer { top: auto; right: 8px; bottom: 8px; left: 8px; width: auto; max-width: none; max-height: min(58dvh, 520px); }
+  .details-prop-grid { grid-template-columns: minmax(78px, 30%) minmax(0, 1fr); }
+
+  .street-view-panel,
+  .assistant-panel {
+    top: auto;
+    right: 8px;
+    bottom: max(8px, env(safe-area-inset-bottom));
+    left: 8px;
+    width: auto;
+    max-height: calc(100dvh - 112px);
+    border-radius: 8px;
+  }
+
+  .street-view-panel { height: min(62dvh, 520px); }
+  .assistant-panel { height: min(68dvh, 580px); }
+  .street-cam-dropdown-menu { max-height: min(52dvh, 380px); }
+
+  .modal-backdrop { align-items: flex-end; padding: 8px; }
+  .modal-dialog { width: 100%; max-width: none; max-height: calc(100dvh - 16px); border-radius: 10px; }
+  .modal-body { min-height: 0; overflow: auto; }
+  .command-backdrop { align-items: flex-start; padding: max(12vh, 72px) 8px 8px; }
+  .command-dialog { width: 100%; max-width: none; max-height: calc(100dvh - 88px); }
+  .route-planner-overlay { align-items: flex-end; padding: 8px; }
+  .route-planner-modal { max-height: calc(100dvh - 16px); border-radius: 10px; }
+  .route-planner-title { min-width: 0; font-size: 10px; letter-spacing: 0.03em; }
+  .route-planner-body { min-height: 0; padding: 12px; }
+}
+
+@media (max-width: 390px) {
+  .hud-brand-title { font-size: 10px; }
+  .hud-brand .hud-btn { width: 32px; height: 32px; }
+  .hud-actions { max-width: calc(100vw - 112px); }
+  .mode-btn { padding: 6px; letter-spacing: 0.02em; }
+  .street-cam-trigger-btn span:not(.street-cam-badge) { display: none; }
+  .route-planner-header { padding: 10px; }
+  .route-planner-body { gap: 10px; padding: 10px; }
+}
+
+@media (max-height: 520px) and (orientation: landscape) {
+  .layer-dock { top: 98px; right: auto; bottom: 8px; left: 8px; width: min(270px, 45vw); max-height: calc(100dvh - 106px); }
+  .layer-dock.collapsed { transform: translateX(calc(-100% + 40px)); }
+  .layer-dock-floating-btn { top: 98px; bottom: auto; left: 8px; }
+  .details-drawer { top: 98px; right: 8px; bottom: 8px; left: auto; width: min(360px, 48vw); max-height: calc(100dvh - 106px); }
+  .street-view-panel,
+  .assistant-panel { top: 98px; right: 8px; bottom: 8px; left: auto; width: min(440px, 52vw); height: auto; max-height: calc(100dvh - 106px); }
+  .hud-center-group { order: initial; flex: 0 1 auto; width: auto; }
+}
+
 .telemetry-badge {
   display: inline-flex;
   align-items: center;

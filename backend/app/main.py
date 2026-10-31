@@ -7,8 +7,8 @@ from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
-from fastapi import BackgroundTasks, FastAPI, HTTPException, Query
-from pydantic import BaseModel, Field
+from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from pydantic import BaseModel, Field, model_validator
 
 from .domain import (
     Alert,
@@ -81,6 +81,14 @@ from .domain import (
     PredictionStatus,
 )
 from .config import get_aisstream_settings, get_firms_settings, get_opensky_settings
+from .assistant import (
+    AssistantInputError,
+    AssistantUnavailable,
+    MAX_AUDIO_BYTES,
+    OllamaEvidenceBoundReasoner,
+    transcribe_local_audio,
+    validated_layer_action,
+)
 from .alerts import AlertEngine
 from .anomalies import (
     AnomalyConfigurationError,
@@ -320,6 +328,81 @@ class OpenSkyIngestionResult(BaseModel):
     run_id: UUID | None = None
     freshness_observed_at: datetime | None = None
     credit_cost_estimate: int = 1
+
+
+class AssistantMapBounds(BaseModel):
+    min_lon: float = Field(ge=-180, le=180)
+    min_lat: float = Field(ge=-90, le=90)
+    max_lon: float = Field(ge=-180, le=180)
+    max_lat: float = Field(ge=-90, le=90)
+
+    @model_validator(mode="after")
+    def validate_bounds(self) -> "AssistantMapBounds":
+        if self.min_lon > self.max_lon or self.min_lat > self.max_lat:
+            raise ValueError("Map bounds are invalid")
+        return self
+
+
+class AssistantTravelPreferences(BaseModel):
+    model_config = {"extra": "forbid", "str_strip_whitespace": True}
+    pace: Literal["relaxed", "balanced", "packed"] | None = None
+    photo_interest: str | None = Field(default=None, max_length=120)
+
+
+class AssistantAnswerRequest(BaseModel):
+    question: str = Field(min_length=1, max_length=1200)
+    selected_entity_id: UUID | None = None
+    map_bounds: AssistantMapBounds | None = None
+    travel_preferences: AssistantTravelPreferences | None = None
+
+
+class AssistantEvidenceItem(BaseModel):
+    evidence_id: str
+    source_name: str
+    retrieved_at: str
+    freshness: Literal["fresh", "stale", "unavailable", "unknown"] = "unknown"
+
+
+class AssistantAction(BaseModel):
+    type: Literal["set_layer_visibility"]
+    layer_id: str
+    visible: bool
+
+
+class AssistantAnswerResponse(BaseModel):
+    answer: str
+    evidence: list[AssistantEvidenceItem] = Field(default_factory=list)
+    actions: list[AssistantAction] = Field(default_factory=list)
+    service_status: Literal["ready", "unavailable"]
+
+
+def _compact_assistant_context(world_context: WorldContext) -> dict[str, Any]:
+    """Keep only bounded, readable fields; never send large polygon coordinate arrays to the model."""
+    data = world_context.model_dump(mode="json")
+
+    def pick(rows: list[dict[str, Any]], keys: tuple[str, ...], limit: int = 30) -> list[dict[str, Any]]:
+        return [{key: row[key] for key in keys if key in row} for row in rows[:limit]]
+
+    point_geometries = []
+    for row in data.get("geometries", [])[:30]:
+        geometry = row.get("geometry") or {}
+        point = geometry.get("coordinates") if geometry.get("type") == "Point" else None
+        summary = {key: row[key] for key in ("id", "entity_id", "canonical_name", "geometry_kind", "evidence_id", "source_slug", "properties") if key in row}
+        if point:
+            summary["point"] = point
+        point_geometries.append(summary)
+
+    return {
+        "query_scope": data.get("query_scope"),
+        "entities": pick(data.get("entities", []), ("id", "canonical_name", "entity_kind", "attributes", "confidence")),
+        "observations": pick(data.get("observations", []), ("id", "entity_id", "canonical_name", "measure", "value", "unit", "starts_at", "ends_at", "observed_at", "truth_class", "confidence", "evidence_id", "source_slug", "point", "coordinates", "properties")),
+        "events": pick(data.get("events", []), ("id", "canonical_name", "title", "event_type", "kind", "category", "starts_at", "occurred_at", "truth_class", "evidence_id", "source_slug", "attributes", "properties", "coordinates", "point")),
+        "geometries": point_geometries,
+        "relationships": pick(data.get("relationships", []), ("id", "subject_entity_id", "predicate", "object_entity_id", "confidence", "evidence_id")),
+        "claims": pick(data.get("claims", []), ("id", "entity_id", "claim_type", "truth_class", "content", "confidence", "evidence_references")),
+        "evidence": pick(data.get("evidence", []), ("evidence_id", "source_slug", "source_name", "retrieved_at"), 60),
+        "assumptions_or_limitations": data.get("assumptions_or_limitations", [])[:20],
+    }
 
 
 
@@ -1257,6 +1340,110 @@ def live_context():
     if failures == 2:
         raise HTTPException(status_code=503, detail={"message": "Live context feeds are unavailable", "sources": result["sources"]})
     return result
+
+
+@app.post("/assistant/transcribe")
+async def assistant_transcribe(request: Request):
+    """Transcribe a bounded user-started recording using the local Whisper model."""
+    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
+    content_length = request.headers.get("content-length")
+    if content_length:
+        try:
+            if int(content_length) > MAX_AUDIO_BYTES:
+                raise HTTPException(status_code=413, detail="Audio recording exceeds the 5 MB limit")
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
+    audio = bytearray()
+    async for chunk in request.stream():
+        audio.extend(chunk)
+        if len(audio) > MAX_AUDIO_BYTES:
+            raise HTTPException(status_code=413, detail="Audio recording exceeds the 5 MB limit")
+    try:
+        transcript = await asyncio.to_thread(transcribe_local_audio, bytes(audio), content_type)
+        return {**transcript, "service_status": "ready"}
+    except AssistantInputError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except AssistantUnavailable as exc:
+        return {"text": "", "language": None, "service_status": "unavailable", "detail": str(exc)}
+
+
+@app.post("/assistant/answer", response_model=AssistantAnswerResponse)
+def assistant_answer(request: AssistantAnswerRequest) -> AssistantAnswerResponse:
+    """Explain a bounded, deterministic map slice without treating the model as a data source."""
+    actions = []
+    action = validated_layer_action(request.question)
+    if action:
+        actions.append(AssistantAction.model_validate(action))
+
+    if request.map_bounds or request.selected_entity_id:
+        bbox = None
+        if request.map_bounds:
+            bbox = BoundingBox(
+                min_longitude=request.map_bounds.min_lon,
+                min_latitude=request.map_bounds.min_lat,
+                max_longitude=request.map_bounds.max_lon,
+                max_latitude=request.map_bounds.max_lat,
+            )
+        try:
+            world_context = WorldRepository().scoped_context(
+                bbox=bbox,
+                entity_ids=[request.selected_entity_id] if request.selected_entity_id else None,
+                limit=30,
+            )
+        except Exception:
+            logger.exception("Could not assemble assistant map context")
+            return AssistantAnswerResponse(
+                answer="I can’t read the current WORLDOS map data right now. Please try again in a moment.",
+                actions=actions,
+                service_status="unavailable",
+            )
+        deterministic_result = _compact_assistant_context(world_context)
+    else:
+        deterministic_result = {
+            "entities": [], "observations": [], "events": [], "geometries": [],
+            "relationships": [], "claims": [], "evidence": [],
+            "assumptions_or_limitations": ["No map bounds or selected entity were supplied."],
+        }
+    if request.travel_preferences:
+        deterministic_result["user_preferences"] = request.travel_preferences.model_dump(exclude_none=True)
+
+    evidence = [
+        AssistantEvidenceItem(
+            evidence_id=str(item["evidence_id"]),
+            source_name=str(item["source_name"]),
+            retrieved_at=str(item["retrieved_at"]),
+            freshness="unknown",
+        )
+        for item in deterministic_result.get("evidence", [])
+        if item.get("evidence_id") and item.get("source_name") and item.get("retrieved_at")
+    ]
+    if not evidence:
+        answer = (
+            "Done — I updated the map layer visibility."
+            if actions
+            else "I don’t have sourced records for this view yet. Select a map feature or zoom into an area, and I’ll summarize what WORLDOS can verify."
+        )
+        return AssistantAnswerResponse(answer=answer, evidence=[], actions=actions, service_status="ready")
+    try:
+        result = OllamaEvidenceBoundReasoner().answer(
+            request.question,
+            deterministic_result,
+            [item.evidence_id for item in evidence],
+        )
+    except AssistantUnavailable:
+        return AssistantAnswerResponse(
+            answer="I couldn’t produce an answer tied to the available WORLDOS sources. Check that Ollama is running and try again; your question was not sent to a cloud service.",
+            evidence=[],
+            actions=actions,
+            service_status="unavailable",
+        )
+    cited_ids = set(result["evidence_ids"])
+    return AssistantAnswerResponse(
+        answer=result["answer"],
+        evidence=[item for item in evidence if item.evidence_id in cited_ids],
+        actions=actions,
+        service_status="ready",
+    )
 
 
 @app.get("/entities/{entity_id}/context")

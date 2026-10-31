@@ -267,6 +267,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
       mapRef.current.flyTo({
         center: targetLocation.center,
         zoom: targetLocation.zoom ?? 4.5,
+        duration: 1200,
         essential: true,
       });
     }
@@ -567,11 +568,12 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
             s.entity_id === selectedItem.data?.entity_id ||
             (s.attributes?.norad_id && s.attributes.norad_id === selectedItem.data?.attributes?.norad_id)
         );
-        if (selectedSat?.attributes?.ground_track && selectedSat.attributes.ground_track.length > 1) {
+        const groundTrack = selectedItem.data?.attributes?.ground_track || selectedSat?.attributes?.ground_track;
+        if (groundTrack && groundTrack.length > 1) {
           deckLayers.push(
             new PathLayer({
               id: 'deck-satellite-ground-track-selected',
-              data: splitTrackAtAntimeridian(selectedSat.attributes.ground_track).map((path, index) => ({ id: index, path })),
+              data: splitTrackAtAntimeridian(groundTrack).map((path, index) => ({ id: index, path })),
               pickable: false,
               widthMinPixels: 2.5,
               getPath: (d: { path: [number, number][] }) => d.path,

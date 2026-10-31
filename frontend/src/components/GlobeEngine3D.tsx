@@ -3,6 +3,7 @@ import {
   Cartesian3,
   Cesium3DTileset,
   Color,
+  ConstantProperty,
   GeoJsonDataSource,
   Ion,
   IonGeocodeProviderType,
@@ -103,6 +104,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const terrainPromiseRef = useRef<ReturnType<typeof createWorldTerrainAsync> | null>(null);
   const geojsonSourceRef = useRef<GeoJsonDataSource | null>(null);
   const handlerRef = useRef<ScreenSpaceEventHandler | null>(null);
+  const selectedHighlightRef = useRef<{ entity: any; width: number; height: number; tracks: any[] } | null>(null);
+  const selectedAircraftTrackRef = useRef<any>(null);
 
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
     const requestId = ++imageryRequestRef.current;
@@ -125,6 +128,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           }
           googleTilesetRef.current = tileset;
           viewer.scene.primitives.add(tileset);
+          viewer.scene.requestRender();
         }).catch(() => {
           if (!viewer.isDestroyed() && requestId === imageryRequestRef.current) {
             applyImageryLayers(viewer, mode, false);
@@ -153,6 +157,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
         viewer.imageryLayers.addImageryProvider(refOverlay);
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
+        viewer.scene.requestRender();
         return;
       }
 
@@ -174,6 +179,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
         viewer.imageryLayers.addImageryProvider(oceanRef);
         viewer.scene.globe.baseColor = Color.fromCssColorString('#031024');
+        viewer.scene.requestRender();
         return;
       }
 
@@ -195,6 +201,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       });
       viewer.imageryLayers.addImageryProvider(darkRef);
       viewer.scene.globe.baseColor = Color.fromCssColorString('#0a0e17');
+      viewer.scene.requestRender();
     } catch {
       // Graceful fallback
     }
@@ -214,6 +221,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       navigationHelpButton: false,
       infoBox: false,
       selectionIndicator: false,
+      targetFrameRate: 30,
+      requestRenderMode: true,
+      maximumRenderTimeChange: Infinity,
     });
 
     applyImageryLayers(viewer, basemapMode);
@@ -223,6 +233,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.camera.setView({
       destination: Cartesian3.fromDegrees(20.0, 20.0, 18_000_000),
     });
+    viewer.scene.requestRender();
 
     const emitCameraBounds = () => {
       try {
@@ -284,7 +295,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         terrainPromiseRef.current ??= createWorldTerrainAsync();
         terrainPromiseRef.current
           .then((terrainProvider) => {
-            if (viewerRef.current) viewerRef.current.terrainProvider = terrainProvider;
+            if (viewerRef.current) {
+              viewerRef.current.terrainProvider = terrainProvider;
+              viewerRef.current.scene.requestRender();
+            }
           })
           .catch(() => {});
       }
@@ -296,7 +310,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     if (viewerRef.current && targetLocation) {
       const [lon, lat] = targetLocation.center;
       const zoom = targetLocation.zoom ?? 4.5;
-      const height = Math.max(50_000, 20_000_000 / Math.pow(2, zoom - 1));
+      const height = Math.max(1_000, 20_000_000 / Math.pow(2, zoom - 1));
       viewerRef.current.camera.flyTo({
         destination: Cartesian3.fromDegrees(lon, lat, height),
         duration: 1.5,
@@ -315,6 +329,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       if (geojsonSourceRef.current) {
         viewer.dataSources.remove(geojsonSourceRef.current, true);
         geojsonSourceRef.current = null;
+        viewer.scene.requestRender();
       }
       return;
     }
@@ -363,6 +378,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         }
         geojsonSourceRef.current = ds;
         viewer.dataSources.add(ds);
+        viewer.scene.requestRender();
       })
       .catch(() => {});
   }, [layers, geometries]);
@@ -438,36 +454,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const altMeters = altitudeKm * 1000;
         const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
-        const isSelected =
-          selectedItem?.type === 'satellite' &&
-          (selectedItem.data?.entity_id === s.entity_id ||
-            selectedItem.data?.attributes?.norad_id === s.attributes?.norad_id);
-
         const ent = viewer.entities.add({
           position,
           billboard: {
             image: SATELLITE_ICON_PURPLE,
-            width: isSelected ? 18 : 5,
-            height: isSelected ? 18 : 5,
+            width: 5,
+            height: 5,
             scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
           },
         });
         (ent as any)._worldosType = 'satellite';
         (ent as any)._worldosData = s;
-
-        // ONLY render 3D orbital ground track if this specific satellite is selected!
-        // Suppresses disturbing all-satellite purple mesh web across the globe.
-        if (isSelected && s.attributes?.ground_track && s.attributes.ground_track.length > 1) {
-          splitTrackAtAntimeridian(s.attributes.ground_track).forEach((segment) => {
-            viewer.entities.add({
-              polyline: {
-                positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 0)),
-                width: 2.5,
-                material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
-              },
-            });
-          });
-        }
       }
     }
 
@@ -499,13 +496,12 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     if (layerMap.get('surveillance-cameras') && cameras.length > 0) {
       for (const c of cameras) {
         const position = Cartesian3.fromDegrees(c.longitude, c.latitude, 0);
-        const isSelected = selectedItem?.type === 'camera' && selectedItem.data?.entity_id === c.entity_id;
         const ent = viewer.entities.add({
           position,
           billboard: {
             image: CAMERA_ICON_EMERALD,
-            width: isSelected ? 32 : 24,
-            height: isSelected ? 32 : 24,
+            width: 24,
+            height: 24,
             scaleByDistance: new NearFarScalar(1.5e2, 1.3, 2.0e7, 0.55),
           },
         });
@@ -588,27 +584,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 8. Selected Entity Historical Track in 3D
-    if (selectedTrack && selectedTrack.length > 1) {
-      const trackPositions = selectedTrack.map((p) =>
-        Cartesian3.fromDegrees(
-          p.longitude,
-          p.latitude,
-          Math.max(150, p.attributes?.geo_altitude || p.attributes?.baro_altitude || 10000)
-        )
-      );
-      viewer.entities.add({
-        polyline: {
-          positions: trackPositions,
-          width: 3,
-          material: new PolylineGlowMaterialProperty({
-            glowPower: 0.3,
-            color: Color.fromCssColorString('#38bdf8'),
-          }),
-        },
-      });
-    }
-
     // 9. Strategic Multi-Modal Route in 3D Geodesic Space (Phase 1)
     if (activeRoute && activeRoute.waypoints.length > 1) {
       const routePositions = activeRoute.waypoints.map((w) =>
@@ -655,6 +630,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         },
       });
     }
+    viewer.scene.requestRender();
   }, [
     layers,
     aircraft,
@@ -667,10 +643,83 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     observations,
     alerts,
     infrastructure,
-    selectedTrack,
     activeRoute,
-    selectedItem,
   ]);
+
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+    if (selectedAircraftTrackRef.current) viewer.entities.remove(selectedAircraftTrackRef.current);
+    selectedAircraftTrackRef.current = null;
+    if (selectedTrack && selectedTrack.length > 1) {
+      const positions = selectedTrack.map((point) => Cartesian3.fromDegrees(
+        point.longitude,
+        point.latitude,
+        Math.max(150, point.attributes?.geo_altitude || point.attributes?.baro_altitude || 10000),
+      ));
+      selectedAircraftTrackRef.current = viewer.entities.add({
+        polyline: {
+          positions,
+          width: 3,
+          material: new PolylineGlowMaterialProperty({ glowPower: 0.3, color: Color.fromCssColorString('#38bdf8') }),
+        },
+      });
+    }
+    viewer.scene.requestRender();
+  }, [selectedTrack]);
+
+  // Update only the selected icon and its orbit path; do not rebuild thousands of entities on every click.
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer) return;
+
+    const previous = selectedHighlightRef.current;
+    if (previous) {
+      if (previous.entity?.billboard) {
+        previous.entity.billboard.width = new ConstantProperty(previous.width);
+        previous.entity.billboard.height = new ConstantProperty(previous.height);
+      }
+      previous.tracks.forEach((track) => viewer.entities.remove(track));
+      selectedHighlightRef.current = null;
+    }
+
+    if (selectedItem?.type === 'satellite') {
+      const noradId = selectedItem.data?.attributes?.norad_id;
+      const satellite = satellites.find((item) => item.entity_id === selectedItem.data?.entity_id ||
+        (noradId && item.attributes?.norad_id === noradId));
+      const entity = viewer.entities.values.find((item) => (item as any)._worldosType === 'satellite' &&
+        ((item as any)._worldosData?.entity_id === satellite?.entity_id ||
+          (noradId && (item as any)._worldosData?.attributes?.norad_id === noradId)));
+      if (entity?.billboard) {
+        selectedHighlightRef.current = { entity, width: 5, height: 5, tracks: [] };
+        entity.billboard.width = new ConstantProperty(18);
+        entity.billboard.height = new ConstantProperty(18);
+      }
+      const groundTrack = selectedItem.data?.attributes?.ground_track || satellite?.attributes?.ground_track;
+      if (groundTrack && groundTrack.length > 1) {
+        const highlight = selectedHighlightRef.current ?? { entity: null, width: 0, height: 0, tracks: [] };
+        splitTrackAtAntimeridian(groundTrack).forEach((segment) => {
+          highlight.tracks.push(viewer.entities.add({
+            polyline: {
+              positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 0)),
+              width: 2.5,
+              material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
+            },
+          }));
+        });
+        selectedHighlightRef.current = highlight;
+      }
+    } else if (selectedItem?.type === 'camera') {
+      const entity = viewer.entities.values.find((item) => (item as any)._worldosType === 'camera' &&
+        (item as any)._worldosData?.entity_id === selectedItem.data?.entity_id);
+      if (entity?.billboard) {
+        selectedHighlightRef.current = { entity, width: 24, height: 24, tracks: [] };
+        entity.billboard.width = new ConstantProperty(32);
+        entity.billboard.height = new ConstantProperty(32);
+      }
+    }
+    viewer.scene.requestRender();
+  }, [selectedItem, satellites]);
 
   return <div ref={containerRef} className="globe-container-3d" />;
 };

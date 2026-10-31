@@ -30,6 +30,7 @@ import {
   fetchInfrastructure,
   geometryFeatures,
   populationObservations,
+  AssistantAction,
 } from './api';
 import { BasemapMode, INITIAL_LAYERS, LayerDefinition, LayerId } from './types/layers';
 import { MapEngine2D, SelectedItemPayload } from './components/MapEngine2D';
@@ -40,6 +41,7 @@ import { CommandPalette } from './components/CommandPalette';
 import { EntityDetailsPanel } from './components/EntityDetailsPanel';
 import { SourceHealthModal } from './components/SourceHealthModal';
 import { RoutePlannerModal } from './components/RoutePlannerModal';
+import { AssistantPanel } from './components/AssistantPanel';
 import './styles.css';
 
 function withLiveFeedHealth(layers: LayerDefinition[], sources: LiveEventsResponse['sources']): LayerDefinition[] {
@@ -130,6 +132,7 @@ export default function App() {
   const [isCommandOpen, setIsCommandOpen] = useState(false);
   const [isSourceHealthOpen, setIsSourceHealthOpen] = useState(false);
   const [isRoutePlannerOpen, setIsRoutePlannerOpen] = useState(false);
+  const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [activeRoute, setActiveRoute] = useState<RoutePlanResponse | null>(null);
   const [isDockCollapsed, setIsDockCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -144,6 +147,11 @@ export default function App() {
         layer.id === id ? { ...layer, enabled: !layer.enabled } : layer
       )
     );
+  }, []);
+
+  const handleAssistantAction = useCallback((action: AssistantAction) => {
+    if (action.type !== 'set_layer_visibility' || !INITIAL_LAYERS.some((layer) => layer.id === action.layer_id)) return;
+    setLayers((prev) => prev.map((layer) => layer.id === action.layer_id ? { ...layer, enabled: action.visible } : layer));
   }, []);
 
   useEffect(() => {
@@ -341,6 +349,17 @@ export default function App() {
     setSelectedItem(item);
     setSelectedTrack(null);
 
+    const coords = item.data?.point || item.data?.coordinates || item.data?.geometry?.coordinates;
+    const longitude = item.data?.longitude ?? (Array.isArray(coords) ? coords[0] : undefined);
+    const latitude = item.data?.latitude ?? (Array.isArray(coords) ? coords[1] : undefined);
+    if (typeof longitude === 'number' && Number.isFinite(longitude) &&
+      typeof latitude === 'number' && Number.isFinite(latitude)) {
+      setTargetLocation({
+        center: [longitude, latitude],
+        zoom: item.type === 'camera' ? 15.5 : item.type === 'satellite' && viewMode === '3d' ? 4.5 : 9,
+      });
+    }
+
     // If an aircraft is selected, query its historical observation track
     if (item.type === 'aircraft') {
       const icao24 =
@@ -360,15 +379,12 @@ export default function App() {
     if (item.type === 'satellite') {
       const noradId = item.data?.attributes?.norad_id;
       if (noradId) fetchSatelliteGroundTrack(String(noradId)).then((groundTrack) => {
-        setSatellites((current) => current.map((satellite) => satellite.attributes?.norad_id === noradId
-          ? { ...satellite, attributes: { ...satellite.attributes, ground_track: groundTrack } }
-          : satellite));
         setSelectedItem((current) => current?.type === 'satellite' && current.data?.attributes?.norad_id === noradId
           ? { ...current, data: { ...current.data, attributes: { ...current.data.attributes, ground_track: groundTrack } } }
           : current);
       }).catch(() => {});
     }
-  }, []);
+  }, [viewMode]);
 
   // Viewport-aware context querying with debouncing
   const handleViewportChange = useCallback((bbox: BoundingBox, zoom?: number) => {
@@ -477,6 +493,8 @@ export default function App() {
         onOpenCommandPalette={() => setIsCommandOpen(true)}
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
         onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
+        onOpenAssistant={() => setIsAssistantOpen(true)}
+        isAssistantOpen={isAssistantOpen}
         isRouteActive={activeRoute !== null}
         isDockCollapsed={isDockCollapsed}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
@@ -565,6 +583,16 @@ export default function App() {
         onToggleLayer={handleToggleLayer}
         isCollapsed={isDockCollapsed}
         onToggleCollapse={() => setIsDockCollapsed((prev) => !prev)}
+      />
+
+      <AssistantPanel
+        isOpen={isAssistantOpen}
+        context={{
+          ...(selectedItem?.data?.entity_id ? { selected_entity_id: String(selectedItem.data.entity_id) } : {}),
+          ...(viewportBbox ? { map_bounds: viewportBbox } : {}),
+        }}
+        onClose={() => setIsAssistantOpen(false)}
+        onAction={handleAssistantAction}
       />
 
       {/* Entity & Event Details Dossier Drawer */}

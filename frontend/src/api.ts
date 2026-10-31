@@ -97,6 +97,39 @@ export type LiveContextResponse = {
   as_of: string;
 };
 
+export type AssistantContext = {
+  selected_entity_id?: string;
+  map_bounds?: BoundingBox;
+  travel_preferences?: { pace?: 'relaxed' | 'balanced' | 'packed'; photo_interest?: string };
+};
+
+export type AssistantEvidence = {
+  evidence_id: string;
+  source_name: string;
+  retrieved_at: string;
+  freshness: 'fresh' | 'stale' | 'unavailable' | 'unknown';
+};
+
+export type AssistantAction = {
+  type: 'set_layer_visibility';
+  layer_id: string;
+  visible: boolean;
+};
+
+export type AssistantAnswer = {
+  answer: string;
+  evidence: AssistantEvidence[];
+  actions: AssistantAction[];
+  service_status: 'ready' | 'unavailable';
+};
+
+export type AssistantTranscript = {
+  text: string;
+  language: string | null;
+  service_status: 'ready' | 'unavailable';
+  detail?: string;
+};
+
 export type AircraftState = {
   id: string;
   observation_id?: string;
@@ -548,6 +581,32 @@ export async function fetchLiveEvents(): Promise<LiveEventsResponse> {
 export async function fetchLiveContext(): Promise<LiveContextResponse> {
   const response = await fetch(`${apiBase}/context/live`);
   if (!response.ok) throw new Error(`API error ${response.status} fetching live context`);
+  return response.json();
+}
+
+export async function transcribeAssistantAudio(audio: Blob): Promise<AssistantTranscript> {
+  const response = await fetch(`${apiBase}/assistant/transcribe`, {
+    method: 'POST',
+    headers: { 'Content-Type': audio.type || 'audio/webm' },
+    body: audio,
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Transcription failed (${response.status})`);
+  }
+  return response.json();
+}
+
+export async function answerAssistant(question: string, context: AssistantContext): Promise<AssistantAnswer> {
+  const response = await fetch(`${apiBase}/assistant/answer`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ question, ...context }),
+  });
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Assistant request failed (${response.status})`);
+  }
   return response.json();
 }
 
