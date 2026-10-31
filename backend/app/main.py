@@ -2,12 +2,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 
 from .domain import (
@@ -191,16 +193,30 @@ app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first worl
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
+    allow_origins=[origin.strip() for origin in os.getenv("WORLDOS_CORS_ORIGINS", "*").split(",") if origin.strip()],
+    allow_credentials=False,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
 
+@app.middleware("http")
+async def public_read_only_guard(request: Request, call_next):
+    """Block unauthenticated database mutations when the API is publicly deployed."""
+    if os.getenv("WORLDOS_PUBLIC_READ_ONLY", "false").strip().lower() == "true":
+        safe_posts = {"/routing/plan", "/constraints/validate", "/assistant/answer"}
+        if request.method not in {"GET", "HEAD", "OPTIONS"} and not (
+            request.method == "POST" and request.url.path in safe_posts
+        ):
+            return JSONResponse(
+                status_code=403,
+                content={"detail": "Write operations are disabled on this public demo API."},
+            )
+    return await call_next(request)
+
+
 @app.exception_handler(ConstraintViolationError)
 def constraint_violation_handler(request, exc: ConstraintViolationError):
-    from fastapi.responses import JSONResponse
     return JSONResponse(
         status_code=422,
         content={
