@@ -17,7 +17,9 @@ services:
       retries: 12
 
   api:
-    build: ./backend
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
     environment:
       WORLDOS_DATABASE_URL: postgresql://worldos:worldos_dev_only@postgres:5432/worldos
       OPENSKY_CLIENT_ID: ${OPENSKY_CLIENT_ID:-}
@@ -29,10 +31,13 @@ services:
       WORLDOS_WHISPER_MODEL_DIR: /models/whisper-tiny
       WORLDOS_PUBLIC_READ_ONLY: ${WORLDOS_PUBLIC_READ_ONLY:-false}
       WORLDOS_CORS_ORIGINS: ${WORLDOS_CORS_ORIGINS:-*}
+      WORLDOS_ENABLE_LOCAL_ASSISTANT: ${WORLDOS_ENABLE_LOCAL_ASSISTANT:-true}
+      WORLDOS_RUN_MIGRATIONS_ON_START: ${WORLDOS_RUN_MIGRATIONS_ON_START:-false}
     ports:
       - "8000:8000"
     volumes:
       - ./backend:/app
+      - ./db/init:/app/db/init:ro
       - worldos-model-cache:/models
     depends_on:
       postgres:

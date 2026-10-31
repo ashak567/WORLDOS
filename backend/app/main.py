@@ -1361,6 +1361,8 @@ def live_context():
 @app.post("/assistant/transcribe")
 async def assistant_transcribe(request: Request):
     """Transcribe a bounded user-started recording using the local Whisper model."""
+    if os.getenv("WORLDOS_ENABLE_LOCAL_ASSISTANT", "true").strip().lower() != "true":
+        return {"text": "", "language": None, "service_status": "unavailable", "detail": "Local voice is available only on the computer running WORLDOS."}
     content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
     content_length = request.headers.get("content-length")
     if content_length:
@@ -1386,6 +1388,11 @@ async def assistant_transcribe(request: Request):
 @app.post("/assistant/answer", response_model=AssistantAnswerResponse)
 def assistant_answer(request: AssistantAnswerRequest) -> AssistantAnswerResponse:
     """Explain a bounded, deterministic map slice without treating the model as a data source."""
+    if os.getenv("WORLDOS_ENABLE_LOCAL_ASSISTANT", "true").strip().lower() != "true":
+        return AssistantAnswerResponse(
+            answer="The local assistant is available when WORLDOS is running on your computer.",
+            service_status="unavailable",
+        )
     actions = []
     action = validated_layer_action(request.question)
     if action:
