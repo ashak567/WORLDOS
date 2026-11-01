@@ -84,7 +84,7 @@ class OpenSkyTokenManager:
         )
 
         try:
-            with urlopen(req, timeout=15) as resp:
+            with urlopen(req, timeout=60) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except HTTPError as e:
             status = e.code
@@ -262,7 +262,7 @@ def fetch_aircraft_states(
     )
 
     try:
-        with urlopen(req, timeout=30) as resp:
+        with urlopen(req, timeout=60) as resp:
             raw_body = resp.read()
             payload = json.loads(raw_body.decode("utf-8"))
     except HTTPError as e:

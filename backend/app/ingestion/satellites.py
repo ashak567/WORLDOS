@@ -563,7 +563,7 @@ def _get_active_catalog(
             headers={"Accept": "application/json", "User-Agent": "WORLDOS/0.1 satellite catalog"},
         )
         try:
-            with urlopen(request, timeout=30) as response:  # nosec B310: fixed HTTPS provider URL
+            with urlopen(request, timeout=90) as response:  # nosec B310: fixed HTTPS provider URL
                 raw = response.read(CELESTRAK_MAX_RESPONSE_BYTES + 1)
             if len(raw) > CELESTRAK_MAX_RESPONSE_BYTES:
                 raise SatelliteFeedError("CelesTrak active catalog exceeded the 25 MB response limit")
