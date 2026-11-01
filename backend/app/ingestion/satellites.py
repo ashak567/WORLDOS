@@ -319,6 +319,9 @@ def load_authoritative_satellites(now: datetime | None = None) -> list[Satellite
                 current_velocity_kms=item["velocity_kms"],
                 ground_track=track,
                 epoch=epoch,
+                elements_epoch=epoch,
+                elements_retrieved_at=epoch,
+                feed_status="authoritative",
             )
         )
     return records
@@ -735,14 +738,17 @@ def satellite_to_api_state(record: SatelliteRecord) -> dict[str, Any]:
         json.dumps(record.raw_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
-    def as_utc(value: datetime) -> datetime:
+    def as_utc(value: datetime | None, default: datetime) -> datetime:
+        if value is None:
+            value = default
         if value.tzinfo is None or value.utcoffset() is None:
             return value.replace(tzinfo=UTC)
         return value.astimezone(UTC)
 
-    epoch = as_utc(record.epoch)
-    elements_epoch = as_utc(record.elements_epoch)
-    elements_retrieved_at = as_utc(record.elements_retrieved_at)
+    now_utc = datetime.now(UTC)
+    epoch = as_utc(record.epoch, now_utc)
+    elements_epoch = as_utc(record.elements_epoch, epoch)
+    elements_retrieved_at = as_utc(record.elements_retrieved_at, epoch)
     element_age_hours = max(0.0, (epoch - elements_epoch).total_seconds() / 3600.0)
     locator = f"{CELESTRAK_ACTIVE_URL}#NORAD_CAT_ID={record.norad_id}"
     entity_id = stable_id("entity", "satellite", record.norad_id)

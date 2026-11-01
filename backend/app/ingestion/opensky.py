@@ -84,7 +84,7 @@ class OpenSkyTokenManager:
         )
 
         try:
-            with urlopen(req, timeout=60) as resp:
+            with urlopen(req, timeout=8) as resp:
                 data = json.loads(resp.read().decode("utf-8"))
         except HTTPError as e:
             status = e.code
@@ -142,6 +142,89 @@ class AircraftStateRecord:
 
 # Global token manager singleton
 _token_manager: OpenSkyTokenManager | None = None
+_cached_aircraft_states: tuple[list[AircraftStateRecord], float] | None = None
+
+
+def get_cached_aircraft_states(max_age_seconds: float = 30.0) -> list[AircraftStateRecord] | None:
+    global _cached_aircraft_states
+    if _cached_aircraft_states is None:
+        return None
+    records, cached_at = _cached_aircraft_states
+    if time.time() - cached_at <= max_age_seconds:
+        return records
+    return None
+
+
+def set_cached_aircraft_states(records: list[AircraftStateRecord]) -> None:
+    global _cached_aircraft_states
+    _cached_aircraft_states = (records, time.time())
+
+
+SAMPLE_AIRCRAFT_DATA: list[dict[str, Any]] = [
+    # North Atlantic Corridors
+    {"icao24": "4006c3", "callsign": "BAW178", "country": "United Kingdom", "lat": 52.34, "lon": -35.21, "alt": 11277, "track": 260.0, "vel": 235.0},
+    {"icao24": "a0211a", "callsign": "UAL854", "country": "United States", "lat": 48.12, "lon": -42.84, "alt": 10668, "track": 255.0, "vel": 242.0},
+    {"icao24": "3c65c2", "callsign": "DLH400", "country": "Germany", "lat": 55.40, "lon": -28.65, "alt": 10972, "track": 270.0, "vel": 230.0},
+    {"icao24": "3949ee", "callsign": "AFR006", "country": "France", "lat": 51.05, "lon": -38.50, "alt": 11582, "track": 265.0, "vel": 238.0},
+    # European Airspace
+    {"icao24": "4ca255", "callsign": "RYR415", "country": "Ireland", "lat": 48.85, "lon": 2.35, "alt": 9753, "track": 140.0, "vel": 215.0},
+    {"icao24": "407172", "callsign": "EZY812", "country": "United Kingdom", "lat": 51.50, "lon": -0.12, "alt": 8534, "track": 180.0, "vel": 210.0},
+    {"icao24": "4b1802", "callsign": "SWR124", "country": "Switzerland", "lat": 46.81, "lon": 8.22, "alt": 10363, "track": 125.0, "vel": 220.0},
+    {"icao24": "468e21", "callsign": "SAS532", "country": "Sweden", "lat": 59.32, "lon": 18.06, "alt": 10668, "track": 200.0, "vel": 225.0},
+    # North America
+    {"icao24": "a3b102", "callsign": "AAL100", "country": "United States", "lat": 40.71, "lon": -74.00, "alt": 9144, "track": 75.0, "vel": 245.0},
+    {"icao24": "a79401", "callsign": "DAL221", "country": "United States", "lat": 33.64, "lon": -84.42, "alt": 10668, "track": 285.0, "vel": 232.0},
+    {"icao24": "a9314e", "callsign": "SWA421", "country": "United States", "lat": 37.61, "lon": -122.37, "alt": 10058, "track": 90.0, "vel": 228.0},
+    {"icao24": "c01823", "callsign": "ACA872", "country": "Canada", "lat": 45.47, "lon": -73.74, "alt": 11277, "track": 60.0, "vel": 240.0},
+    # Middle East & Gulf Hubs
+    {"icao24": "896081", "callsign": "UAE201", "country": "United Arab Emirates", "lat": 25.25, "lon": 55.36, "alt": 10972, "track": 310.0, "vel": 248.0},
+    {"icao24": "06a12e", "callsign": "QTR701", "country": "Qatar", "lat": 28.50, "lon": 51.53, "alt": 11582, "track": 320.0, "vel": 245.0},
+    # Asia & Pacific
+    {"icao24": "76ce81", "callsign": "SIA22", "country": "Singapore", "lat": 1.36, "lon": 103.99, "alt": 11887, "track": 335.0, "vel": 252.0},
+    {"icao24": "7809a4", "callsign": "CCA981", "country": "China", "lat": 39.90, "lon": 116.40, "alt": 10668, "track": 45.0, "vel": 235.0},
+    {"icao24": "8619bc", "callsign": "ANA106", "country": "Japan", "lat": 35.77, "lon": 139.77, "alt": 11277, "track": 65.0, "vel": 242.0},
+    {"icao24": "710115", "callsign": "KAL081", "country": "Republic of Korea", "lat": 37.46, "lon": 126.44, "alt": 10972, "track": 55.0, "vel": 240.0},
+    {"icao24": "780512", "callsign": "CPA830", "country": "Hong Kong", "lat": 22.31, "lon": 113.91, "alt": 11582, "track": 35.0, "vel": 245.0},
+    {"icao24": "800311", "callsign": "AIC101", "country": "India", "lat": 28.55, "lon": 77.10, "alt": 10668, "track": 305.0, "vel": 238.0},
+    # Southern Hemisphere & Oceania
+    {"icao24": "7c4581", "callsign": "QFA11", "country": "Australia", "lat": -33.94, "lon": 151.17, "alt": 11277, "track": 70.0, "vel": 250.0},
+    {"icao24": "c81d24", "callsign": "ANZ002", "country": "New Zealand", "lat": -37.00, "lon": 174.78, "alt": 10972, "track": 50.0, "vel": 245.0},
+    {"icao24": "e08422", "callsign": "LAN800", "country": "Chile", "lat": -33.39, "lon": -70.78, "alt": 10668, "track": 240.0, "vel": 235.0},
+    {"icao24": "e4811a", "callsign": "GLO142", "country": "Brazil", "lat": -23.55, "lon": -46.63, "alt": 9753, "track": 15.0, "vel": 225.0},
+    {"icao24": "00a124", "callsign": "SAA203", "country": "South Africa", "lat": -26.13, "lon": 28.24, "alt": 10363, "track": 300.0, "vel": 230.0},
+]
+
+
+def load_sample_aircraft(now: datetime | None = None) -> list[AircraftStateRecord]:
+    """Provide realistic worldwide commercial flight states when live OpenSky feed has no database snapshot yet."""
+    epoch = now or datetime.now(UTC)
+    records: list[AircraftStateRecord] = []
+    for item in SAMPLE_AIRCRAFT_DATA:
+        callsign = item["callsign"]
+        content_hash = hashlib.sha256(f"{item['icao24']}:{callsign}:{epoch.isoformat()}".encode("utf-8")).hexdigest()
+        records.append(
+            AircraftStateRecord(
+                icao24=item["icao24"],
+                callsign=callsign,
+                origin_country=item["country"],
+                time_position=epoch,
+                last_contact=epoch,
+                longitude=item["lon"],
+                latitude=item["lat"],
+                baro_altitude=float(item["alt"]),
+                on_ground=False,
+                velocity=float(item["vel"]),
+                true_track=float(item["track"]),
+                vertical_rate=0.0,
+                geo_altitude=float(item["alt"]),
+                squawk="1000",
+                position_source=0,
+                category=1,
+                locator="worldos://simulated-flight-corridor",
+                content_hash=content_hash,
+            )
+        )
+    return records
 
 
 def get_token_manager() -> OpenSkyTokenManager:
@@ -238,6 +321,11 @@ def fetch_aircraft_states(
     token_manager: OpenSkyTokenManager | None = None,
 ) -> list[AircraftStateRecord]:
     """Query OpenSky Network /states/all with OAuth2 authentication and bounding box scoping."""
+    if lamin is None and lomin is None and lamax is None and lomax is None:
+        cached = get_cached_aircraft_states(max_age_seconds=30.0)
+        if cached is not None:
+            return cached
+
     mgr = token_manager or get_token_manager()
     token = mgr.get_token()
 
@@ -289,4 +377,6 @@ def fetch_aircraft_states(
             records.append(record)
 
     logger.info("Parsed %d valid aircraft state vectors from OpenSky (total states: %d)", len(records), len(raw_states))
+    if lamin is None and lomin is None and lamax is None and lomax is None and records:
+        set_cached_aircraft_states(records)
     return records

@@ -108,6 +108,7 @@ from .ingestion.opensky import (
     OpenSkyError,
     OpenSkyRateLimitError,
     fetch_aircraft_states,
+    load_sample_aircraft,
 )
 from .ingestion.usgs import EarthquakeRecord, fetch_earthquake
 from .ingestion.world_bank import fetch_country_point, fetch_population, retrieved_now
@@ -977,7 +978,7 @@ def ingest_opensky_states(
         records = fetch_aircraft_states(lamin=lamin, lomin=lomin, lamax=lamax, lomax=lomax)
         persisted_count = 0
         latest_obs = None
-        for r in records:
+        for r in records[:1000]:
             bundle = opensky_aircraft_bundle(r, now)
             repo.ingest(bundle)
             persisted_count += 1
@@ -1051,10 +1052,10 @@ def ingest_opensky_states(
         raise HTTPException(status_code=500, detail=f"OpenSky ingestion failed: {exc}") from exc
 
 
-def _aircraft_record_to_api(r: AircraftStateRecord) -> dict[str, Any]:
+def _aircraft_record_to_api(r: AircraftStateRecord, truth_class: str = "OBSERVED") -> dict[str, Any]:
     time_str = r.observation_time.isoformat()
-    obs_id = stable_id("observation", "aircraft", r.icao24, time_str)
-    entity_id = stable_id("entity", "aircraft", r.icao24)
+    obs_id = str(stable_id("observation", "aircraft", r.icao24, time_str))
+    entity_id = str(stable_id("entity", "aircraft", r.icao24))
     canonical_name = r.callsign if r.callsign else f"ICAO24:{r.icao24.upper()}"
     return {
         "id": obs_id,
@@ -1064,15 +1065,15 @@ def _aircraft_record_to_api(r: AircraftStateRecord) -> dict[str, Any]:
         "measure": "aircraft.state",
         "value": float(r.baro_altitude or 0.0),
         "unit": "meters",
-        "truth_class": "OBSERVED",
+        "truth_class": truth_class,
         "observed_at": time_str,
         "longitude": r.longitude,
         "latitude": r.latitude,
         "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
         "evidence_locator": r.locator,
         "evidence_content_hash": r.content_hash,
-        "source_slug": "opensky-network",
-        "source_name": "OpenSky Network",
+        "source_slug": "opensky-network" if truth_class == "OBSERVED" else "simulated-aircraft",
+        "source_name": "OpenSky Network" if truth_class == "OBSERVED" else "Simulated Flight Corridor",
         "confidence": 1.0,
         "attributes": {
             "icao24": r.icao24,
@@ -1130,7 +1131,6 @@ def _vessel_record_to_api(r: Any) -> dict[str, Any]:
 
 @app.get("/aircraft/states")
 def list_aircraft_states(
-    background_tasks: BackgroundTasks,
     min_lon: float | None = Query(default=None),
     min_lat: float | None = Query(default=None),
     max_lon: float | None = Query(default=None),
@@ -1148,17 +1148,21 @@ def list_aircraft_states(
     max_lon_f = float(max_lon_v) if max_lon_v is not None else None
     max_lat_f = float(max_lat_v) if max_lat_v is not None else None
 
-    db_records = WorldRepository().aircraft_states(
-        min_lon=min_lon_f,
-        min_lat=min_lat_f,
-        max_lon=max_lon_f,
-        max_lat=max_lat_f,
-        limit=limit_v,
-    )
-    if db_records:
-        return db_records
+    # 1. Query persisted database records first
+    try:
+        db_records = WorldRepository().aircraft_states(
+            min_lon=min_lon_f,
+            min_lat=min_lat_f,
+            max_lon=max_lon_f,
+            max_lat=max_lat_f,
+            limit=limit_v,
+        )
+        if db_records:
+            return db_records
+    except Exception as exc:
+        logger.warning("Could not query DB aircraft states: %s", exc)
 
-    # On fresh deployment when DB has no stored aircraft yet, query OpenSky live on demand
+    # 2. If DB has no stored aircraft yet (cold boot / initial deploy), fetch live OpenSky or check in-memory cache
     if get_opensky_settings().is_configured:
         try:
             live = fetch_aircraft_states(
@@ -1168,12 +1172,22 @@ def list_aircraft_states(
                 lomax=max_lon_f,
             )
             if live:
-                background_tasks.add_task(ingest_opensky_states, global_snapshot=True)
-                return [_aircraft_record_to_api(r) for r in live[:limit_v]]
+                return [_aircraft_record_to_api(r, truth_class="OBSERVED") for r in live[:limit_v]]
         except Exception as exc:
-            logger.warning("Could not fetch on-demand live aircraft: %s", exc)
+            logger.warning("Could not fetch live OpenSky aircraft: %s", exc)
 
-    return []
+    # 3. Fall back to realistic sample commercial flights so viewport is never broken
+    sample_records = load_sample_aircraft()
+    filtered = []
+    for r in sample_records:
+        if min_lon_f is not None and max_lon_f is not None and not (min_lon_f <= r.longitude <= max_lon_f):
+            continue
+        if min_lat_f is not None and max_lat_f is not None and not (min_lat_f <= r.latitude <= max_lat_f):
+            continue
+        filtered.append(_aircraft_record_to_api(r, truth_class="SIMULATED"))
+        if len(filtered) >= limit_v:
+            break
+    return filtered
 
 
 @app.get("/aircraft/states/{icao24}/track")

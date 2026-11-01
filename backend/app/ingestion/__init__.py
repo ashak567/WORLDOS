@@ -6,7 +6,7 @@ from .live_hazards import LiveHazardFeedError, fetch_gdacs_alerts, fetch_open_na
 from .live_context import LiveContextFeedError, fetch_global_climate, fetch_global_news
 from .maritime import fetch_maritime_vessels, load_sample_vessels, maritime_vessel_bundle
 from .natural_earth import fetch_country_boundary, parse_country_boundary
-from .opensky import fetch_aircraft_states
+from .opensky import fetch_aircraft_states, load_sample_aircraft
 from .satellites import (
     SatelliteFeedError,
     fetch_current_satellites,
@@ -36,6 +36,7 @@ __all__ = [
     "fetch_maritime_vessels",
     "fetch_population",
     "infrastructure_to_world_bundle",
+    "load_sample_aircraft",
     "load_authoritative_cameras",
     "load_authoritative_infrastructure",
     "load_authoritative_satellites",
