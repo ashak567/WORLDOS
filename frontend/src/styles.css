@@ -165,12 +165,14 @@ html, body, #root {
   gap: 16px;
   flex: 1 1 0;
   min-width: 0;
-  justify-content: center;
+  justify-content: flex-start;
   overflow-x: auto;
   scrollbar-width: none;
 }
 
 .hud-center-group::-webkit-scrollbar { display: none; }
+.hud-center-group > * { flex: 0 0 auto; }
+.hud-center-group > .mode-switcher:first-child { position: sticky; left: 0; z-index: 1; }
 
 /* Mode Switcher Pill */
 .mode-switcher {
