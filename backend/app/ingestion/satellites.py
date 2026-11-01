@@ -611,7 +611,11 @@ def fetch_current_satellites(
 ) -> list[SatelliteRecord]:
     """Fetch the active CelesTrak catalog and propagate every supported OMM record."""
     calculated_at = now or datetime.now(UTC)
-    payload, retrieved_at, feed_status = _get_active_catalog(calculated_at, fallback_catalog)
+    try:
+        payload, retrieved_at, feed_status = _get_active_catalog(calculated_at, fallback_catalog)
+    except SatelliteFeedError as exc:
+        logger.warning("CelesTrak upstream and persistent cache unavailable; using authoritative satellites: %s", exc)
+        return load_authoritative_satellites(calculated_at)
     jd, fr = _julian_date(calculated_at)
     result: list[SatelliteRecord] = []
     failed = 0
@@ -685,9 +689,21 @@ def fetch_satellite_ground_track(
     if not norad_id.isdecimal() or len(norad_id) > 8 or not 12 <= points <= 360:
         raise SatelliteFeedError("Invalid NORAD catalog ID or ground-track point count")
     calculated_at = now or datetime.now(UTC)
-    catalog, _, _ = _get_active_catalog(calculated_at, fallback_catalog)
+    try:
+        catalog, _, _ = _get_active_catalog(calculated_at, fallback_catalog)
+    except SatelliteFeedError:
+        catalog = []
     item = next((row for row in catalog if str(row.get("NORAD_CAT_ID")) == norad_id), None)
     if item is None:
+        auth_item = next((row for row in AUTHORITATIVE_SATELLITES if str(row["norad_id"]) == norad_id), None)
+        if auth_item is not None:
+            return generate_orbital_ground_track(
+                inclination_deg=auth_item["inclination_deg"],
+                current_lon=auth_item["lon"],
+                current_lat=auth_item["lat"],
+                period_min=auth_item["period_min"],
+                points=points,
+            )
         raise SatelliteFeedError(f"NORAD catalog ID {norad_id} is not in the active catalog")
     try:
         satrec = Satrec()

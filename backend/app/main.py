@@ -117,6 +117,7 @@ from .ingestion import (
     fetch_current_satellites,
     fetch_satellite_ground_track,
     get_active_catalog_cache,
+    load_authoritative_satellites,
     fetch_gdacs_alerts,
     fetch_open_natural_events,
     fetch_recent_earthquakes,
@@ -1133,7 +1134,8 @@ def list_satellites(limit: int = Query(default=20_000, ge=1, le=20_000)):
             fallback_catalog=fallback_catalog,
         )
     except SatelliteFeedError as exc:
-        raise HTTPException(status_code=503, detail=str(exc)) from exc
+        logger.warning("CelesTrak unavailable and no DB cache: %s; serving authoritative satellites", exc)
+        records = load_authoritative_satellites()
 
     # Automatically persist the active catalog to database cache if fresh or if DB cache was empty
     try:
