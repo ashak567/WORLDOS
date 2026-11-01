@@ -9,7 +9,9 @@ import psycopg
 
 def run_migrations() -> None:
     migration_dir = Path(__file__).resolve().parents[1] / "db" / "init"
-    database_url = os.environ["WORLDOS_DATABASE_URL"]
+    database_url = os.environ.get("WORLDOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+    if not database_url:
+        raise RuntimeError("Neither WORLDOS_DATABASE_URL nor DATABASE_URL is set in environment")
     with psycopg.connect(database_url, connect_timeout=20) as connection:
         connection.execute(
             """CREATE TABLE IF NOT EXISTS worldos_schema_migrations (

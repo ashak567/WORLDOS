@@ -99,7 +99,9 @@ def _clean_record(d: dict[str, Any]) -> dict[str, Any]:
 
 class WorldRepository:
     def __init__(self, database_url: str | None = None) -> None:
-        self.database_url = database_url or os.environ["WORLDOS_DATABASE_URL"]
+        self.database_url = database_url or os.environ.get("WORLDOS_DATABASE_URL") or os.environ.get("DATABASE_URL")
+        if not self.database_url:
+            raise KeyError("Neither WORLDOS_DATABASE_URL nor DATABASE_URL environment variable is set")
         self.constraint_engine = ConstraintEngine(repository=self)
         self.alert_engine = AlertEngine(repository=self)
         self.decision_engine = DecisionEngine(repository=self)

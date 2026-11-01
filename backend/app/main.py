@@ -1452,7 +1452,8 @@ def live_context():
 @app.post("/assistant/elevenlabs/session")
 def assistant_elevenlabs_session(request: Request) -> dict[str, str]:
     """Mint a bounded short-lived token for the authenticated ElevenLabs voice agent."""
-    if os.getenv("WORLDOS_ENABLE_ASSISTANT", "true").strip().lower() != "true":
+    enable_assistant = os.getenv("WORLDOS_ENABLE_ASSISTANT") or os.getenv("WORLDOS_ENABLE_LOCAL_ASSISTANT") or "true"
+    if enable_assistant.strip().lower() != "true":
         raise HTTPException(status_code=503, detail="The WORLDOS assistant is disabled")
     host = request.client.host if request.client else "unknown"
     rate_limit = int(os.getenv("WORLDOS_ASSISTANT_SESSION_RATE_LIMIT", "60"))
