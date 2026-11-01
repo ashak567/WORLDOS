@@ -124,6 +124,7 @@ from .ingestion import (
     infrastructure_to_world_bundle,
     load_authoritative_cameras,
     load_authoritative_infrastructure,
+    load_sample_vessels,
     maritime_vessel_bundle,
     SatelliteFeedError,
     LiveHazardFeedError,
@@ -1050,8 +1051,86 @@ def ingest_opensky_states(
         raise HTTPException(status_code=500, detail=f"OpenSky ingestion failed: {exc}") from exc
 
 
+def _aircraft_record_to_api(r: AircraftStateRecord) -> dict[str, Any]:
+    time_str = r.observation_time.isoformat()
+    obs_id = stable_id("observation", "aircraft", r.icao24, time_str)
+    entity_id = stable_id("entity", "aircraft", r.icao24)
+    canonical_name = r.callsign if r.callsign else f"ICAO24:{r.icao24.upper()}"
+    return {
+        "id": obs_id,
+        "observation_id": obs_id,
+        "entity_id": entity_id,
+        "canonical_name": canonical_name,
+        "measure": "aircraft.state",
+        "value": float(r.baro_altitude or 0.0),
+        "unit": "meters",
+        "truth_class": "OBSERVED",
+        "observed_at": time_str,
+        "longitude": r.longitude,
+        "latitude": r.latitude,
+        "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+        "evidence_locator": r.locator,
+        "evidence_content_hash": r.content_hash,
+        "source_slug": "opensky-network",
+        "source_name": "OpenSky Network",
+        "confidence": 1.0,
+        "attributes": {
+            "icao24": r.icao24,
+            "callsign": r.callsign,
+            "squawk": r.squawk,
+            "category": r.category,
+            "velocity": r.velocity,
+            "on_ground": r.on_ground,
+            "true_track": r.true_track,
+            "geo_altitude": r.geo_altitude,
+            "baro_altitude": r.baro_altitude,
+            "vertical_rate": r.vertical_rate,
+            "origin_country": r.origin_country,
+            "position_source": r.position_source,
+        },
+    }
+
+
+def _vessel_record_to_api(r: Any) -> dict[str, Any]:
+    time_str = r.observed_at.isoformat()
+    obs_id = stable_id("observation", "vessel", r.mmsi, time_str)
+    entity_id = stable_id("entity", "vessel", r.mmsi)
+    return {
+        "observation_id": obs_id,
+        "entity_id": entity_id,
+        "canonical_name": r.name,
+        "measure": "maritime.vessel_state",
+        "value": float(r.sog_knots),
+        "unit": "knots",
+        "truth_class": getattr(r, "truth_class", "SIMULATED"),
+        "observed_at": time_str,
+        "longitude": r.longitude,
+        "latitude": r.latitude,
+        "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+        "evidence_locator": r.source_locator,
+        "evidence_content_hash": stable_id("hash", r.source_locator),
+        "source_slug": "aisstream" if getattr(r, "truth_class", "") == "OBSERVED" else "simulated-vessels",
+        "source_name": "AISStream.io" if getattr(r, "truth_class", "") == "OBSERVED" else "Simulated Maritime Corridor",
+        "confidence": 1.0,
+        "attributes": {
+            "mmsi": r.mmsi,
+            "imo": r.imo,
+            "callsign": r.callsign,
+            "flag": r.flag,
+            "ship_type": r.ship_type,
+            "sog": r.sog_knots,
+            "cog": r.cog_degrees,
+            "heading": r.heading_degrees,
+            "draft": r.draft_meters,
+            "destination": r.destination,
+            "nav_status": r.nav_status,
+        },
+    }
+
+
 @app.get("/aircraft/states")
 def list_aircraft_states(
+    background_tasks: BackgroundTasks,
     min_lon: float | None = Query(default=None),
     min_lat: float | None = Query(default=None),
     max_lon: float | None = Query(default=None),
@@ -1069,13 +1148,32 @@ def list_aircraft_states(
     max_lon_f = float(max_lon_v) if max_lon_v is not None else None
     max_lat_f = float(max_lat_v) if max_lat_v is not None else None
 
-    return WorldRepository().aircraft_states(
+    db_records = WorldRepository().aircraft_states(
         min_lon=min_lon_f,
         min_lat=min_lat_f,
         max_lon=max_lon_f,
         max_lat=max_lat_f,
         limit=limit_v,
     )
+    if db_records:
+        return db_records
+
+    # On fresh deployment when DB has no stored aircraft yet, query OpenSky live on demand
+    if get_opensky_settings().is_configured:
+        try:
+            live = fetch_aircraft_states(
+                lamin=min_lat_f,
+                lomin=min_lon_f,
+                lamax=max_lat_f,
+                lomax=max_lon_f,
+            )
+            if live:
+                background_tasks.add_task(ingest_opensky_states, global_snapshot=True)
+                return [_aircraft_record_to_api(r) for r in live[:limit_v]]
+        except Exception as exc:
+            logger.warning("Could not fetch on-demand live aircraft: %s", exc)
+
+    return []
 
 
 @app.get("/aircraft/states/{icao24}/track")
@@ -1098,13 +1196,33 @@ def list_maritime_vessels(
     max_lat_v = _clean_param(max_lat)
     limit_v = _clean_param(limit, 200)
 
-    return WorldRepository().maritime_vessels(
+    db_vessels = WorldRepository().maritime_vessels(
         min_lon=float(min_lon_v) if min_lon_v is not None else None,
         min_lat=float(min_lat_v) if min_lat_v is not None else None,
         max_lon=float(max_lon_v) if max_lon_v is not None else None,
         max_lat=float(max_lat_v) if max_lat_v is not None else None,
         limit=limit_v,
     )
+    if db_vessels:
+        return db_vessels
+
+    # Fall back to sample/simulated maritime vessels if database has no stored AIS observations yet
+    sample_records = load_sample_vessels()
+    min_lon_f = float(min_lon_v) if min_lon_v is not None else None
+    min_lat_f = float(min_lat_v) if min_lat_v is not None else None
+    max_lon_f = float(max_lon_v) if max_lon_v is not None else None
+    max_lat_f = float(max_lat_v) if max_lat_v is not None else None
+
+    filtered = []
+    for r in sample_records:
+        if min_lon_f is not None and max_lon_f is not None and not (min_lon_f <= r.longitude <= max_lon_f):
+            continue
+        if min_lat_f is not None and max_lat_f is not None and not (min_lat_f <= r.latitude <= max_lat_f):
+            continue
+        filtered.append(_vessel_record_to_api(r))
+        if len(filtered) >= limit_v:
+            break
+    return filtered
 
 
 @app.post("/ingest/maritime/vessels")
