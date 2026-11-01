@@ -116,6 +116,7 @@ from .ingestion import (
     fetch_maritime_vessels,
     fetch_current_satellites,
     fetch_satellite_ground_track,
+    get_active_catalog_cache,
     fetch_gdacs_alerts,
     fetch_open_natural_events,
     fetch_recent_earthquakes,
@@ -1103,9 +1104,10 @@ def ingest_maritime_vessels() -> dict[str, Any]:
 
 @app.get("/space/satellites")
 def list_satellites(limit: int = Query(default=20_000, ge=1, le=20_000)):
+    repo = WorldRepository()
     fallback_catalog = None
     try:
-        fallback_catalog = WorldRepository().get_satellite_catalog_cache()
+        fallback_catalog = repo.get_satellite_catalog_cache()
     except Exception as exc:
         logger.warning("Could not load persisted satellite catalog cache: %s", exc)
     try:
@@ -1115,6 +1117,17 @@ def list_satellites(limit: int = Query(default=20_000, ge=1, le=20_000)):
         )
     except SatelliteFeedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+    # Automatically persist the active catalog to database cache if fresh or if DB cache was empty
+    try:
+        active_cache = get_active_catalog_cache()
+        if active_cache:
+            full_payload, retrieved_at, _ = active_cache
+            if fallback_catalog is None or fallback_catalog[1] < retrieved_at:
+                repo.save_satellite_catalog_cache(full_payload, retrieved_at)
+    except Exception as exc:
+        logger.warning("Could not persist satellite catalog cache: %s", exc)
+
     return [satellite_to_api_state(record) for record in records]
 
 
@@ -1122,13 +1135,13 @@ def refresh_satellite_catalog_cache() -> dict[str, int]:
     repo = WorldRepository()
     fallback_catalog = repo.get_satellite_catalog_cache()
     records = fetch_current_satellites(fallback_catalog=fallback_catalog)
-    if records and records[0].feed_status == "fresh" and records[0].elements_retrieved_at:
-        if fallback_catalog is None or fallback_catalog[1] < records[0].elements_retrieved_at:
-            repo.save_satellite_catalog_cache(
-                [record.raw_payload for record in records],
-                records[0].elements_retrieved_at,
-            )
-    return {"records_fetched": len(records), "records_persisted": 1 if records else 0}
+    active_cache = get_active_catalog_cache()
+    if active_cache and active_cache[2] == "fresh":
+        full_payload, retrieved_at, _ = active_cache
+        if fallback_catalog is None or fallback_catalog[1] < retrieved_at:
+            repo.save_satellite_catalog_cache(full_payload, retrieved_at)
+            return {"records_fetched": len(records), "records_persisted": len(full_payload)}
+    return {"records_fetched": len(records), "records_persisted": 0}
 
 
 @app.get("/space/satellites/{norad_id}/ground-track")

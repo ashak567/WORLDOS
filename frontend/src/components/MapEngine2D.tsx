@@ -496,7 +496,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
       }));
     }
 
-    // 6. Live Aircraft State Vectors with Heading-Aware Rotation
+    // 6. Live Aircraft State Vectors with Heading-Aware Rotation & Viewport/Zoom Clustering
     if (layerMap.get('aircraft-states') && aircraft.length > 0) {
       const validAircraft = aircraft.filter(
         (a) =>
@@ -506,22 +506,58 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
           !isNaN(a.latitude)
       );
 
+      const zoom = mapRef.current?.getZoom() ?? 2.5;
+      let displayAircraft: (AircraftState & { isCluster?: boolean; clusterCount?: number })[] = validAircraft;
+
+      // When zoomed out and dataset is dense, cluster into spatial cells to eliminate laptop lag
+      if (zoom < 5.0 && validAircraft.length > 500) {
+        const cellSize = zoom < 2.5 ? 4.0 : zoom < 3.8 ? 2.0 : 1.0;
+        const grid = new Map<string, AircraftState[]>();
+        for (const a of validAircraft) {
+          const key = `${Math.floor(a.longitude / cellSize)},${Math.floor(a.latitude / cellSize)}`;
+          let bin = grid.get(key);
+          if (!bin) {
+            bin = [];
+            grid.set(key, bin);
+          }
+          bin.push(a);
+        }
+
+        displayAircraft = [];
+        for (const bin of grid.values()) {
+          if (bin.length === 1) {
+            displayAircraft.push(bin[0]);
+          } else {
+            const rep = bin[0];
+            displayAircraft.push({
+              ...rep,
+              isCluster: true,
+              clusterCount: bin.length,
+            });
+          }
+        }
+      }
+
       deckLayers.push(
         new IconLayer({
           id: 'deck-aircraft-icons',
-          data: validAircraft,
+          data: displayAircraft,
           pickable: true,
-          getPosition: (d: AircraftState) => [d.longitude, d.latitude],
-          getIcon: () => ({
+          getPosition: (d: any) => [d.longitude, d.latitude],
+          getIcon: (d: any) => ({
             url: AIRPLANE_SVG,
             width: 24,
             height: 24,
             mask: true,
           }),
-          getSize: 22,
-          getAngle: (d: AircraftState) => 360 - (d.attributes?.true_track || 0),
-          getColor: (d: AircraftState) =>
-            d.attributes?.on_ground ? [148, 163, 184, 230] : [56, 189, 248, 255],
+          getSize: (d: any) => (d.isCluster ? Math.min(32, 22 + Math.log2(d.clusterCount || 2) * 2) : 22),
+          getAngle: (d: any) => 360 - (d.attributes?.true_track || 0),
+          getColor: (d: any) =>
+            d.isCluster
+              ? [34, 211, 238, 245]
+              : d.attributes?.on_ground
+              ? [148, 163, 184, 230]
+              : [56, 189, 248, 255],
           onClick: (info) => {
             if (info.object) {
               onSelectItem({ type: 'aircraft', data: info.object });

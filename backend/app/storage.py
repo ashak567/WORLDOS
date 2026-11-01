@@ -344,47 +344,120 @@ class WorldRepository:
         limit: int = 200,
     ) -> list[dict[str, Any]]:
         limit = _extract_int(limit, 200)
-        clauses = ["o.measure = 'aircraft.state'"]
-        values: list[Any] = []
-        if min_lon is not None and min_lat is not None and max_lon is not None and max_lat is not None:
-            clauses.append("ST_Intersects(g.geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))")
-            values.extend([min_lon, min_lat, max_lon, max_lat])
+        has_bbox = (
+            min_lon is not None
+            and min_lat is not None
+            and max_lon is not None
+            and max_lat is not None
+        )
 
-        where_clause = f"WHERE {' AND '.join(clauses)}"
-        sql = f"""
-            SELECT DISTINCT ON (e.id)
-                o.id,
-                o.id AS observation_id,
-                e.id AS entity_id,
-                e.canonical_name,
-                o.measure,
-                o.value,
-                o.unit,
-                o.truth_class,
-                t.starts_at AS observed_at,
-                ST_X(g.geometry) AS longitude,
-                ST_Y(g.geometry) AS latitude,
-                ST_AsGeoJSON(g.geometry)::json AS geometry,
-                ev.locator AS evidence_locator,
-                ev.content_hash AS evidence_content_hash,
-                s.slug AS source_slug,
-                s.name AS source_name,
-                o.confidence,
-                o.attributes
-            FROM observations o
-            JOIN entities e ON e.id = o.subject_entity_id
-            JOIN time_intervals t ON t.id = o.time_interval_id
-            JOIN evidence ev ON ev.id = o.evidence_id
-            JOIN sources s ON s.id = ev.source_id
-            JOIN geometries g ON g.entity_id = e.id AND g.evidence_id = ev.id
-                AND g.geometry_kind = 'position' AND g.valid_during @> t.starts_at
-            {where_clause}
-            ORDER BY e.id, t.starts_at DESC
-            LIMIT %s
-        """
-        values.append(limit)
+        values: list[Any] = []
+        if has_bbox:
+            values.extend([min_lon, min_lat, max_lon, max_lat])
+            values.append(limit)
+            sql = """
+                WITH in_bbox_geoms AS (
+                    SELECT entity_id, evidence_id, valid_during, geometry
+                    FROM geometries
+                    WHERE geometry_kind = 'position'
+                      AND ST_Intersects(geometry, ST_MakeEnvelope(%s, %s, %s, %s, 4326))
+                ),
+                latest_obs AS (
+                    SELECT DISTINCT ON (o.subject_entity_id)
+                        o.id AS obs_id,
+                        o.subject_entity_id AS entity_id,
+                        o.measure,
+                        o.value,
+                        o.unit,
+                        o.truth_class,
+                        o.confidence,
+                        o.attributes,
+                        o.evidence_id,
+                        t.starts_at AS observed_at,
+                        g.geometry
+                    FROM in_bbox_geoms g
+                    JOIN observations o ON o.subject_entity_id = g.entity_id AND o.evidence_id = g.evidence_id
+                    JOIN time_intervals t ON t.id = o.time_interval_id
+                    WHERE o.measure = 'aircraft.state'
+                      AND g.valid_during @> t.starts_at
+                    ORDER BY o.subject_entity_id, t.starts_at DESC
+                    LIMIT %s
+                )
+                SELECT
+                    lo.obs_id AS id,
+                    lo.obs_id AS observation_id,
+                    lo.entity_id,
+                    e.canonical_name,
+                    lo.measure,
+                    lo.value,
+                    lo.unit,
+                    lo.truth_class,
+                    lo.observed_at,
+                    ST_X(lo.geometry) AS longitude,
+                    ST_Y(lo.geometry) AS latitude,
+                    ST_AsGeoJSON(lo.geometry)::json AS geometry,
+                    ev.locator AS evidence_locator,
+                    ev.content_hash AS evidence_content_hash,
+                    s.slug AS source_slug,
+                    s.name AS source_name,
+                    lo.confidence,
+                    lo.attributes
+                FROM latest_obs lo
+                JOIN entities e ON e.id = lo.entity_id
+                JOIN evidence ev ON ev.id = lo.evidence_id
+                JOIN sources s ON s.id = ev.source_id
+            """
+        else:
+            values.append(limit)
+            sql = """
+                WITH latest_obs AS (
+                    SELECT DISTINCT ON (o.subject_entity_id)
+                        o.id AS obs_id,
+                        o.subject_entity_id AS entity_id,
+                        o.measure,
+                        o.value,
+                        o.unit,
+                        o.truth_class,
+                        o.confidence,
+                        o.attributes,
+                        o.evidence_id,
+                        t.starts_at AS observed_at
+                    FROM observations o
+                    JOIN time_intervals t ON t.id = o.time_interval_id
+                    WHERE o.measure = 'aircraft.state'
+                    ORDER BY o.subject_entity_id, t.starts_at DESC
+                    LIMIT %s
+                )
+                SELECT
+                    lo.obs_id AS id,
+                    lo.obs_id AS observation_id,
+                    lo.entity_id,
+                    e.canonical_name,
+                    lo.measure,
+                    lo.value,
+                    lo.unit,
+                    lo.truth_class,
+                    lo.observed_at,
+                    ST_X(g.geometry) AS longitude,
+                    ST_Y(g.geometry) AS latitude,
+                    ST_AsGeoJSON(g.geometry)::json AS geometry,
+                    ev.locator AS evidence_locator,
+                    ev.content_hash AS evidence_content_hash,
+                    s.slug AS source_slug,
+                    s.name AS source_name,
+                    lo.confidence,
+                    lo.attributes
+                FROM latest_obs lo
+                JOIN entities e ON e.id = lo.entity_id
+                JOIN evidence ev ON ev.id = lo.evidence_id
+                JOIN sources s ON s.id = ev.source_id
+                JOIN geometries g ON g.entity_id = lo.entity_id AND g.evidence_id = lo.evidence_id
+                    AND g.geometry_kind = 'position' AND g.valid_during @> lo.observed_at
+            """
+
         with self._connection() as conn, conn.cursor() as cur:
-            cur.execute("SET LOCAL max_parallel_workers_per_gather = 0")
+            cur.execute("SET LOCAL work_mem = '32MB'")
+            cur.execute("SET LOCAL statement_timeout = '15s'")
             cur.execute(sql, values)
             return [_clean_record(r) for r in cur.fetchall()]
 

@@ -534,6 +534,14 @@ def _teme_to_geodetic(position_km: tuple[float, float, float], julian_date: floa
     return math.degrees(longitude), math.degrees(latitude), altitude
 
 
+def get_active_catalog_cache() -> tuple[list[dict[str, Any]], datetime, str] | None:
+    """Return currently cached active satellite catalog payload, retrieval timestamp, and status."""
+    with _catalog_lock:
+        if _catalog_payload is not None and _catalog_retrieved_at is not None:
+            return _catalog_payload, _catalog_retrieved_at, _catalog_status
+        return None
+
+
 def _get_active_catalog(
     now: datetime,
     fallback_catalog: tuple[list[dict[str, Any]], datetime] | None = None,
@@ -577,7 +585,12 @@ def _get_active_catalog(
             _catalog_last_error = None
             return _catalog_payload, now, _catalog_status
         except (URLError, TimeoutError, OSError, json.JSONDecodeError, SatelliteFeedError) as exc:
-            _catalog_retry_after = now + timedelta(seconds=CELESTRAK_RETRY_SECONDS)
+            has_any_cache = (
+                (_catalog_payload is not None and _catalog_retrieved_at is not None)
+                or (fallback_catalog is not None)
+            )
+            retry_seconds = CELESTRAK_RETRY_SECONDS if has_any_cache else 30
+            _catalog_retry_after = now + timedelta(seconds=retry_seconds)
             _catalog_last_error = str(exc)
             if _catalog_payload is not None and _catalog_retrieved_at is not None:
                 _catalog_status = "stale"

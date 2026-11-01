@@ -221,6 +221,7 @@ export default function App() {
       fetchEvents(100),
       fetchLiveEvents(),
       fetchAlerts(undefined, undefined, 30),
+      fetchAircraftStates(undefined, 20_000),
       fetchMaritimeVessels(undefined, 1000),
       fetchSatellites(20_000),
       fetchCameras(undefined, 100),
@@ -233,6 +234,7 @@ export default function App() {
         evRes,
         liveRes,
         alRes,
+        acRes,
         vesRes,
         satRes,
         camRes,
@@ -258,7 +260,15 @@ export default function App() {
           ));
         }
         if (alRes.status === 'fulfilled' && alRes.value) setAlerts(alRes.value);
+        if (acRes.status === 'fulfilled' && acRes.value) setAircraft(acRes.value);
         if (vesRes.status === 'fulfilled' && vesRes.value) setVessels(vesRes.value);
+        setLayers((prev) => withSnapshotFeedHealth(
+          prev,
+          'aircraft-states',
+          acRes.status === 'fulfilled' ? acRes.value.map((a) => a.observed_at) : [],
+          5 * 60_000,
+          'No stored OpenSky observations; configure credentials and ingest a snapshot.'
+        ));
         setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesRes.status === 'fulfilled' ? vesRes.value.map((v) => v.observed_at) : [], 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
         if (satRes.status === 'fulfilled' && satRes.value) setSatellites(satRes.value);
         setLayers((prev) => withSatelliteFeedHealth(
@@ -282,7 +292,7 @@ export default function App() {
     let mounted = true;
     const refreshSnapshots = async () => {
       const [aircraftResult, vesselResult, fireResult] = await Promise.allSettled([
-        fetchAircraftStates(undefined, 5_000),
+        fetchAircraftStates(undefined, 20_000),
         fetchMaritimeVessels(undefined, 1000),
         fetchThermalEvents(undefined, 1000),
       ]);
@@ -399,15 +409,21 @@ export default function App() {
 
       try {
         setIsLoading(true);
+        const signal = abortControllerRef.current.signal;
         const [context, acStates, vesStates] = await Promise.all([
           fetchWorldContext({
             bbox,
             limit: 200,
-            signal: abortControllerRef.current.signal,
+            signal,
           }),
-          // ponytail: cap each map query at 5k; denser views need server paging/clustering.
-          fetchAircraftStates(bbox, 5_000).catch(() => null),
-          fetchMaritimeVessels(bbox, 1000).catch(() => null),
+          fetchAircraftStates(bbox, 20_000, signal).catch((err) => {
+            if (err?.name === 'AbortError') return null;
+            return null;
+          }),
+          fetchMaritimeVessels(bbox, 1000, signal).catch((err) => {
+            if (err?.name === 'AbortError') return null;
+            return null;
+          }),
         ]);
 
         if (context) {

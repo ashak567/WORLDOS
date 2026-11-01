@@ -5,6 +5,7 @@ import {
   Cesium3DTileset,
   Color,
   ConstantProperty,
+  DistanceDisplayCondition,
   GeoJsonDataSource,
   Ion,
   IonGeocodeProviderType,
@@ -374,7 +375,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     })
       .then((ds) => {
         if (viewer.isDestroyed() || viewerRef.current !== viewer) {
-          ds.destroy();
           return;
         }
         if (geojsonSourceRef.current) {
@@ -438,6 +438,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           width: 24,
           height: 24,
           scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
+          distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.4e7),
         });
       }
     }

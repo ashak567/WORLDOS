@@ -640,7 +640,11 @@ export async function predictionTrajectory(runId: string): Promise<PredictionPoi
   return response.json();
 }
 
-export async function fetchAircraftStates(bbox?: BoundingBox, limit: number = 500): Promise<AircraftState[]> {
+export async function fetchAircraftStates(
+  bbox?: BoundingBox,
+  limit: number = 20_000,
+  signal?: AbortSignal
+): Promise<AircraftState[]> {
   const params = new URLSearchParams();
   if (bbox) {
     params.set("min_lon", bbox.min_lon.toFixed(4));
@@ -649,7 +653,7 @@ export async function fetchAircraftStates(bbox?: BoundingBox, limit: number = 50
     params.set("max_lat", bbox.max_lat.toFixed(4));
   }
   params.set("limit", String(limit));
-  const response = await fetch(`${apiBase}/aircraft/states?${params.toString()}`);
+  const response = await fetch(`${apiBase}/aircraft/states?${params.toString()}`, { signal });
   if (!response.ok) throw new Error(`API returned ${response.status} fetching aircraft states`);
   return response.json();
 }
@@ -660,7 +664,11 @@ export async function fetchAircraftTrack(icao24: string, limit: number = 100): P
   return response.json();
 }
 
-export async function fetchMaritimeVessels(bbox?: BoundingBox, limit: number = 200): Promise<VesselState[]> {
+export async function fetchMaritimeVessels(
+  bbox?: BoundingBox,
+  limit: number = 200,
+  signal?: AbortSignal
+): Promise<VesselState[]> {
   const params = new URLSearchParams();
   if (bbox) {
     params.set("min_lon", bbox.min_lon.toFixed(4));
@@ -669,13 +677,16 @@ export async function fetchMaritimeVessels(bbox?: BoundingBox, limit: number = 2
     params.set("max_lat", bbox.max_lat.toFixed(4));
   }
   params.set("limit", String(limit));
-  const response = await fetch(`${apiBase}/maritime/vessels?${params.toString()}`);
+  const response = await fetch(`${apiBase}/maritime/vessels?${params.toString()}`, { signal });
   if (!response.ok) throw new Error(`API returned ${response.status} fetching maritime vessels`);
   return response.json();
 }
 
-export async function fetchSatellites(limit: number = 20_000): Promise<SatelliteState[]> {
-  const response = await fetch(`${apiBase}/space/satellites?limit=${limit}`);
+export async function fetchSatellites(
+  limit: number = 20_000,
+  signal?: AbortSignal
+): Promise<SatelliteState[]> {
+  const response = await fetch(`${apiBase}/space/satellites?limit=${limit}`, { signal });
   if (!response.ok) throw new Error(`API returned ${response.status} fetching satellites`);
   return response.json();
 }
