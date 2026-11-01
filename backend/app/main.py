@@ -3,6 +3,8 @@ from __future__ import annotations
 import asyncio
 import logging
 import os
+import threading
+import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 from typing import Any, Literal
@@ -84,12 +86,8 @@ from .domain import (
 )
 from .config import get_aisstream_settings, get_firms_settings, get_opensky_settings
 from .assistant import (
-    AssistantInputError,
     AssistantUnavailable,
-    MAX_AUDIO_BYTES,
-    OllamaEvidenceBoundReasoner,
-    transcribe_local_audio,
-    validated_layer_action,
+    create_elevenlabs_conversation_token,
 )
 from .alerts import AlertEngine
 from .anomalies import (
@@ -192,6 +190,9 @@ async def lifespan(_app: FastAPI):
 
 
 app = FastAPI(title="WORLDOS", version="0.1.0", description="Evidence-first world model API", lifespan=lifespan)
+_assistant_session_lock = threading.Lock()
+# ponytail: process-local rolling cap; prune active addresses per request, and use shared storage if scaling beyond one worker.
+_assistant_session_requests: dict[str, list[float]] = {}
 
 app.add_middleware(
     CORSMiddleware,
@@ -206,7 +207,7 @@ app.add_middleware(
 async def public_read_only_guard(request: Request, call_next):
     """Block unauthenticated database mutations when the API is publicly deployed."""
     if os.getenv("WORLDOS_PUBLIC_READ_ONLY", "false").strip().lower() == "true":
-        safe_posts = {"/routing/plan", "/constraints/validate", "/assistant/answer"}
+        safe_posts = {"/routing/plan", "/constraints/validate", "/assistant/map-context", "/assistant/elevenlabs/session"}
         if request.method not in {"GET", "HEAD", "OPTIONS"} and not (
             request.method == "POST" and request.url.path in safe_posts
         ):
@@ -367,31 +368,11 @@ class AssistantTravelPreferences(BaseModel):
     photo_interest: str | None = Field(default=None, max_length=120)
 
 
-class AssistantAnswerRequest(BaseModel):
-    question: str = Field(min_length=1, max_length=1200)
+class AssistantMapContextRequest(BaseModel):
+    model_config = {"extra": "forbid"}
     selected_entity_id: UUID | None = None
     map_bounds: AssistantMapBounds | None = None
     travel_preferences: AssistantTravelPreferences | None = None
-
-
-class AssistantEvidenceItem(BaseModel):
-    evidence_id: str
-    source_name: str
-    retrieved_at: str
-    freshness: Literal["fresh", "stale", "unavailable", "unknown"] = "unknown"
-
-
-class AssistantAction(BaseModel):
-    type: Literal["set_layer_visibility"]
-    layer_id: str
-    visible: bool
-
-
-class AssistantAnswerResponse(BaseModel):
-    answer: str
-    evidence: list[AssistantEvidenceItem] = Field(default_factory=list)
-    actions: list[AssistantAction] = Field(default_factory=list)
-    service_status: Literal["ready", "unavailable"]
 
 
 def _compact_assistant_context(world_context: WorldContext) -> dict[str, Any]:
@@ -421,6 +402,34 @@ def _compact_assistant_context(world_context: WorldContext) -> dict[str, Any]:
         "evidence": pick(data.get("evidence", []), ("evidence_id", "source_slug", "source_name", "retrieved_at"), 60),
         "assumptions_or_limitations": data.get("assumptions_or_limitations", [])[:20],
     }
+
+
+@app.post("/assistant/map-context")
+def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]:
+    """Return a small, sourced map slice for an explicitly requested agent tool call."""
+    if not request.map_bounds and not request.selected_entity_id:
+        raise HTTPException(status_code=422, detail="Zoom to an area or select a map feature first")
+    bbox = None
+    if request.map_bounds:
+        bbox = BoundingBox(
+            min_longitude=request.map_bounds.min_lon,
+            min_latitude=request.map_bounds.min_lat,
+            max_longitude=request.map_bounds.max_lon,
+            max_latitude=request.map_bounds.max_lat,
+        )
+    try:
+        context = WorldRepository().scoped_context(
+            bbox=bbox,
+            entity_ids=[request.selected_entity_id] if request.selected_entity_id else None,
+            limit=30,
+        )
+        result = _compact_assistant_context(context)
+        if request.travel_preferences:
+            result["user_preferences"] = request.travel_preferences.model_dump(exclude_none=True)
+        return result
+    except Exception as exc:
+        logger.exception("Could not assemble assistant map context")
+        raise HTTPException(status_code=503, detail="WORLDOS map context is unavailable") from exc
 
 
 
@@ -1408,115 +1417,29 @@ def live_context():
     return result
 
 
-@app.post("/assistant/transcribe")
-async def assistant_transcribe(request: Request):
-    """Transcribe a bounded user-started recording using the local Whisper model."""
-    if os.getenv("WORLDOS_ENABLE_LOCAL_ASSISTANT", "true").strip().lower() != "true":
-        return {"text": "", "language": None, "service_status": "unavailable", "detail": "Local voice is available only on the computer running WORLDOS."}
-    content_type = request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
-    content_length = request.headers.get("content-length")
-    if content_length:
-        try:
-            if int(content_length) > MAX_AUDIO_BYTES:
-                raise HTTPException(status_code=413, detail="Audio recording exceeds the 5 MB limit")
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail="Invalid Content-Length header") from exc
-    audio = bytearray()
-    async for chunk in request.stream():
-        audio.extend(chunk)
-        if len(audio) > MAX_AUDIO_BYTES:
-            raise HTTPException(status_code=413, detail="Audio recording exceeds the 5 MB limit")
+@app.post("/assistant/elevenlabs/session")
+def assistant_elevenlabs_session(request: Request) -> dict[str, str]:
+    """Mint a bounded short-lived token for the authenticated ElevenLabs voice agent."""
+    if os.getenv("WORLDOS_ENABLE_ASSISTANT", "true").strip().lower() != "true":
+        raise HTTPException(status_code=503, detail="The WORLDOS assistant is disabled")
+    host = request.client.host if request.client else "unknown"
+    now = time.monotonic()
+    with _assistant_session_lock:
+        for address, stamps in list(_assistant_session_requests.items()):
+            active = [stamp for stamp in stamps if now - stamp < 3600]
+            if active:
+                _assistant_session_requests[address] = active
+            else:
+                del _assistant_session_requests[address]
+        recent = _assistant_session_requests.get(host, [])
+        if len(recent) >= 6:
+            raise HTTPException(status_code=429, detail="Too many assistant sessions; try again later")
+        recent.append(now)
+        _assistant_session_requests[host] = recent
     try:
-        transcript = await asyncio.to_thread(transcribe_local_audio, bytes(audio), content_type)
-        return {**transcript, "service_status": "ready"}
-    except AssistantInputError as exc:
-        raise HTTPException(status_code=422, detail=str(exc)) from exc
+        return {"conversation_token": create_elevenlabs_conversation_token()}
     except AssistantUnavailable as exc:
-        return {"text": "", "language": None, "service_status": "unavailable", "detail": str(exc)}
-
-
-@app.post("/assistant/answer", response_model=AssistantAnswerResponse)
-def assistant_answer(request: AssistantAnswerRequest) -> AssistantAnswerResponse:
-    """Explain a bounded, deterministic map slice without treating the model as a data source."""
-    if os.getenv("WORLDOS_ENABLE_LOCAL_ASSISTANT", "true").strip().lower() != "true":
-        return AssistantAnswerResponse(
-            answer="The local assistant is available when WORLDOS is running on your computer.",
-            service_status="unavailable",
-        )
-    actions = []
-    action = validated_layer_action(request.question)
-    if action:
-        actions.append(AssistantAction.model_validate(action))
-
-    if request.map_bounds or request.selected_entity_id:
-        bbox = None
-        if request.map_bounds:
-            bbox = BoundingBox(
-                min_longitude=request.map_bounds.min_lon,
-                min_latitude=request.map_bounds.min_lat,
-                max_longitude=request.map_bounds.max_lon,
-                max_latitude=request.map_bounds.max_lat,
-            )
-        try:
-            world_context = WorldRepository().scoped_context(
-                bbox=bbox,
-                entity_ids=[request.selected_entity_id] if request.selected_entity_id else None,
-                limit=30,
-            )
-        except Exception:
-            logger.exception("Could not assemble assistant map context")
-            return AssistantAnswerResponse(
-                answer="I can’t read the current WORLDOS map data right now. Please try again in a moment.",
-                actions=actions,
-                service_status="unavailable",
-            )
-        deterministic_result = _compact_assistant_context(world_context)
-    else:
-        deterministic_result = {
-            "entities": [], "observations": [], "events": [], "geometries": [],
-            "relationships": [], "claims": [], "evidence": [],
-            "assumptions_or_limitations": ["No map bounds or selected entity were supplied."],
-        }
-    if request.travel_preferences:
-        deterministic_result["user_preferences"] = request.travel_preferences.model_dump(exclude_none=True)
-
-    evidence = [
-        AssistantEvidenceItem(
-            evidence_id=str(item["evidence_id"]),
-            source_name=str(item["source_name"]),
-            retrieved_at=str(item["retrieved_at"]),
-            freshness="unknown",
-        )
-        for item in deterministic_result.get("evidence", [])
-        if item.get("evidence_id") and item.get("source_name") and item.get("retrieved_at")
-    ]
-    if not evidence:
-        answer = (
-            "Done — I updated the map layer visibility."
-            if actions
-            else "I don’t have sourced records for this view yet. Select a map feature or zoom into an area, and I’ll summarize what WORLDOS can verify."
-        )
-        return AssistantAnswerResponse(answer=answer, evidence=[], actions=actions, service_status="ready")
-    try:
-        result = OllamaEvidenceBoundReasoner().answer(
-            request.question,
-            deterministic_result,
-            [item.evidence_id for item in evidence],
-        )
-    except AssistantUnavailable:
-        return AssistantAnswerResponse(
-            answer="I couldn’t produce an answer tied to the available WORLDOS sources. Check that Ollama is running and try again; your question was not sent to a cloud service.",
-            evidence=[],
-            actions=actions,
-            service_status="unavailable",
-        )
-    cited_ids = set(result["evidence_ids"])
-    return AssistantAnswerResponse(
-        answer=result["answer"],
-        evidence=[item for item in evidence if item.evidence_id in cited_ids],
-        actions=actions,
-        service_status="ready",
-    )
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.get("/entities/{entity_id}/context")

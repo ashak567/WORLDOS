@@ -12,6 +12,7 @@
     "@deck.gl/core": "^9.4.0",
     "@deck.gl/layers": "^9.4.0",
     "@deck.gl/mapbox": "^9.4.0",
+    "@elevenlabs/react": "^1.20.2",
     "cesium": "^1.122.0",
     "cmdk": "^1.1.1",
     "lucide-react": "^1.62.0",

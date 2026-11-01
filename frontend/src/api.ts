@@ -103,31 +103,15 @@ export type AssistantContext = {
   travel_preferences?: { pace?: 'relaxed' | 'balanced' | 'packed'; photo_interest?: string };
 };
 
-export type AssistantEvidence = {
-  evidence_id: string;
-  source_name: string;
-  retrieved_at: string;
-  freshness: 'fresh' | 'stale' | 'unavailable' | 'unknown';
+export type AssistantMapContext = {
+  evidence: Array<{ evidence_id: string; source_name: string; retrieved_at: string }>;
+  [key: string]: unknown;
 };
 
 export type AssistantAction = {
   type: 'set_layer_visibility';
   layer_id: string;
   visible: boolean;
-};
-
-export type AssistantAnswer = {
-  answer: string;
-  evidence: AssistantEvidence[];
-  actions: AssistantAction[];
-  service_status: 'ready' | 'unavailable';
-};
-
-export type AssistantTranscript = {
-  text: string;
-  language: string | null;
-  service_status: 'ready' | 'unavailable';
-  detail?: string;
 };
 
 export type AircraftState = {
@@ -584,28 +568,23 @@ export async function fetchLiveContext(): Promise<LiveContextResponse> {
   return response.json();
 }
 
-export async function transcribeAssistantAudio(audio: Blob): Promise<AssistantTranscript> {
-  const response = await fetch(`${apiBase}/assistant/transcribe`, {
-    method: 'POST',
-    headers: { 'Content-Type': audio.type || 'audio/webm' },
-    body: audio,
-  });
-  if (!response.ok) {
-    const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Transcription failed (${response.status})`);
-  }
-  return response.json();
+export async function getAssistantSessionToken(): Promise<string> {
+  const response = await fetch(`${apiBase}/assistant/elevenlabs/session`, { method: 'POST' });
+  const body = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(body.detail || `Voice assistant unavailable (${response.status})`);
+  if (typeof body.conversation_token !== 'string') throw new Error('Voice assistant returned an invalid session token');
+  return body.conversation_token;
 }
 
-export async function answerAssistant(question: string, context: AssistantContext): Promise<AssistantAnswer> {
-  const response = await fetch(`${apiBase}/assistant/answer`, {
+export async function fetchAssistantMapContext(context: AssistantContext): Promise<AssistantMapContext> {
+  const response = await fetch(`${apiBase}/assistant/map-context`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ question, ...context }),
+    body: JSON.stringify(context),
   });
   if (!response.ok) {
     const body = await response.json().catch(() => ({}));
-    throw new Error(body.detail || `Assistant request failed (${response.status})`);
+    throw new Error(body.detail || `Map context unavailable (${response.status})`);
   }
   return response.json();
 }

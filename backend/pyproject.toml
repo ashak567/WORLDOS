@@ -15,8 +15,8 @@ dependencies = [
   "duckdb>=1.1,<2",
   "pytz>=2024.1",
   "sgp4>=2.27,<3",
-  "faster-whisper>=1.1,<2",
-  "av>=11,<19",
+  "elevenlabs>=2.0,<3",
+  "python-dotenv>=1.0,<2",
 ]
 
 [tool.setuptools.packages.find]

@@ -72,22 +72,6 @@ class FirmsSettings(BaseModel):
         return cls(map_key=SecretStr(raw_key) if raw_key else None)
 
 
-class LocalAssistantSettings(BaseModel):
-    """Local model settings; the endpoint is restricted to local hosts by the adapter."""
-
-    model_config = ConfigDict(frozen=True)
-
-    ollama_url: str = "http://host.docker.internal:11434"
-    ollama_model: str = "llama3.2:3b"
-
-    @classmethod
-    def from_env(cls) -> LocalAssistantSettings:
-        return cls(
-            ollama_url=os.environ.get("WORLDOS_OLLAMA_URL", "http://host.docker.internal:11434").strip(),
-            ollama_model=os.environ.get("WORLDOS_OLLAMA_MODEL", "llama3.2:3b").strip(),
-        )
-
-
 def get_aisstream_settings() -> AISStreamSettings:
     """Factory function returning the active AISStreamSettings instance."""
     return AISStreamSettings.from_env()
@@ -96,8 +80,4 @@ def get_aisstream_settings() -> AISStreamSettings:
 def get_firms_settings() -> FirmsSettings:
     """Factory function returning the active FirmsSettings instance."""
     return FirmsSettings.from_env()
-
-
-def get_local_assistant_settings() -> LocalAssistantSettings:
-    return LocalAssistantSettings.from_env()
 

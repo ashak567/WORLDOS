@@ -1,12 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
-import { Mic, Send, Square, Volume2, X } from 'lucide-react';
-import {
-  answerAssistant,
-  AssistantAnswer,
-  AssistantAction,
-  AssistantContext,
-  transcribeAssistantAudio,
-} from '../api';
+import { ConversationProvider, useConversation } from '@elevenlabs/react';
+import { Mic, PhoneOff, Send, Volume2, X } from 'lucide-react';
+import { AssistantAction, AssistantContext, fetchAssistantMapContext, getAssistantSessionToken } from '../api';
 
 interface AssistantPanelProps {
   isOpen: boolean;
@@ -16,7 +11,13 @@ interface AssistantPanelProps {
 }
 
 type TravelPreferences = NonNullable<AssistantContext['travel_preferences']>;
+type AssistantMessage = { role: 'user' | 'ai'; message: string };
 const PREFERENCES_KEY = 'worldos-assistant-preferences-v1';
+const SAFE_LAYER_IDS = new Set([
+  'country-boundaries', 'population-observations', 'aircraft-states', 'maritime-vessels',
+  'space-satellites', 'surveillance-cameras', 'earthquake-events', 'natural-hazards',
+  'thermal-fires', 'critical-infrastructure', 'anomalies', 'system-alerts',
+]);
 
 function readPreferences(): TravelPreferences {
   try {
@@ -29,137 +30,86 @@ function readPreferences(): TravelPreferences {
   } catch { return {}; }
 }
 
-export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isOpen, context, onClose, onAction }) => {
+export const AssistantPanel: React.FC<AssistantPanelProps> = (props) => (
+  <ConversationProvider>
+    <AssistantPanelSession {...props} />
+  </ConversationProvider>
+);
+
+const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context, onClose, onAction }) => {
   const [question, setQuestion] = useState('');
-  const [answer, setAnswer] = useState<AssistantAnswer | null>(null);
-  const [isRecording, setIsRecording] = useState(false);
-  const [isBusy, setIsBusy] = useState(false);
+  const [messages, setMessages] = useState<AssistantMessage[]>([]);
+  const [evidence, setEvidence] = useState<NonNullable<Awaited<ReturnType<typeof fetchAssistantMapContext>>['evidence']>>([]);
+  const [isStarting, setIsStarting] = useState(false);
   const [message, setMessage] = useState('');
   const [preferences, setPreferences] = useState<TravelPreferences>(readPreferences);
   const [paceDraft, setPaceDraft] = useState<TravelPreferences['pace']>('balanced');
   const [photoDraft, setPhotoDraft] = useState('');
-  const recorderRef = useRef<MediaRecorder | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const chunksRef = useRef<Blob[]>([]);
-  const timerRef = useRef<number | null>(null);
-  const cancelRecordingRef = useRef(false);
-  const questionRef = useRef<HTMLTextAreaElement>(null);
+  const contextRef = useRef(context);
+  const preferencesRef = useRef(preferences);
+  const onActionRef = useRef(onAction);
+  contextRef.current = context;
+  preferencesRef.current = preferences;
+  onActionRef.current = onAction;
 
-  const stopSpeaking = useCallback(() => {
-    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+  const handleMessage = useCallback((item: AssistantMessage) => {
+    if (item.message.trim()) setMessages((current) => [...current.slice(-19), item]);
   }, []);
-
-  const releaseMicrophone = useCallback(() => {
-    if (timerRef.current !== null) window.clearTimeout(timerRef.current);
-    timerRef.current = null;
-    streamRef.current?.getTracks().forEach((track) => track.stop());
-    streamRef.current = null;
-    recorderRef.current = null;
-    setIsRecording(false);
-  }, []);
+  const conversation = useConversation({
+    onMessage: ({ message: text, role, source }) => handleMessage({ role: role === 'user' || source === 'user' ? 'user' : 'ai', message: text }),
+    onError: (error) => setMessage(error || 'The ElevenLabs conversation hit a snag.'),
+    clientTools: {
+      get_worldos_map_context: async () => {
+        setEvidence([]);
+        try {
+          const data = await fetchAssistantMapContext({
+            ...contextRef.current,
+            ...(Object.keys(preferencesRef.current).length ? { travel_preferences: preferencesRef.current } : {}),
+          });
+          setEvidence(data.evidence || []);
+          return JSON.stringify(data);
+        } catch (error) {
+          return JSON.stringify({ error: error instanceof Error ? error.message : 'Map context unavailable' });
+        }
+      },
+      set_map_layer_visibility: async (args: { layer_id: string; visible: boolean }) => {
+        if (!SAFE_LAYER_IDS.has(args.layer_id) || typeof args.visible !== 'boolean') return JSON.stringify({ success: false, message: 'That map layer action is not allowed.' });
+        onActionRef.current({ type: 'set_layer_visibility', layer_id: args.layer_id, visible: args.visible });
+        return JSON.stringify({ success: true, message: `${args.layer_id} is now ${args.visible ? 'visible' : 'hidden'}.` });
+      },
+    },
+  });
 
   useEffect(() => {
-    if (isOpen) questionRef.current?.focus();
-    else {
-      cancelRecordingRef.current = true;
-      if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
-      releaseMicrophone();
-      stopSpeaking();
+    if (!isOpen && conversation.status !== 'disconnected') void conversation.endSession();
+    if (!isOpen) {
       setQuestion('');
-      setAnswer(null);
       setMessage('');
+      setEvidence([]);
+      setMessages([]);
     }
-  }, [isOpen, releaseMicrophone, stopSpeaking]);
+  }, [isOpen]);
 
-  useEffect(() => () => {
-    cancelRecordingRef.current = true;
-    if (recorderRef.current?.state === 'recording') recorderRef.current.stop();
-    releaseMicrophone();
-    stopSpeaking();
-  }, [releaseMicrophone, stopSpeaking]);
-
-  const startRecording = async () => {
-    setMessage('');
-    if (!navigator.mediaDevices?.getUserMedia || typeof MediaRecorder === 'undefined') {
-      setMessage('Microphone recording is not supported here. You can still type your question.');
-      return;
-    }
+  const startConversation = async () => {
+    setIsStarting(true);
+    setMessage('Connecting to your WORLDOS assistant…');
     try {
-      cancelRecordingRef.current = false;
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      streamRef.current = stream;
-      chunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      recorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) chunksRef.current.push(event.data);
-      };
-      recorder.onstop = async () => {
-        const blob = new Blob(chunksRef.current, { type: recorder.mimeType || 'audio/webm' });
-        releaseMicrophone();
-        if (cancelRecordingRef.current || !blob.size) return;
-        setIsBusy(true);
-        try {
-          const transcript = await transcribeAssistantAudio(blob);
-          if (transcript.service_status === 'unavailable') {
-            setMessage(transcript.detail || 'Local speech recognition is unavailable. Type your question instead.');
-          } else {
-            setQuestion(transcript.text);
-            questionRef.current?.focus();
-          }
-        } catch (error) {
-          setMessage(error instanceof Error ? error.message : 'The recording could not be transcribed.');
-        } finally {
-          setIsBusy(false);
-        }
-      };
-      recorder.start();
-      setIsRecording(true);
-      setMessage('Listening. Stop when you’re done; the recording is limited to 30 seconds.');
-      timerRef.current = window.setTimeout(() => {
-        if (recorder.state === 'recording') recorder.stop();
-      }, 30_000);
-    } catch {
-      releaseMicrophone();
-      setMessage('Microphone access was denied or unavailable. You can still type your question.');
+      const conversationToken = await getAssistantSessionToken();
+      await conversation.startSession({ conversationToken });
+      setMessage('Connected. Ask about the map or tell me what to show.');
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : 'Could not connect to ElevenLabs.');
+    } finally {
+      setIsStarting(false);
     }
   };
 
-  const speakAnswer = (text: string) => {
-    if (!('speechSynthesis' in window)) {
-      setMessage('This browser has no speech output; the answer is still available as text.');
-      return;
-    }
-    const localVoice = window.speechSynthesis.getVoices().find((voice) => voice.localService);
-    if (!localVoice) {
-      setMessage('No local speech voice is installed, so I left the answer in text.');
-      return;
-    }
-    stopSpeaking();
-    const utterance = new SpeechSynthesisUtterance(text);
-    utterance.voice = localVoice;
-    window.speechSynthesis.speak(utterance);
-  };
-
-  const sendQuestion = async (event: FormEvent) => {
+  const sendQuestion = (event: FormEvent) => {
     event.preventDefault();
     const text = question.trim();
-    if (!text || isBusy) return;
-    stopSpeaking();
-    setIsBusy(true);
-    setMessage('');
-    setAnswer(null);
-    try {
-      const result = await answerAssistant(text, { ...context, ...(Object.keys(preferences).length ? { travel_preferences: preferences } : {}) });
-      setAnswer(result);
-      result.actions.forEach(onAction);
-      if (result.service_status === 'unavailable') setMessage('WORLDOS kept this request local, but a required local service is unavailable.');
-      else speakAnswer(result.answer);
-    } catch (error) {
-      setMessage(error instanceof Error ? error.message : 'WORLDOS could not answer right now.');
-    } finally {
-      setIsBusy(false);
-    }
+    if (!text || conversation.status !== 'connected') return;
+    conversation.sendUserMessage(text);
+    setQuestion('');
   };
 
   const savePreferences = (event: FormEvent) => {
@@ -182,7 +132,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isOpen, context,
       if (Object.keys(next).length) window.localStorage.setItem(PREFERENCES_KEY, JSON.stringify(next));
       else window.localStorage.removeItem(PREFERENCES_KEY);
       setPreferences(next);
-    } catch { setMessage('This browser could not update saved preferences.'); }
+    } catch { setMessage('This browser could not update preferences.'); }
   };
 
   if (!isOpen) return null;
@@ -192,15 +142,13 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isOpen, context,
       <header className="assistant-panel-header">
         <div>
           <strong>WORLDOS ASSISTANT</strong>
-          <span>Local voice · map-aware answers</span>
+          <span>{conversation.status === 'connected' ? (conversation.isSpeaking ? 'Speaking' : 'Listening') : 'ElevenLabs intelligence · voice'}</span>
         </div>
-        <button className="assistant-icon-button" type="button" onClick={onClose} aria-label="Close assistant">
-          <X size={16} />
-        </button>
+        <button className="assistant-icon-button" type="button" onClick={onClose} aria-label="Close assistant"><X size={16} /></button>
       </header>
 
       <div className="assistant-panel-body">
-        <p className="assistant-privacy-note">Your recording and question stay on this PC. Answers show the WORLDOS sources they use.</p>
+        <p className="assistant-privacy-note">ElevenLabs processes your voice and chat. WORLDOS shares a small, sourced slice of the current map and any saved travel preferences only when the assistant asks for it.</p>
         <details className="assistant-preferences">
           <summary>Optional travel preferences</summary>
           {Object.entries(preferences).map(([key, value]) => (
@@ -219,49 +167,29 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = ({ isOpen, context,
             <button className="assistant-control-button" type="submit" disabled={!paceDraft && !photoDraft.trim()}>Review and save</button>
           </form>
         </details>
+
+        <div className="assistant-transcript" aria-live="polite">
+          {messages.map((item, index) => <p className={`assistant-message ${item.role}`} key={`${index}-${item.message.slice(0, 20)}`}><strong>{item.role === 'ai' ? 'WORLDOS' : 'You'}</strong>{item.message}</p>)}
+        </div>
+        {evidence.length > 0 && <div className="assistant-evidence"><strong>Map sources shared with the assistant</strong>{evidence.map((item) => <div className="assistant-evidence-item" key={item.evidence_id}><span>{item.source_name}</span><time dateTime={item.retrieved_at}>{new Date(item.retrieved_at).toLocaleString()}</time></div>)}</div>}
+
         <form onSubmit={sendQuestion}>
-          <label htmlFor="assistant-question">Ask about this map</label>
-          <textarea
-            id="assistant-question"
-            ref={questionRef}
-            value={question}
-            onChange={(event) => setQuestion(event.target.value)}
-            rows={3}
-            maxLength={1200}
-            placeholder="What stands out in this view?"
-          />
+          <label htmlFor="assistant-question">Ask by text</label>
+          <textarea id="assistant-question" value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} maxLength={1200} placeholder="What stands out in this view?" disabled={conversation.status !== 'connected'} />
           <div className="assistant-controls">
-            <button className="assistant-control-button" type="button" onClick={isRecording ? () => recorderRef.current?.stop() : startRecording} disabled={isBusy}>
-              {isRecording ? <Square size={14} /> : <Mic size={14} />}
-              {isRecording ? 'Stop' : 'Talk'}
-            </button>
-            <button className="assistant-control-button primary" type="submit" disabled={!question.trim() || isBusy || isRecording}>
-              <Send size={14} /> {isBusy ? 'Working…' : 'Ask'}
-            </button>
-            <button className="assistant-control-button" type="button" onClick={stopSpeaking} aria-label="Stop speaking">
-              <Volume2 size={14} /> Stop voice
-            </button>
+            {conversation.status === 'connected' ? (
+              <>
+                <button className="assistant-control-button" type="button" onClick={() => conversation.setMuted(!conversation.isMuted)}><Mic size={14} /> {conversation.isMuted ? 'Unmute' : 'Mute'}</button>
+                <button className="assistant-control-button" type="button" onClick={() => void conversation.endSession()}><PhoneOff size={14} /> End voice</button>
+                <button className="assistant-control-button primary" type="submit" disabled={!question.trim()}><Send size={14} /> Send</button>
+              </>
+            ) : (
+              <button className="assistant-control-button primary" type="button" onClick={() => void startConversation()} disabled={isStarting}><Mic size={14} /> {isStarting ? 'Connecting…' : 'Start voice assistant'}</button>
+            )}
+            <span><Volume2 size={14} /> {conversation.status}</span>
           </div>
         </form>
-
         <div className="assistant-status" aria-live="polite">{message}</div>
-        {answer && (
-          <article className="assistant-answer">
-            <p>{answer.answer}</p>
-            {answer.evidence.length > 0 && (
-              <div className="assistant-evidence">
-                <strong>Sources</strong>
-                {answer.evidence.map((item) => (
-                  <div className="assistant-evidence-item" key={item.evidence_id}>
-                    <span>{item.source_name}</span>
-                    <time dateTime={item.retrieved_at}>{new Date(item.retrieved_at).toLocaleString()}</time>
-                    <small>{item.freshness}</small>
-                  </div>
-                ))}
-              </div>
-            )}
-          </article>
-        )}
       </div>
     </section>
   );

@@ -18,17 +18,11 @@ Invoke-RestMethod -Method Post http://localhost:8000/ingest/world-bank/populatio
 
 The API documentation is at `http://localhost:8000/docs`; the client is at `http://localhost:5173` when started from `frontend`.
 
-## Local assistant
+## Assistant
 
-The assistant uses the local Ollama service and the CPU Whisper `tiny` model. It does not send audio or questions to a cloud model. Start Ollama and download the default text model once:
+The voice and chat assistant uses an authenticated ElevenLabs agent for speech recognition, reasoning, and spoken answers. Its API key stays in the Git-ignored root `.env.local`; Docker Compose passes it only to the API container. The agent can request a bounded, sourced summary of the current map and can toggle only allowlisted map layers. It has a 10-conversation daily limit, a 5-minute session limit, and WORLDOS issues at most six session tokens per client address per hour.
 
-```powershell
-ollama serve
-ollama pull llama3.2:3b
-docker compose up --build
-```
-
-The API container downloads the Whisper `tiny` model the first time local transcription is used and keeps it in the `worldos-model-cache` Docker volume. The assistant accepts microphone recordings up to 5 MB; typed questions remain available if microphone access or a local speech service is unavailable. Change `WORLDOS_OLLAMA_MODEL` in `.env` to use a different model already installed in Ollama.
+Starting a conversation sends voice and text to ElevenLabs. WORLDOS map context is sent only when the agent calls its map-context tool. This avoids running local Ollama and Whisper models on the laptop. Update the agent's name, prompt, model, and voice in ElevenLabs; keep `WORLDOS_ELEVENLABS_AGENT_ID` and `ELEVENLABS_API_KEY` in `.env.local` for local Compose runs and in the API host's private environment for deployment.
 
 See [WORLDOS_ARCHITECTURE.md](WORLDOS_ARCHITECTURE.md) for the durable boundaries and [WORLDOS_PROGRESS.md](WORLDOS_PROGRESS.md) for the concrete checkpoint.
 
