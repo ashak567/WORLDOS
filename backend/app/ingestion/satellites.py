@@ -34,6 +34,7 @@ logger = logging.getLogger(__name__)
 NAMESPACE_WORLDOS = UUID("6ba7b810-9dad-11d1-80b4-00c04fd430c8")
 CELESTRAK_ACTIVE_URL = "https://celestrak.org/NORAD/elements/gp.php?GROUP=ACTIVE&FORMAT=JSON"
 CELESTRAK_CACHE_SECONDS = 6 * 60 * 60
+CELESTRAK_RETRY_SECONDS = 15 * 60
 CELESTRAK_MAX_RESPONSE_BYTES = 25_000_000
 WGS84_EQUATORIAL_RADIUS_KM = 6378.137
 WGS84_ECCENTRICITY_SQUARED = 6.69437999014e-3
@@ -41,6 +42,9 @@ EARTH_MU_KM3_S2 = 398600.4418
 _catalog_lock = threading.Lock()
 _catalog_payload: list[dict[str, Any]] | None = None
 _catalog_retrieved_at: datetime | None = None
+_catalog_status = "fresh"
+_catalog_retry_after: datetime | None = None
+_catalog_last_error: str | None = None
 
 
 def stable_id(kind: str, *parts: str) -> UUID:
@@ -530,16 +534,29 @@ def _teme_to_geodetic(position_km: tuple[float, float, float], julian_date: floa
     return math.degrees(longitude), math.degrees(latitude), altitude
 
 
-def _get_active_catalog(now: datetime) -> tuple[list[dict[str, Any]], datetime, str]:
+def _get_active_catalog(
+    now: datetime,
+    fallback_catalog: tuple[list[dict[str, Any]], datetime] | None = None,
+) -> tuple[list[dict[str, Any]], datetime, str]:
     """Fetch CelesTrak OMM JSON at most once per six hours; retain cache on outages."""
-    global _catalog_payload, _catalog_retrieved_at
+    global _catalog_payload, _catalog_retrieved_at, _catalog_status, _catalog_retry_after, _catalog_last_error
     with _catalog_lock:
         if (
             _catalog_payload is not None
             and _catalog_retrieved_at is not None
+            and _catalog_status == "fresh"
             and (now - _catalog_retrieved_at).total_seconds() < CELESTRAK_CACHE_SECONDS
         ):
-            return _catalog_payload, _catalog_retrieved_at, "fresh"
+            return _catalog_payload, _catalog_retrieved_at, _catalog_status
+
+        if _catalog_retry_after is not None and now < _catalog_retry_after:
+            if _catalog_payload is not None and _catalog_retrieved_at is not None:
+                return _catalog_payload, _catalog_retrieved_at, "stale"
+            if fallback_catalog is not None:
+                _catalog_payload, _catalog_retrieved_at = fallback_catalog
+                _catalog_status = "stale"
+                return _catalog_payload, _catalog_retrieved_at, _catalog_status
+            raise SatelliteFeedError(f"CelesTrak retry delayed after upstream failure: {_catalog_last_error or 'temporarily unavailable'}")
 
         request = Request(
             CELESTRAK_ACTIVE_URL,
@@ -551,25 +568,37 @@ def _get_active_catalog(now: datetime) -> tuple[list[dict[str, Any]], datetime, 
             if len(raw) > CELESTRAK_MAX_RESPONSE_BYTES:
                 raise SatelliteFeedError("CelesTrak active catalog exceeded the 25 MB response limit")
             payload = json.loads(raw.decode("utf-8"))
-            if not isinstance(payload, list):
-                raise SatelliteFeedError("CelesTrak returned an unexpected catalog format")
+            if not isinstance(payload, list) or not any(isinstance(row, dict) for row in payload):
+                raise SatelliteFeedError("CelesTrak returned an empty or unexpected catalog")
             _catalog_payload = [row for row in payload if isinstance(row, dict)]
             _catalog_retrieved_at = now
-            return _catalog_payload, now, "fresh"
-        except (URLError, TimeoutError, json.JSONDecodeError, SatelliteFeedError) as exc:
+            _catalog_status = "fresh"
+            _catalog_retry_after = None
+            _catalog_last_error = None
+            return _catalog_payload, now, _catalog_status
+        except (URLError, TimeoutError, OSError, json.JSONDecodeError, SatelliteFeedError) as exc:
+            _catalog_retry_after = now + timedelta(seconds=CELESTRAK_RETRY_SECONDS)
+            _catalog_last_error = str(exc)
             if _catalog_payload is not None and _catalog_retrieved_at is not None:
+                _catalog_status = "stale"
                 logger.warning("CelesTrak unavailable; serving cached orbital elements: %s", exc)
                 return _catalog_payload, _catalog_retrieved_at, "stale"
+            if fallback_catalog is not None:
+                _catalog_payload, _catalog_retrieved_at = fallback_catalog
+                _catalog_status = "stale"
+                logger.warning("CelesTrak unavailable; serving persisted orbital elements: %s", exc)
+                return _catalog_payload, _catalog_retrieved_at, _catalog_status
             raise SatelliteFeedError(f"CelesTrak active satellite feed is unavailable: {exc}") from exc
 
 
 def fetch_current_satellites(
     now: datetime | None = None,
     limit: int = 20_000,
+    fallback_catalog: tuple[list[dict[str, Any]], datetime] | None = None,
 ) -> list[SatelliteRecord]:
     """Fetch the active CelesTrak catalog and propagate every supported OMM record."""
     calculated_at = now or datetime.now(UTC)
-    payload, retrieved_at, feed_status = _get_active_catalog(calculated_at)
+    payload, retrieved_at, feed_status = _get_active_catalog(calculated_at, fallback_catalog)
     jd, fr = _julian_date(calculated_at)
     result: list[SatelliteRecord] = []
     failed = 0
@@ -637,12 +666,13 @@ def fetch_satellite_ground_track(
     norad_id: str,
     now: datetime | None = None,
     points: int = 72,
+    fallback_catalog: tuple[list[dict[str, Any]], datetime] | None = None,
 ) -> list[list[float]]:
     """Propagate one catalog object over its next orbit for a selectable map track."""
     if not norad_id.isdecimal() or len(norad_id) > 8 or not 12 <= points <= 360:
         raise SatelliteFeedError("Invalid NORAD catalog ID or ground-track point count")
     calculated_at = now or datetime.now(UTC)
-    catalog, _, _ = _get_active_catalog(calculated_at)
+    catalog, _, _ = _get_active_catalog(calculated_at, fallback_catalog)
     item = next((row for row in catalog if str(row.get("NORAD_CAT_ID")) == norad_id), None)
     if item is None:
         raise SatelliteFeedError(f"NORAD catalog ID {norad_id} is not in the active catalog")

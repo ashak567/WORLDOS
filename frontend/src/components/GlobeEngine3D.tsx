@@ -1,6 +1,7 @@
 import React, { useEffect, useRef } from 'react';
 import {
   Cartesian3,
+  BillboardCollection,
   Cesium3DTileset,
   Color,
   ConstantProperty,
@@ -104,8 +105,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const terrainPromiseRef = useRef<ReturnType<typeof createWorldTerrainAsync> | null>(null);
   const geojsonSourceRef = useRef<GeoJsonDataSource | null>(null);
   const handlerRef = useRef<ScreenSpaceEventHandler | null>(null);
-  const selectedHighlightRef = useRef<{ entity: any; width: number; height: number; tracks: any[] } | null>(null);
+  const selectedHighlightRef = useRef<{ entity: any; billboard?: any; width: number; height: number; tracks: any[] } | null>(null);
   const selectedAircraftTrackRef = useRef<any>(null);
+  const aircraftBillboardsRef = useRef<BillboardCollection | null>(null);
+  const satelliteBillboardsRef = useRef<BillboardCollection | null>(null);
 
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
     const requestId = ++imageryRequestRef.current;
@@ -391,7 +394,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.entities.removeAll();
     const layerMap = new Map(layers.map((l) => [l.id, l.enabled]));
 
-    // 1. Aircraft: Placed at true barometric / geometric altitude in 3D
+    const aircraftBillboards = aircraftBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
+    const satelliteBillboards = satelliteBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
+    aircraftBillboardsRef.current = aircraftBillboards;
+    satelliteBillboardsRef.current = satelliteBillboards;
+    aircraftBillboards.removeAll();
+    satelliteBillboards.removeAll();
+
+    // Batch the high-volume feeds into Cesium billboard collections instead of thousands of Entity objects.
     if (layerMap.get('aircraft-states') && aircraft.length > 0) {
       for (const a of aircraft) {
         if (
@@ -411,18 +421,15 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
         const isGround = a.attributes?.on_ground ?? false;
 
-        const ent = viewer.entities.add({
+        aircraftBillboards.add({
+          id: { _worldosType: 'aircraft', _worldosData: a },
           position,
-          billboard: {
-            image: isGround ? AIRPLANE_ICON_GROUND : AIRPLANE_ICON_BLUE,
-            rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
-            width: 24,
-            height: 24,
-            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
-          },
+          image: isGround ? AIRPLANE_ICON_GROUND : AIRPLANE_ICON_BLUE,
+          rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
+          width: 24,
+          height: 24,
+          scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
         });
-        (ent as any)._worldosType = 'aircraft';
-        (ent as any)._worldosData = a;
       }
     }
 
@@ -454,17 +461,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const altMeters = altitudeKm * 1000;
         const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
-        const ent = viewer.entities.add({
+        satelliteBillboards.add({
+          id: { _worldosType: 'satellite', _worldosData: s },
           position,
-          billboard: {
-            image: SATELLITE_ICON_PURPLE,
-            width: 5,
-            height: 5,
-            scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
-          },
+          image: SATELLITE_ICON_PURPLE,
+          width: 5,
+          height: 5,
+          scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
         });
-        (ent as any)._worldosType = 'satellite';
-        (ent as any)._worldosData = s;
       }
     }
 
@@ -675,7 +679,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
     const previous = selectedHighlightRef.current;
     if (previous) {
-      if (previous.entity?.billboard) {
+      if (previous.billboard) {
+        previous.billboard.width = previous.width;
+        previous.billboard.height = previous.height;
+      } else if (previous.entity?.billboard) {
         previous.entity.billboard.width = new ConstantProperty(previous.width);
         previous.entity.billboard.height = new ConstantProperty(previous.height);
       }
@@ -687,13 +694,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       const noradId = selectedItem.data?.attributes?.norad_id;
       const satellite = satellites.find((item) => item.entity_id === selectedItem.data?.entity_id ||
         (noradId && item.attributes?.norad_id === noradId));
-      const entity = viewer.entities.values.find((item) => (item as any)._worldosType === 'satellite' &&
-        ((item as any)._worldosData?.entity_id === satellite?.entity_id ||
-          (noradId && (item as any)._worldosData?.attributes?.norad_id === noradId)));
-      if (entity?.billboard) {
-        selectedHighlightRef.current = { entity, width: 5, height: 5, tracks: [] };
-        entity.billboard.width = new ConstantProperty(18);
-        entity.billboard.height = new ConstantProperty(18);
+      const satelliteIcons = satelliteBillboardsRef.current;
+      const billboard = satelliteIcons && Array.from({ length: satelliteIcons.length }, (_, index) => satelliteIcons.get(index))
+        .find((item: any) => item.id?._worldosData?.entity_id === satellite?.entity_id ||
+          (noradId && item.id?._worldosData?.attributes?.norad_id === noradId));
+      if (billboard) {
+        selectedHighlightRef.current = { entity: null, billboard, width: 5, height: 5, tracks: [] };
+        billboard.width = 18;
+        billboard.height = 18;
       }
       const groundTrack = selectedItem.data?.attributes?.ground_track || satellite?.attributes?.ground_track;
       if (groundTrack && groundTrack.length > 1) {

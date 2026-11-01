@@ -106,6 +106,7 @@ from .ingestion.fires import fetch_live_firms_anomalies
 from .ingestion.opensky import (
     AircraftStateRecord,
     OpenSkyAuthError,
+    OpenSkyConnectionError,
     OpenSkyError,
     OpenSkyRateLimitError,
     fetch_aircraft_states,
@@ -180,6 +181,7 @@ async def lifespan(_app: FastAPI):
         asyncio.create_task(_scheduled_ingestion("OpenSky", lambda: ingest_opensky_states(global_snapshot=True), lambda: get_opensky_settings().is_configured, 30 * 60)),
         asyncio.create_task(_scheduled_ingestion("AISStream", ingest_maritime_vessels, lambda: get_aisstream_settings().is_configured, 5 * 60)),
         asyncio.create_task(_scheduled_ingestion("NASA FIRMS", ingest_thermal_anomalies, lambda: get_firms_settings().is_configured, 15 * 60)),
+        asyncio.create_task(_scheduled_ingestion("CelesTrak catalog cache", refresh_satellite_catalog_cache, lambda: True, 6 * 60 * 60)),
     ]
     try:
         yield
@@ -988,6 +990,26 @@ def ingest_opensky_states(
             error_message=str(rate_err),
         )
         raise HTTPException(status_code=429, detail=str(rate_err)) from rate_err
+    except OpenSkyConnectionError as connection_err:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(connection_err),
+        )
+        raise HTTPException(status_code=503, detail=str(connection_err)) from connection_err
+    except OpenSkyError as provider_err:
+        repo.finish_ingestion_run(
+            run_id,
+            status="failed",
+            records_fetched=0,
+            records_persisted=0,
+            records_failed=1,
+            error_message=str(provider_err),
+        )
+        raise HTTPException(status_code=502, detail=str(provider_err)) from provider_err
     except Exception as exc:
         repo.finish_ingestion_run(
             run_id,
@@ -1072,17 +1094,45 @@ def ingest_maritime_vessels() -> dict[str, Any]:
 
 @app.get("/space/satellites")
 def list_satellites(limit: int = Query(default=20_000, ge=1, le=20_000)):
+    fallback_catalog = None
     try:
-        records = fetch_current_satellites(limit=_clean_param(limit, 20_000))
+        fallback_catalog = WorldRepository().get_satellite_catalog_cache()
+    except Exception as exc:
+        logger.warning("Could not load persisted satellite catalog cache: %s", exc)
+    try:
+        records = fetch_current_satellites(
+            limit=_clean_param(limit, 20_000),
+            fallback_catalog=fallback_catalog,
+        )
     except SatelliteFeedError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     return [satellite_to_api_state(record) for record in records]
 
 
+def refresh_satellite_catalog_cache() -> dict[str, int]:
+    repo = WorldRepository()
+    fallback_catalog = repo.get_satellite_catalog_cache()
+    records = fetch_current_satellites(fallback_catalog=fallback_catalog)
+    if records and records[0].feed_status == "fresh" and records[0].elements_retrieved_at:
+        if fallback_catalog is None or fallback_catalog[1] < records[0].elements_retrieved_at:
+            repo.save_satellite_catalog_cache(
+                [record.raw_payload for record in records],
+                records[0].elements_retrieved_at,
+            )
+    return {"records_fetched": len(records), "records_persisted": 1 if records else 0}
+
+
 @app.get("/space/satellites/{norad_id}/ground-track")
 def satellite_ground_track(norad_id: str, points: int = Query(default=72, ge=12, le=360)):
+    fallback_catalog = None
     try:
-        return {"norad_id": norad_id, "points": fetch_satellite_ground_track(norad_id, points=points)}
+        fallback_catalog = WorldRepository().get_satellite_catalog_cache()
+    except Exception as exc:
+        logger.warning("Could not load persisted satellite catalog cache: %s", exc)
+    try:
+        return {"norad_id": norad_id, "points": fetch_satellite_ground_track(
+            norad_id, points=points, fallback_catalog=fallback_catalog
+        )}
     except SatelliteFeedError as exc:
         message = str(exc)
         status_code = 400 if message.startswith("Invalid") else 404 if "not in the active catalog" in message else 503

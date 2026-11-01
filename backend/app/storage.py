@@ -322,6 +322,7 @@ class WorldRepository:
         if precision:
             clauses.append("t.precision = %s")
             values.append(precision)
+        values.append(limit)
         where_clause = f"WHERE {' AND '.join(clauses)}" if clauses else ""
         sql = f"""SELECT o.id, e.id AS entity_id, e.canonical_name, o.measure, o.value, o.unit,
                          o.truth_class, t.starts_at, t.ends_at, t.precision,
@@ -375,7 +376,8 @@ class WorldRepository:
             JOIN time_intervals t ON t.id = o.time_interval_id
             JOIN evidence ev ON ev.id = o.evidence_id
             JOIN sources s ON s.id = ev.source_id
-            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            JOIN geometries g ON g.entity_id = e.id AND g.evidence_id = ev.id
+                AND g.geometry_kind = 'position' AND g.valid_during @> t.starts_at
             {where_clause}
             ORDER BY e.id, t.starts_at DESC
             LIMIT %s
@@ -408,7 +410,8 @@ class WorldRepository:
             JOIN time_intervals t ON t.id = o.time_interval_id
             JOIN evidence ev ON ev.id = o.evidence_id
             JOIN sources s ON s.id = ev.source_id
-            JOIN geometries g ON g.evidence_id = ev.id AND g.geometry_kind = 'position'
+            JOIN geometries g ON g.entity_id = e.id AND g.evidence_id = ev.id
+                AND g.geometry_kind = 'position' AND g.valid_during @> t.starts_at
             WHERE o.measure = 'aircraft.state'
               AND (
                   e.source_key = LOWER(%s)
@@ -467,7 +470,8 @@ class WorldRepository:
             JOIN time_intervals t ON t.id = o.time_interval_id
             JOIN evidence ev ON ev.id = o.evidence_id
             JOIN sources s ON s.id = ev.source_id
-            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            JOIN geometries g ON g.entity_id = e.id AND g.evidence_id = ev.id
+                AND g.geometry_kind = 'position' AND g.valid_during @> t.starts_at
             {where_clause}
             ORDER BY e.id, t.starts_at DESC
             LIMIT %s
@@ -503,7 +507,8 @@ class WorldRepository:
             JOIN time_intervals t ON t.id = o.time_interval_id
             JOIN evidence ev ON ev.id = o.evidence_id
             JOIN sources s ON s.id = ev.source_id
-            LEFT JOIN geometries g ON g.entity_id = e.id AND g.geometry_kind = 'position'
+            JOIN geometries g ON g.entity_id = e.id AND g.evidence_id = ev.id
+                AND g.geometry_kind = 'position' AND g.valid_during @> t.starts_at
             WHERE o.measure = 'orbital.ephemeris_state'
             ORDER BY e.id, t.starts_at DESC
             LIMIT %s
@@ -511,6 +516,27 @@ class WorldRepository:
         with self._connection() as conn, conn.cursor() as cur:
             cur.execute(sql, [limit])
             return [_clean_record(r) for r in cur.fetchall()]
+
+    def get_satellite_catalog_cache(self) -> tuple[list[dict[str, Any]], datetime] | None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SELECT catalog, retrieved_at FROM satellite_catalog_cache WHERE cache_key = 'active'")
+            row = cur.fetchone()
+            if not row or not isinstance(row["catalog"], list):
+                return None
+            return row["catalog"], row["retrieved_at"]
+
+    def save_satellite_catalog_cache(self, catalog: list[dict[str, Any]], retrieved_at: datetime) -> None:
+        with self._connection() as conn, conn.cursor() as cur:
+            cur.execute(
+                """INSERT INTO satellite_catalog_cache (cache_key, catalog, retrieved_at)
+                   VALUES ('active', %s, %s)
+                   ON CONFLICT (cache_key) DO UPDATE SET
+                       catalog = EXCLUDED.catalog,
+                       retrieved_at = EXCLUDED.retrieved_at,
+                       updated_at = now()
+                   WHERE satellite_catalog_cache.retrieved_at < EXCLUDED.retrieved_at""",
+                (json.dumps(catalog), retrieved_at),
+            )
 
     def cameras(
         self,

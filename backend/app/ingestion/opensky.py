@@ -29,6 +29,10 @@ class OpenSkyAuthError(OpenSkyError):
     """Authentication or token exchange failure."""
 
 
+class OpenSkyConnectionError(OpenSkyError):
+    """OpenSky could not be reached or returned a server-side failure."""
+
+
 class OpenSkyRateLimitError(OpenSkyError):
     """Rate limit or credit quota exhaustion."""
 
@@ -89,10 +93,13 @@ class OpenSkyTokenManager:
                 raise OpenSkyAuthError(f"OpenSky authentication failed: HTTP {status} (invalid client credentials)") from None
             elif status == 429:
                 raise OpenSkyRateLimitError("OpenSky token endpoint rate limit exceeded") from None
+            elif status >= 500:
+                raise OpenSkyConnectionError(f"OpenSky token endpoint returned HTTP {status}") from None
             raise OpenSkyAuthError(f"OpenSky token exchange failed: HTTP {status}") from None
-        except URLError as e:
-            logger.error("OpenSky token endpoint unreachable: %s", e.reason)
-            raise OpenSkyAuthError(f"OpenSky token endpoint unreachable: {e.reason}") from None
+        except (URLError, TimeoutError, OSError) as e:
+            reason = getattr(e, "reason", e)
+            logger.error("OpenSky token endpoint unreachable: %s", reason)
+            raise OpenSkyConnectionError(f"OpenSky token endpoint unreachable: {reason}") from None
 
         token = data.get("access_token")
         expires_in = data.get("expires_in", 1800)
@@ -267,9 +274,10 @@ def fetch_aircraft_states(
         elif status == 401:
             raise OpenSkyAuthError("OpenSky rejected bearer token (HTTP 401 Unauthorized)") from None
         raise OpenSkyError(f"OpenSky API error: HTTP {status}") from None
-    except URLError as e:
-        logger.error("OpenSky API connection error: %s", e.reason)
-        raise OpenSkyError(f"OpenSky API connection error: {e.reason}") from None
+    except (URLError, TimeoutError, OSError) as e:
+        reason = getattr(e, "reason", e)
+        logger.error("OpenSky API connection error: %s", reason)
+        raise OpenSkyConnectionError(f"OpenSky API connection error: {reason}") from None
 
     payload_hash = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
     raw_states = payload.get("states") or []
