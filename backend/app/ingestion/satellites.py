@@ -84,8 +84,10 @@ def generate_orbital_ground_track(
     current_lat: float,
     period_min: float,
     num_points: int = 72,
+    points: int | None = None,
 ) -> list[list[float]]:
     """Compute ground track coordinates [lon, lat] for one full orbit."""
+    total_points = points if points is not None else num_points
     inc_rad = math.radians(inclination_deg)
     track: list[list[float]] = []
     
@@ -93,8 +95,8 @@ def generate_orbital_ground_track(
     earth_rot_deg_per_min = 360.0 / 1436.06  # Sidereal day ~ 1436 min
     
     # Orbit step size
-    for i in range(num_points + 1):
-        fraction = i / num_points
+    for i in range(total_points + 1):
+        fraction = i / total_points
         orbit_angle = fraction * 2.0 * math.pi
         
         # Sub-satellite latitude in circular orbit approximation
@@ -694,7 +696,7 @@ def fetch_satellite_ground_track(
     calculated_at = now or datetime.now(UTC)
     try:
         catalog, _, _ = _get_active_catalog(calculated_at, fallback_catalog)
-    except SatelliteFeedError:
+    except Exception:
         catalog = []
     item = next((row for row in catalog if str(row.get("NORAD_CAT_ID")) == norad_id), None)
     if item is None:
@@ -705,7 +707,7 @@ def fetch_satellite_ground_track(
                 current_lon=auth_item["lon"],
                 current_lat=auth_item["lat"],
                 period_min=auth_item["period_min"],
-                points=points,
+                num_points=points,
             )
         raise SatelliteFeedError(f"NORAD catalog ID {norad_id} is not in the active catalog")
     try:
@@ -732,23 +734,23 @@ def fetch_satellite_ground_track(
     return track
 
 
+def _as_utc_timestamp(value: datetime | None, default: datetime | None = None) -> datetime:
+    val = value if value is not None else (default if default is not None else datetime.now(UTC))
+    if val.tzinfo is None or val.utcoffset() is None:
+        return val.replace(tzinfo=UTC)
+    return val.astimezone(UTC)
+
+
 def satellite_to_api_state(record: SatelliteRecord) -> dict[str, Any]:
     """Build the live map row while keeping the orbital-element age explicit."""
     payload_hash = hashlib.sha256(
         json.dumps(record.raw_payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
     ).hexdigest()
 
-    def as_utc(value: datetime | None, default: datetime) -> datetime:
-        if value is None:
-            value = default
-        if value.tzinfo is None or value.utcoffset() is None:
-            return value.replace(tzinfo=UTC)
-        return value.astimezone(UTC)
-
     now_utc = datetime.now(UTC)
-    epoch = as_utc(record.epoch, now_utc)
-    elements_epoch = as_utc(record.elements_epoch, epoch)
-    elements_retrieved_at = as_utc(record.elements_retrieved_at, epoch)
+    epoch = _as_utc_timestamp(record.epoch, now_utc)
+    elements_epoch = _as_utc_timestamp(record.elements_epoch, epoch)
+    elements_retrieved_at = _as_utc_timestamp(record.elements_retrieved_at, epoch)
     element_age_hours = max(0.0, (epoch - elements_epoch).total_seconds() / 3600.0)
     locator = f"{CELESTRAK_ACTIVE_URL}#NORAD_CAT_ID={record.norad_id}"
     entity_id = stable_id("entity", "satellite", record.norad_id)
