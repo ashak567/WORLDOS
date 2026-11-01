@@ -358,8 +358,9 @@ class AssistantMapBounds(BaseModel):
 
     @model_validator(mode="after")
     def validate_bounds(self) -> "AssistantMapBounds":
-        if self.min_lon > self.max_lon or self.min_lat > self.max_lat:
-            raise ValueError("Map bounds are invalid")
+        if self.min_lat > self.max_lat:
+            self.min_lat, self.max_lat = self.max_lat, self.min_lat
+        # Note: min_lon > max_lon is geodetically valid when crossing the antimeridian (+/-180)
         return self
 
 
@@ -371,7 +372,7 @@ class AssistantTravelPreferences(BaseModel):
 
 class AssistantMapContextRequest(BaseModel):
     model_config = {"extra": "forbid"}
-    selected_entity_id: UUID | None = None
+    selected_entity_id: str | None = None
     map_bounds: AssistantMapBounds | None = None
     travel_preferences: AssistantTravelPreferences | None = None
 
@@ -408,20 +409,36 @@ def _compact_assistant_context(world_context: WorldContext) -> dict[str, Any]:
 @app.post("/assistant/map-context")
 def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]:
     """Return a small, sourced map slice for an explicitly requested agent tool call."""
-    if not request.map_bounds and not request.selected_entity_id:
+    entity_uuid: UUID | None = None
+    if request.selected_entity_id:
+        try:
+            entity_uuid = UUID(request.selected_entity_id)
+        except (ValueError, TypeError, AttributeError):
+            entity_uuid = None
+
+    if not request.map_bounds and not entity_uuid:
         raise HTTPException(status_code=422, detail="Zoom to an area or select a map feature first")
+
     bbox = None
     if request.map_bounds:
+        min_lon = request.map_bounds.min_lon
+        max_lon = request.map_bounds.max_lon
+        min_lat = min(request.map_bounds.min_lat, request.map_bounds.max_lat)
+        max_lat = max(request.map_bounds.min_lat, request.map_bounds.max_lat)
+        if min_lon > max_lon:
+            # Spans the antimeridian (e.g. 170° to -160°). Clamp to standard full longitude range [-180, 180] for BoundingBox
+            min_lon = -180.0
+            max_lon = 180.0
         bbox = BoundingBox(
-            min_longitude=request.map_bounds.min_lon,
-            min_latitude=request.map_bounds.min_lat,
-            max_longitude=request.map_bounds.max_lon,
-            max_latitude=request.map_bounds.max_lat,
+            min_longitude=min_lon,
+            min_latitude=min_lat,
+            max_longitude=max_lon,
+            max_latitude=max_lat,
         )
     try:
         context = WorldRepository().scoped_context(
             bbox=bbox,
-            entity_ids=[request.selected_entity_id] if request.selected_entity_id else None,
+            entity_ids=[entity_uuid] if entity_uuid else None,
             limit=30,
         )
         result = _compact_assistant_context(context)
@@ -1436,6 +1453,7 @@ def assistant_elevenlabs_session(request: Request) -> dict[str, str]:
     if os.getenv("WORLDOS_ENABLE_ASSISTANT", "true").strip().lower() != "true":
         raise HTTPException(status_code=503, detail="The WORLDOS assistant is disabled")
     host = request.client.host if request.client else "unknown"
+    rate_limit = int(os.getenv("WORLDOS_ASSISTANT_SESSION_RATE_LIMIT", "60"))
     now = time.monotonic()
     with _assistant_session_lock:
         for address, stamps in list(_assistant_session_requests.items()):
@@ -1445,7 +1463,7 @@ def assistant_elevenlabs_session(request: Request) -> dict[str, str]:
             else:
                 del _assistant_session_requests[address]
         recent = _assistant_session_requests.get(host, [])
-        if len(recent) >= 6:
+        if len(recent) >= rate_limit:
             raise HTTPException(status_code=429, detail="Too many assistant sessions; try again later")
         recent.append(now)
         _assistant_session_requests[host] = recent

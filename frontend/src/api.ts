@@ -108,11 +108,17 @@ export type AssistantMapContext = {
   [key: string]: unknown;
 };
 
-export type AssistantAction = {
-  type: 'set_layer_visibility';
-  layer_id: string;
-  visible: boolean;
-};
+export type AssistantAction =
+  | {
+      type: 'set_layer_visibility';
+      layer_id: string;
+      visible: boolean;
+    }
+  | {
+      type: 'fly_to';
+      center: [number, number];
+      zoom?: number;
+    };
 
 export type AircraftState = {
   id: string;

@@ -1,6 +1,6 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ConversationProvider, useConversation } from '@elevenlabs/react';
-import { Mic, PhoneOff, Send, Volume2, X } from 'lucide-react';
+import { Mic, PhoneOff, Send, Trash2, Volume2, X } from 'lucide-react';
 import { AssistantAction, AssistantContext, fetchAssistantMapContext, getAssistantSessionToken } from '../api';
 
 interface AssistantPanelProps {
@@ -45,6 +45,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   const [preferences, setPreferences] = useState<TravelPreferences>(readPreferences);
   const [paceDraft, setPaceDraft] = useState<TravelPreferences['pace']>('balanced');
   const [photoDraft, setPhotoDraft] = useState('');
+  const transcriptRef = useRef<HTMLDivElement>(null);
   const contextRef = useRef(context);
   const preferencesRef = useRef(preferences);
   const onActionRef = useRef(onAction);
@@ -53,10 +54,14 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   onActionRef.current = onAction;
 
   const handleMessage = useCallback((item: AssistantMessage) => {
-    if (item.message.trim()) setMessages((current) => [...current.slice(-19), item]);
+    if (item.message.trim()) {
+      setMessages((current) => [...current.slice(-29), item]);
+    }
   }, []);
+
   const conversation = useConversation({
-    onMessage: ({ message: text, role, source }) => handleMessage({ role: role === 'user' || source === 'user' ? 'user' : 'ai', message: text }),
+    onMessage: ({ message: text, role, source }) =>
+      handleMessage({ role: role === 'user' || source === 'user' ? 'user' : 'ai', message: text }),
     onError: (error) => setMessage(error || 'The ElevenLabs conversation hit a snag.'),
     clientTools: {
       get_worldos_map_context: async () => {
@@ -73,22 +78,49 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
         }
       },
       set_map_layer_visibility: async (args: { layer_id: string; visible: boolean }) => {
-        if (!SAFE_LAYER_IDS.has(args.layer_id) || typeof args.visible !== 'boolean') return JSON.stringify({ success: false, message: 'That map layer action is not allowed.' });
+        if (!SAFE_LAYER_IDS.has(args.layer_id) || typeof args.visible !== 'boolean') {
+          return JSON.stringify({ success: false, message: 'That map layer action is not allowed.' });
+        }
         onActionRef.current({ type: 'set_layer_visibility', layer_id: args.layer_id, visible: args.visible });
         return JSON.stringify({ success: true, message: `${args.layer_id} is now ${args.visible ? 'visible' : 'hidden'}.` });
+      },
+      fly_to_location: async (args: { longitude: number; latitude: number; zoom?: number }) => {
+        if (typeof args.longitude !== 'number' || typeof args.latitude !== 'number') {
+          return JSON.stringify({ success: false, message: 'Invalid coordinates' });
+        }
+        if (args.longitude < -180 || args.longitude > 180 || args.latitude < -90 || args.latitude > 90) {
+          return JSON.stringify({ success: false, message: 'Coordinates out of bounds [-180, 180], [-90, 90]' });
+        }
+        const zoom = typeof args.zoom === 'number' && args.zoom >= 1 && args.zoom <= 20 ? args.zoom : 12;
+        onActionRef.current({
+          type: 'fly_to',
+          center: [args.longitude, args.latitude],
+          zoom,
+        });
+        return JSON.stringify({
+          success: true,
+          message: `Navigated map to [${args.longitude.toFixed(4)}, ${args.latitude.toFixed(4)}] at zoom ${zoom}.`,
+        });
       },
     },
   });
 
+  // Preserve messages and evidence across panel open/close so the user doesn't lose context
   useEffect(() => {
-    if (!isOpen && conversation.status !== 'disconnected') void conversation.endSession();
+    if (!isOpen && conversation.status !== 'disconnected') {
+      void conversation.endSession();
+    }
     if (!isOpen) {
       setQuestion('');
-      setMessage('');
-      setEvidence([]);
-      setMessages([]);
     }
   }, [isOpen]);
+
+  // Auto-scroll transcript on new messages
+  useEffect(() => {
+    if (transcriptRef.current) {
+      transcriptRef.current.scrollTop = transcriptRef.current.scrollHeight;
+    }
+  }, [messages]);
 
   const startConversation = async () => {
     setIsStarting(true);
@@ -168,14 +200,59 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
           </form>
         </details>
 
-        <div className="assistant-transcript" aria-live="polite">
-          {messages.map((item, index) => <p className={`assistant-message ${item.role}`} key={`${index}-${item.message.slice(0, 20)}`}><strong>{item.role === 'ai' ? 'WORLDOS' : 'You'}</strong>{item.message}</p>)}
+        <div className="assistant-transcript-section">
+          <div className="assistant-transcript-bar">
+            <span className="assistant-transcript-title">TRANSCRIPT</span>
+            {messages.length > 0 && (
+              <button
+                className="assistant-clear-button"
+                type="button"
+                onClick={() => setMessages([])}
+                title="Clear transcript history"
+              >
+                <Trash2 size={12} /> Clear
+              </button>
+            )}
+          </div>
+          <div className="assistant-transcript" aria-live="polite" ref={transcriptRef}>
+            {messages.length === 0 ? (
+              <p className="assistant-transcript-empty">
+                No conversation yet. Connect below or ask a question to start.
+              </p>
+            ) : (
+              messages.map((item, index) => (
+                <div className={`assistant-message ${item.role}`} key={`${index}-${item.message.slice(0, 20)}`}>
+                  <span className="assistant-sender">{item.role === 'ai' ? 'WORLDOS' : 'You'}</span>
+                  <p className="assistant-text">{item.message}</p>
+                </div>
+              ))
+            )}
+          </div>
         </div>
-        {evidence.length > 0 && <div className="assistant-evidence"><strong>Map sources shared with the assistant</strong>{evidence.map((item) => <div className="assistant-evidence-item" key={item.evidence_id}><span>{item.source_name}</span><time dateTime={item.retrieved_at}>{new Date(item.retrieved_at).toLocaleString()}</time></div>)}</div>}
+
+        {evidence.length > 0 && (
+          <div className="assistant-evidence">
+            <strong>Map sources shared with the assistant</strong>
+            {evidence.map((item) => (
+              <div className="assistant-evidence-item" key={item.evidence_id}>
+                <span>{item.source_name}</span>
+                <time dateTime={item.retrieved_at}>{new Date(item.retrieved_at).toLocaleString()}</time>
+              </div>
+            ))}
+          </div>
+        )}
 
         <form onSubmit={sendQuestion}>
           <label htmlFor="assistant-question">Ask by text</label>
-          <textarea id="assistant-question" value={question} onChange={(event) => setQuestion(event.target.value)} rows={3} maxLength={1200} placeholder="What stands out in this view?" disabled={conversation.status !== 'connected'} />
+          <textarea
+            id="assistant-question"
+            value={question}
+            onChange={(event) => setQuestion(event.target.value)}
+            rows={3}
+            maxLength={1200}
+            placeholder={conversation.status === 'connected' ? 'What stands out in this view? (or speak aloud)' : 'Connect voice assistant below to start chatting…'}
+            disabled={conversation.status !== 'connected'}
+          />
           <div className="assistant-controls">
             {conversation.status === 'connected' ? (
               <>

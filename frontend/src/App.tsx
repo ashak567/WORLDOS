@@ -150,9 +150,16 @@ export default function App() {
   }, []);
 
   const handleAssistantAction = useCallback((action: AssistantAction) => {
-    if (action.type !== 'set_layer_visibility' || !INITIAL_LAYERS.some((layer) => layer.id === action.layer_id)) return;
-    setLayers((prev) => prev.map((layer) => layer.id === action.layer_id ? { ...layer, enabled: action.visible } : layer));
-  }, []);
+    if (action.type === 'set_layer_visibility') {
+      if (!INITIAL_LAYERS.some((layer) => layer.id === action.layer_id)) return;
+      setLayers((prev) => prev.map((layer) => layer.id === action.layer_id ? { ...layer, enabled: action.visible } : layer));
+    } else if (action.type === 'fly_to') {
+      setTargetLocation({
+        center: action.center,
+        zoom: action.zoom ?? (viewMode === '3d' ? 12 : 13),
+      });
+    }
+  }, [viewMode]);
 
   useEffect(() => {
     if (viewportZoom >= 15.5 && viewportBbox && !streetViewCenter) {
