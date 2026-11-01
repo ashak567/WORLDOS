@@ -120,23 +120,21 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       viewer.imageryLayers.removeAll();
 
       if (mode === 'satellite-hybrid' && Ion.defaultAccessToken && allowGoogleTiles) {
-        viewer.scene.globe.show = false;
+        // Keep the raster globe visible while the photorealistic tileset loads.
+        applyImageryLayers(viewer, mode, false);
+        const googleRequestId = imageryRequestRef.current;
         createGooglePhotorealistic3DTileset(
           { onlyUsingWithGoogleGeocoder: true },
           { showCreditsOnScreen: true }
         ).then((tileset) => {
-          if (viewer.isDestroyed() || requestId !== imageryRequestRef.current) {
+          if (viewer.isDestroyed() || googleRequestId !== imageryRequestRef.current) {
             tileset.destroy();
             return;
           }
           googleTilesetRef.current = tileset;
           viewer.scene.primitives.add(tileset);
           viewer.scene.requestRender();
-        }).catch(() => {
-          if (!viewer.isDestroyed() && requestId === imageryRequestRef.current) {
-            applyImageryLayers(viewer, mode, false);
-          }
-        });
+        }).catch(() => {});
         return;
       }
 
@@ -285,8 +283,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         handlerRef.current.destroy();
         handlerRef.current = null;
       }
+      if (viewerRef.current === viewer) viewerRef.current = null;
+      geojsonSourceRef.current = null;
+      googleTilesetRef.current = null;
+      selectedHighlightRef.current = null;
+      selectedAircraftTrackRef.current = null;
+      aircraftBillboardsRef.current = null;
+      satelliteBillboardsRef.current = null;
       viewer.destroy();
-      viewerRef.current = null;
     };
   }, []);
 
@@ -298,9 +302,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         terrainPromiseRef.current ??= createWorldTerrainAsync();
         terrainPromiseRef.current
           .then((terrainProvider) => {
-            if (viewerRef.current) {
-              viewerRef.current.terrainProvider = terrainProvider;
-              viewerRef.current.scene.requestRender();
+            const viewer = viewerRef.current;
+            if (viewer && !viewer.isDestroyed()) {
+              viewer.terrainProvider = terrainProvider;
+              viewer.scene.requestRender();
             }
           })
           .catch(() => {});
@@ -368,6 +373,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       clampToGround: true,
     })
       .then((ds) => {
+        if (viewer.isDestroyed() || viewerRef.current !== viewer) {
+          ds.destroy();
+          return;
+        }
         if (geojsonSourceRef.current) {
           viewer.dataSources.remove(geojsonSourceRef.current, true);
         }

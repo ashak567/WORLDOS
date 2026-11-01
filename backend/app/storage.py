@@ -384,6 +384,7 @@ class WorldRepository:
         """
         values.append(limit)
         with self._connection() as conn, conn.cursor() as cur:
+            cur.execute("SET LOCAL max_parallel_workers_per_gather = 0")
             cur.execute(sql, values)
             return [_clean_record(r) for r in cur.fetchall()]
 
