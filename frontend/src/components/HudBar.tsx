@@ -255,7 +255,7 @@ export const HudBar: React.FC<HudBarProps> = ({
             <Ship size={11} />
             <span className="telemetry-val">{vesselCount}</span>
           </div>
-          <div className="telemetry-badge purple" title="Active Orbital Assets">
+          <div className="telemetry-badge neon-red" title="Active Orbital Assets (SGP4 Ephemeris)">
             <Satellite size={11} />
             <span className="telemetry-val">{satelliteCount}</span>
           </div>

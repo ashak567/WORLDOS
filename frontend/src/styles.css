@@ -1350,6 +1350,11 @@ html, body, #root {
   color: #c084fc;
   border-color: rgba(192, 132, 252, 0.25);
 }
+.telemetry-badge.neon-red {
+  color: #ff1744;
+  border-color: rgba(255, 23, 68, 0.35);
+  box-shadow: 0 0 8px rgba(255, 23, 68, 0.2);
+}
 .telemetry-badge.red {
   color: #ef4444;
   border-color: rgba(239, 68, 68, 0.25);

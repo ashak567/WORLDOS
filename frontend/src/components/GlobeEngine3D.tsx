@@ -26,6 +26,7 @@ import {
   AIRPLANE_ICON_GROUND,
   VESSEL_ICON_CYAN,
   SATELLITE_ICON_PURPLE,
+  SATELLITE_ICON_NEON_RED,
   CAMERA_ICON_EMERALD,
   FIRE_ICON_ORANGE,
   FIRE_ICON_RED,
@@ -474,10 +475,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         satelliteBillboards.add({
           id: { _worldosType: 'satellite', _worldosData: s },
           position,
-          image: SATELLITE_ICON_PURPLE,
-          width: 5,
-          height: 5,
-          scaleByDistance: new NearFarScalar(5.0e5, 1.3, 5.0e7, 0.65),
+          image: SATELLITE_ICON_NEON_RED,
+          width: 14,
+          height: 14,
+          scaleByDistance: new NearFarScalar(1.0e6, 1.4, 8.0e7, 0.85),
         });
       }
     }
@@ -709,19 +710,29 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         .find((item: any) => item.id?._worldosData?.entity_id === satellite?.entity_id ||
           (noradId && item.id?._worldosData?.attributes?.norad_id === noradId));
       if (billboard) {
-        selectedHighlightRef.current = { entity: null, billboard, width: 5, height: 5, tracks: [] };
-        billboard.width = 18;
-        billboard.height = 18;
+        selectedHighlightRef.current = { entity: null, billboard, width: 14, height: 14, tracks: [] };
+        billboard.width = 24;
+        billboard.height = 24;
       }
       const groundTrack = selectedItem.data?.attributes?.ground_track || satellite?.attributes?.ground_track;
       if (groundTrack && groundTrack.length > 1) {
         const highlight = selectedHighlightRef.current ?? { entity: null, width: 0, height: 0, tracks: [] };
+        const altMeters = ((satellite?.attributes?.altitude_km ?? 500) * 1000);
         splitTrackAtAntimeridian(groundTrack).forEach((segment) => {
+          // 1. Surface ground track projection in luminous neon red
           highlight.tracks.push(viewer.entities.add({
             polyline: {
               positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 0)),
-              width: 2.5,
-              material: Color.fromCssColorString('#c084fc').withAlpha(0.7),
+              width: 2.0,
+              material: Color.fromCssColorString('#ff1744').withAlpha(0.55),
+            },
+          }));
+          // 2. True 3D orbital trajectory in space at actual satellite altitude
+          highlight.tracks.push(viewer.entities.add({
+            polyline: {
+              positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, altMeters)),
+              width: 3.5,
+              material: new PolylineGlowMaterialProperty({ glowPower: 0.35, color: Color.fromCssColorString('#ff1744') }),
             },
           }));
         });

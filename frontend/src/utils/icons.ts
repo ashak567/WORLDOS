@@ -21,9 +21,10 @@ const VESSEL_PATH = `<path d="M12 2L4 9v7l8 6 8-6V9l-8-7zm0 3.5l5 4.38v4.24l-5 3
 export const VESSEL_ICON_CYAN = createSvgDataUrl(VESSEL_PATH, '#06b6d4');
 export const VESSEL_ICON_WHITE = createSvgDataUrl(VESSEL_PATH, '#ffffff');
 
-// 3. Satellite (Orbital Solar Array)
+// 3. Satellite (Orbital Solar Array) - Glowing Neon Red Space Beacon
 const SATELLITE_PATH = `<circle cx="12" cy="12" r="3.5"/><path d="M4 10h3v4H4zm13 0h3v4h-3zM10 4h4v3h-4zm0 13h4v3h-4zM2 11h2v2H2zm18 0h2v2h-2zM11 2h2v2h-2zm0 18h2v2h-2z"/>`;
-export const SATELLITE_ICON_PURPLE = createSvgDataUrl(SATELLITE_PATH, '#c084fc');
+export const SATELLITE_ICON_NEON_RED = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><defs><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="1.8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><circle cx="16" cy="16" r="12" fill="%23ff003b" fill-opacity="0.28"/><circle cx="16" cy="16" r="10" fill="none" stroke="%23ff003b" stroke-width="1.8" filter="url(%23glow)"/><circle cx="16" cy="16" r="5.5" fill="%23ff1744" filter="url(%23glow)"/><circle cx="16" cy="16" r="2.5" fill="%23ffffff"/><line x1="16" y1="2" x2="16" y2="8" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="16" y1="24" x2="16" y2="30" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="2" y1="16" x2="8" y2="16" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="24" y1="16" x2="30" y2="16" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/></svg>`;
+export const SATELLITE_ICON_PURPLE = SATELLITE_ICON_NEON_RED;
 export const SATELLITE_ICON_WHITE = createSvgDataUrl(SATELLITE_PATH, '#ffffff');
 
 // 4. Surveillance / Traffic Camera

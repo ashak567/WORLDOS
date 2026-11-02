@@ -613,7 +613,7 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
               pickable: false,
               widthMinPixels: 2.5,
               getPath: (d: { path: [number, number][] }) => d.path,
-              getColor: [192, 132, 252, 210], // Soft glowing purple
+              getColor: [255, 23, 68, 220], // Neon red
             })
           );
         }
@@ -630,14 +630,14 @@ export const MapEngine2D: React.FC<MapEngine2DProps> = ({
           pickable: true,
           getPosition: (d: SatelliteState) => [d.longitude, d.latitude],
           radiusUnits: 'pixels',
-          radiusMinPixels: 1.25,
-          radiusMaxPixels: 7,
+          radiusMinPixels: 2.5,
+          radiusMaxPixels: 9,
           getRadius: (d: SatelliteState) =>
-            selectedItem?.type === 'satellite' && selectedItem.data?.entity_id === d.entity_id ? 6 : 1.75,
+            selectedItem?.type === 'satellite' && selectedItem.data?.entity_id === d.entity_id ? 7.5 : 3.0,
           stroked: true,
-          lineWidthMinPixels: 1,
-          getLineColor: [235, 210, 255, 235],
-          getFillColor: [168, 85, 247, 210],
+          lineWidthMinPixels: 1.5,
+          getLineColor: [255, 255, 255, 255],
+          getFillColor: [255, 23, 68, 235], // Neon Red
           onClick: (info) => {
             if (info.object) {
               onSelectItem({ type: 'satellite', data: info.object });
