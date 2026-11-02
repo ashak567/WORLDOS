@@ -1148,7 +1148,8 @@ def list_aircraft_states(
     max_lon_f = float(max_lon_v) if max_lon_v is not None else None
     max_lat_f = float(max_lat_v) if max_lat_v is not None else None
 
-    # 1. Query persisted database records first
+    # 1. Query persisted database records first (ensuring freshness)
+    now = datetime.now(UTC)
     try:
         db_records = WorldRepository().aircraft_states(
             min_lon=min_lon_f,
@@ -1158,11 +1159,23 @@ def list_aircraft_states(
             limit=limit_v,
         )
         if db_records:
-            return db_records
+            newest_obs: datetime | None = None
+            for rec in db_records[:20]:
+                obs_raw = rec.get("observed_at")
+                if obs_raw:
+                    try:
+                        obs_dt = datetime.fromisoformat(str(obs_raw).replace("Z", "+00:00"))
+                        if newest_obs is None or obs_dt > newest_obs:
+                            newest_obs = obs_dt
+                    except Exception:
+                        pass
+            if newest_obs and (now - newest_obs).total_seconds() < 900 and len(db_records) >= 10:
+                return db_records
+            logger.info("Persisted DB aircraft records are stale (%s); checking live or dynamic fleet", newest_obs)
     except Exception as exc:
         logger.warning("Could not query DB aircraft states: %s", exc)
 
-    # 2. If DB has no stored aircraft yet (cold boot / initial deploy), fetch live OpenSky or check in-memory cache
+    # 2. If DB has no fresh aircraft yet, fetch live OpenSky or check in-memory cache
     if get_opensky_settings().is_configured:
         try:
             live = fetch_aircraft_states(

@@ -161,24 +161,63 @@ def set_cached_aircraft_states(records: list[AircraftStateRecord]) -> None:
 
 
 SAMPLE_AIRCRAFT_DATA: list[dict[str, Any]] = [
-    # North Atlantic Corridors
+    # North Atlantic Corridors (Eastbound & Westbound)
     {"icao24": "4006c3", "callsign": "BAW178", "country": "United Kingdom", "lat": 52.34, "lon": -35.21, "alt": 11277, "track": 260.0, "vel": 235.0},
     {"icao24": "a0211a", "callsign": "UAL854", "country": "United States", "lat": 48.12, "lon": -42.84, "alt": 10668, "track": 255.0, "vel": 242.0},
     {"icao24": "3c65c2", "callsign": "DLH400", "country": "Germany", "lat": 55.40, "lon": -28.65, "alt": 10972, "track": 270.0, "vel": 230.0},
     {"icao24": "3949ee", "callsign": "AFR006", "country": "France", "lat": 51.05, "lon": -38.50, "alt": 11582, "track": 265.0, "vel": 238.0},
+    {"icao24": "4009a1", "callsign": "VIR10", "country": "United Kingdom", "lat": 53.15, "lon": -22.40, "alt": 11887, "track": 85.0, "vel": 260.0},
+    {"icao24": "a10b42", "callsign": "AAL106", "country": "United States", "lat": 50.80, "lon": -18.90, "alt": 11277, "track": 80.0, "vel": 255.0},
+    {"icao24": "484501", "callsign": "KLM641", "country": "Netherlands", "lat": 56.20, "lon": -45.10, "alt": 10668, "track": 280.0, "vel": 228.0},
+    {"icao24": "4ca918", "callsign": "EIN105", "country": "Ireland", "lat": 54.10, "lon": -30.50, "alt": 11582, "track": 265.0, "vel": 232.0},
+    {"icao24": "3441a5", "callsign": "IBE6251", "country": "Spain", "lat": 42.50, "lon": -32.80, "alt": 11277, "track": 250.0, "vel": 240.0},
+    {"icao24": "4951b2", "callsign": "TAP101", "country": "Portugal", "lat": 38.90, "lon": -28.40, "alt": 10972, "track": 260.0, "vel": 235.0},
+
+    # North America Transcontinental & Regional
+    {"icao24": "a3b102", "callsign": "AAL100", "country": "United States", "lat": 40.71, "lon": -74.00, "alt": 9144, "track": 75.0, "vel": 245.0},
+    {"icao24": "a79401", "callsign": "DAL221", "country": "United States", "lat": 33.64, "lon": -84.42, "alt": 10668, "track": 285.0, "vel": 232.0},
+    {"icao24": "a9314e", "callsign": "SWA421", "country": "United States", "lat": 37.61, "lon": -122.37, "alt": 10058, "track": 90.0, "vel": 228.0},
+    {"icao24": "c01823", "callsign": "ACA872", "country": "Canada", "lat": 45.47, "lon": -73.74, "alt": 11277, "track": 60.0, "vel": 240.0},
+    {"icao24": "a2401f", "callsign": "UAL1", "country": "United States", "lat": 37.77, "lon": -122.41, "alt": 11582, "track": 265.0, "vel": 250.0},
+    {"icao24": "a5518b", "callsign": "JBU523", "country": "United States", "lat": 26.07, "lon": -80.15, "alt": 9753, "track": 185.0, "vel": 220.0},
+    {"icao24": "a88c30", "callsign": "DAL445", "country": "United States", "lat": 44.88, "lon": -93.22, "alt": 10363, "track": 120.0, "vel": 230.0},
+    {"icao24": "c058e1", "callsign": "WJA128", "country": "Canada", "lat": 51.11, "lon": -114.02, "alt": 10668, "track": 95.0, "vel": 235.0},
+    {"icao24": "a4190c", "callsign": "ASA62", "country": "United States", "lat": 58.36, "lon": -134.58, "alt": 10972, "track": 145.0, "vel": 240.0},
+    {"icao24": "a0592e", "callsign": "FFT142", "country": "United States", "lat": 39.86, "lon": -104.67, "alt": 9144, "track": 210.0, "vel": 215.0},
+    {"icao24": "a7d189", "callsign": "AAL4", "country": "United States", "lat": 33.94, "lon": -118.40, "alt": 11277, "track": 65.0, "vel": 255.0},
+    {"icao24": "a34fe2", "callsign": "FDX382", "country": "United States", "lat": 35.04, "lon": -89.97, "alt": 10668, "track": 330.0, "vel": 245.0},
+    {"icao24": "a29b01", "callsign": "UPS102", "country": "United States", "lat": 38.17, "lon": -85.73, "alt": 9753, "track": 15.0, "vel": 238.0},
+
     # European Airspace
     {"icao24": "4ca255", "callsign": "RYR415", "country": "Ireland", "lat": 48.85, "lon": 2.35, "alt": 9753, "track": 140.0, "vel": 215.0},
     {"icao24": "407172", "callsign": "EZY812", "country": "United Kingdom", "lat": 51.50, "lon": -0.12, "alt": 8534, "track": 180.0, "vel": 210.0},
     {"icao24": "4b1802", "callsign": "SWR124", "country": "Switzerland", "lat": 46.81, "lon": 8.22, "alt": 10363, "track": 125.0, "vel": 220.0},
     {"icao24": "468e21", "callsign": "SAS532", "country": "Sweden", "lat": 59.32, "lon": 18.06, "alt": 10668, "track": 200.0, "vel": 225.0},
-    # North America
-    {"icao24": "a3b102", "callsign": "AAL100", "country": "United States", "lat": 40.71, "lon": -74.00, "alt": 9144, "track": 75.0, "vel": 245.0},
-    {"icao24": "a79401", "callsign": "DAL221", "country": "United States", "lat": 33.64, "lon": -84.42, "alt": 10668, "track": 285.0, "vel": 232.0},
-    {"icao24": "a9314e", "callsign": "SWA421", "country": "United States", "lat": 37.61, "lon": -122.37, "alt": 10058, "track": 90.0, "vel": 228.0},
-    {"icao24": "c01823", "callsign": "ACA872", "country": "Canada", "lat": 45.47, "lon": -73.74, "alt": 11277, "track": 60.0, "vel": 240.0},
+    {"icao24": "3c4b26", "callsign": "DLH102", "country": "Germany", "lat": 50.03, "lon": 8.57, "alt": 9144, "track": 350.0, "vel": 220.0},
+    {"icao24": "39b891", "callsign": "AFR124", "country": "France", "lat": 43.66, "lon": 7.21, "alt": 10058, "track": 320.0, "vel": 225.0},
+    {"icao24": "4bb201", "callsign": "THY198", "country": "Turkey", "lat": 41.27, "lon": 28.75, "alt": 11277, "track": 300.0, "vel": 240.0},
+    {"icao24": "3002b1", "callsign": "ITY401", "country": "Italy", "lat": 41.80, "lon": 12.23, "alt": 9448, "track": 340.0, "vel": 218.0},
+    {"icao24": "471f45", "callsign": "WZZ202", "country": "Hungary", "lat": 47.43, "lon": 19.25, "alt": 10363, "track": 270.0, "vel": 222.0},
+    {"icao24": "4401a8", "callsign": "AUA301", "country": "Austria", "lat": 48.11, "lon": 16.56, "alt": 9753, "track": 110.0, "vel": 220.0},
+    {"icao24": "461e05", "callsign": "FIN132", "country": "Finland", "lat": 60.31, "lon": 24.96, "alt": 10972, "track": 190.0, "vel": 230.0},
+    {"icao24": "4840e4", "callsign": "KLM141", "country": "Netherlands", "lat": 52.31, "lon": 4.76, "alt": 8839, "track": 130.0, "vel": 212.0},
+    {"icao24": "4b8294", "callsign": "LOT381", "country": "Poland", "lat": 52.16, "lon": 20.96, "alt": 10668, "track": 240.0, "vel": 228.0},
+    {"icao24": "45ce21", "callsign": "BEL441", "country": "Belgium", "lat": 50.90, "lon": 4.48, "alt": 9144, "track": 175.0, "vel": 215.0},
+    {"icao24": "491204", "callsign": "NOZ551", "country": "Norway", "lat": 60.19, "lon": 11.10, "alt": 10058, "track": 160.0, "vel": 225.0},
+    {"icao24": "4510b2", "callsign": "AEE601", "country": "Greece", "lat": 37.93, "lon": 23.94, "alt": 10363, "track": 315.0, "vel": 228.0},
+
     # Middle East & Gulf Hubs
     {"icao24": "896081", "callsign": "UAE201", "country": "United Arab Emirates", "lat": 25.25, "lon": 55.36, "alt": 10972, "track": 310.0, "vel": 248.0},
     {"icao24": "06a12e", "callsign": "QTR701", "country": "Qatar", "lat": 28.50, "lon": 51.53, "alt": 11582, "track": 320.0, "vel": 245.0},
+    {"icao24": "896422", "callsign": "ETD101", "country": "United Arab Emirates", "lat": 24.43, "lon": 54.65, "alt": 11277, "track": 305.0, "vel": 242.0},
+    {"icao24": "70014a", "callsign": "OMA105", "country": "Oman", "lat": 23.59, "lon": 58.28, "alt": 10668, "track": 290.0, "vel": 235.0},
+    {"icao24": "71c045", "callsign": "SVA124", "country": "Saudi Arabia", "lat": 21.68, "lon": 39.15, "alt": 11887, "track": 335.0, "vel": 250.0},
+    {"icao24": "706012", "callsign": "KAC102", "country": "Kuwait", "lat": 29.22, "lon": 47.97, "alt": 10972, "track": 300.0, "vel": 240.0},
+    {"icao24": "89619a", "callsign": "FDB512", "country": "United Arab Emirates", "lat": 27.80, "lon": 52.10, "alt": 9753, "track": 120.0, "vel": 225.0},
+    {"icao24": "0101b4", "callsign": "MSR777", "country": "Egypt", "lat": 30.12, "lon": 31.40, "alt": 11277, "track": 325.0, "vel": 245.0},
+    {"icao24": "73804f", "callsign": "GFA002", "country": "Bahrain", "lat": 26.27, "lon": 50.63, "alt": 10668, "track": 105.0, "vel": 238.0},
+    {"icao24": "7500c8", "callsign": "RJA261", "country": "Jordan", "lat": 31.72, "lon": 35.99, "alt": 10972, "track": 295.0, "vel": 240.0},
+
     # Asia & Pacific
     {"icao24": "76ce81", "callsign": "SIA22", "country": "Singapore", "lat": 1.36, "lon": 103.99, "alt": 11887, "track": 335.0, "vel": 252.0},
     {"icao24": "7809a4", "callsign": "CCA981", "country": "China", "lat": 39.90, "lon": 116.40, "alt": 10668, "track": 45.0, "vel": 235.0},
@@ -186,21 +225,99 @@ SAMPLE_AIRCRAFT_DATA: list[dict[str, Any]] = [
     {"icao24": "710115", "callsign": "KAL081", "country": "Republic of Korea", "lat": 37.46, "lon": 126.44, "alt": 10972, "track": 55.0, "vel": 240.0},
     {"icao24": "780512", "callsign": "CPA830", "country": "Hong Kong", "lat": 22.31, "lon": 113.91, "alt": 11582, "track": 35.0, "vel": 245.0},
     {"icao24": "800311", "callsign": "AIC101", "country": "India", "lat": 28.55, "lon": 77.10, "alt": 10668, "track": 305.0, "vel": 238.0},
-    # Southern Hemisphere & Oceania
-    {"icao24": "7c4581", "callsign": "QFA11", "country": "Australia", "lat": -33.94, "lon": 151.17, "alt": 11277, "track": 70.0, "vel": 250.0},
-    {"icao24": "c81d24", "callsign": "ANZ002", "country": "New Zealand", "lat": -37.00, "lon": 174.78, "alt": 10972, "track": 50.0, "vel": 245.0},
+    {"icao24": "800bc4", "callsign": "IGO204", "country": "India", "lat": 19.09, "lon": 72.87, "alt": 9753, "track": 135.0, "vel": 225.0},
+    {"icao24": "8005d2", "callsign": "SEJ312", "country": "India", "lat": 12.97, "lon": 77.59, "alt": 10058, "track": 20.0, "vel": 230.0},
+    {"icao24": "7812a1", "callsign": "CES587", "country": "China", "lat": 31.14, "lon": 121.80, "alt": 11277, "track": 50.0, "vel": 248.0},
+    {"icao24": "780b43", "callsign": "CSN327", "country": "China", "lat": 23.39, "lon": 113.30, "alt": 11582, "track": 60.0, "vel": 250.0},
+    {"icao24": "8632f0", "callsign": "JAL004", "country": "Japan", "lat": 34.78, "lon": 135.44, "alt": 11887, "track": 70.0, "vel": 255.0},
+    {"icao24": "888042", "callsign": "THA910", "country": "Thailand", "lat": 13.69, "lon": 100.75, "alt": 10972, "track": 310.0, "vel": 245.0},
+    {"icao24": "750284", "callsign": "MAS001", "country": "Malaysia", "lat": 2.74, "lon": 101.70, "alt": 11277, "track": 320.0, "vel": 248.0},
+    {"icao24": "8a0149", "callsign": "GIA880", "country": "Indonesia", "lat": -6.12, "lon": 106.65, "alt": 10668, "track": 45.0, "vel": 240.0},
+    {"icao24": "758112", "callsign": "PAL102", "country": "Philippines", "lat": 14.51, "lon": 121.01, "alt": 11277, "track": 40.0, "vel": 242.0},
+    {"icao24": "885141", "callsign": "HVN36", "country": "Viet Nam", "lat": 21.22, "lon": 105.80, "alt": 10972, "track": 305.0, "vel": 238.0},
+    {"icao24": "7104b2", "callsign": "AAR202", "country": "Republic of Korea", "lat": 35.18, "lon": 128.94, "alt": 11582, "track": 85.0, "vel": 252.0},
+    {"icao24": "899015", "callsign": "CAL008", "country": "Taiwan", "lat": 25.08, "lon": 121.23, "alt": 11277, "track": 60.0, "vel": 248.0},
+    {"icao24": "89912a", "callsign": "EVA016", "country": "Taiwan", "lat": 24.80, "lon": 121.00, "alt": 11887, "track": 55.0, "vel": 250.0},
+
+    # Transpacific Routes
+    {"icao24": "a12c40", "callsign": "UAL837", "country": "United States", "lat": 42.50, "lon": -165.20, "alt": 11277, "track": 285.0, "vel": 240.0},
+    {"icao24": "a341b5", "callsign": "DAL295", "country": "United States", "lat": 48.20, "lon": -155.80, "alt": 10972, "track": 290.0, "vel": 238.0},
+    {"icao24": "8620b4", "callsign": "ANA008", "country": "Japan", "lat": 45.10, "lon": 175.40, "alt": 11887, "track": 85.0, "vel": 262.0},
+    {"icao24": "863110", "callsign": "JAL062", "country": "Japan", "lat": 39.80, "lon": -170.10, "alt": 11582, "track": 90.0, "vel": 258.0},
+    {"icao24": "7c4581", "callsign": "QFA11", "country": "Australia", "lat": -15.40, "lon": -160.20, "alt": 11277, "track": 60.0, "vel": 250.0},
+    {"icao24": "c81d24", "callsign": "ANZ002", "country": "New Zealand", "lat": -20.10, "lon": -150.50, "alt": 10972, "track": 45.0, "vel": 245.0},
+    {"icao24": "a5501e", "callsign": "HAL21", "country": "United States", "lat": 21.32, "lon": -157.92, "alt": 10668, "track": 70.0, "vel": 240.0},
+    {"icao24": "a77192", "callsign": "UAL115", "country": "United States", "lat": 28.50, "lon": -140.20, "alt": 11277, "track": 245.0, "vel": 235.0},
+
+    # Oceania & Southern Hemisphere
+    {"icao24": "7c0142", "callsign": "QFA401", "country": "Australia", "lat": -33.94, "lon": 151.17, "alt": 10668, "track": 225.0, "vel": 235.0},
+    {"icao24": "7c19b0", "callsign": "VOZ801", "country": "Australia", "lat": -37.67, "lon": 144.84, "alt": 9753, "track": 300.0, "vel": 225.0},
+    {"icao24": "7c2841", "callsign": "JST502", "country": "Australia", "lat": -27.38, "lon": 153.11, "alt": 10363, "track": 195.0, "vel": 230.0},
+    {"icao24": "7c331a", "callsign": "QFA581", "country": "Australia", "lat": -31.94, "lon": 115.96, "alt": 11277, "track": 95.0, "vel": 245.0},
+    {"icao24": "c8201a", "callsign": "ANZ404", "country": "New Zealand", "lat": -41.33, "lon": 174.80, "alt": 9144, "track": 210.0, "vel": 215.0},
+    {"icao24": "c80521", "callsign": "ANZ601", "country": "New Zealand", "lat": -43.48, "lon": 172.53, "alt": 8534, "track": 30.0, "vel": 210.0},
+
+    # Latin America & Caribbean
     {"icao24": "e08422", "callsign": "LAN800", "country": "Chile", "lat": -33.39, "lon": -70.78, "alt": 10668, "track": 240.0, "vel": 235.0},
     {"icao24": "e4811a", "callsign": "GLO142", "country": "Brazil", "lat": -23.55, "lon": -46.63, "alt": 9753, "track": 15.0, "vel": 225.0},
+    {"icao24": "e49052", "callsign": "TAM8060", "country": "Brazil", "lat": -22.81, "lon": -43.25, "alt": 11277, "track": 345.0, "vel": 245.0},
+    {"icao24": "e01048", "callsign": "ARG1302", "country": "Argentina", "lat": -34.82, "lon": -58.53, "alt": 10972, "track": 355.0, "vel": 240.0},
+    {"icao24": "0b001a", "callsign": "AVA010", "country": "Colombia", "lat": 4.70, "lon": -74.14, "alt": 11582, "track": 350.0, "vel": 245.0},
+    {"icao24": "0d0491", "callsign": "AMX001", "country": "Mexico", "lat": 19.43, "lon": -99.07, "alt": 11277, "track": 50.0, "vel": 240.0},
+    {"icao24": "0d0822", "callsign": "VOI502", "country": "Mexico", "lat": 20.52, "lon": -103.31, "alt": 9753, "track": 10.0, "vel": 225.0},
+    {"icao24": "0e4120", "callsign": "CMP302", "country": "Panama", "lat": 9.07, "lon": -79.38, "alt": 10668, "track": 340.0, "vel": 238.0},
+    {"icao24": "e80112", "callsign": "LPE212", "country": "Peru", "lat": -12.02, "lon": -77.11, "alt": 10363, "track": 330.0, "vel": 232.0},
+
+    # Africa
     {"icao24": "00a124", "callsign": "SAA203", "country": "South Africa", "lat": -26.13, "lon": 28.24, "alt": 10363, "track": 300.0, "vel": 230.0},
+    {"icao24": "040049", "callsign": "ETH500", "country": "Ethiopia", "lat": 8.98, "lon": 38.80, "alt": 11582, "track": 315.0, "vel": 248.0},
+    {"icao24": "02a110", "callsign": "KQA101", "country": "Kenya", "lat": -1.32, "lon": 36.92, "alt": 11277, "track": 330.0, "vel": 245.0},
+    {"icao24": "020084", "callsign": "RAM200", "country": "Morocco", "lat": 33.37, "lon": -7.59, "alt": 10972, "track": 285.0, "vel": 240.0},
+    {"icao24": "06401a", "callsign": "NGR102", "country": "Nigeria", "lat": 6.58, "lon": 3.32, "alt": 10058, "track": 355.0, "vel": 230.0},
+    {"icao24": "00205b", "callsign": "DAH100", "country": "Algeria", "lat": 36.69, "lon": 3.21, "alt": 10668, "track": 350.0, "vel": 235.0},
+
+    # Central & South Asia Corridors
+    {"icao24": "151a02", "callsign": "UZB101", "country": "Uzbekistan", "lat": 41.26, "lon": 69.28, "alt": 10668, "track": 280.0, "vel": 235.0},
+    {"icao24": "683015", "callsign": "KZR901", "country": "Kazakhstan", "lat": 43.35, "lon": 77.04, "alt": 10972, "track": 295.0, "vel": 240.0},
+    {"icao24": "760084", "callsign": "PIA785", "country": "Pakistan", "lat": 31.52, "lon": 74.40, "alt": 11277, "track": 305.0, "vel": 242.0},
+    {"icao24": "708021", "callsign": "BBC001", "country": "Bangladesh", "lat": 23.84, "lon": 90.40, "alt": 10363, "track": 290.0, "vel": 232.0},
+    {"icao24": "704042", "callsign": "ALK503", "country": "Sri Lanka", "lat": 7.18, "lon": 79.88, "alt": 10668, "track": 310.0, "vel": 235.0},
 ]
 
 
 def load_sample_aircraft(now: datetime | None = None) -> list[AircraftStateRecord]:
-    """Provide realistic worldwide commercial flight states when live OpenSky feed has no database snapshot yet."""
+    """Provide realistic worldwide commercial flight states with dynamic flight motion."""
     epoch = now or datetime.now(UTC)
     records: list[AircraftStateRecord] = []
+
+    # 4-hour cycle for global route progression
+    cycle_seconds = 14400.0
+    elapsed = epoch.timestamp() % cycle_seconds
+    earth_radius_m = 6371000.0
+
     for item in SAMPLE_AIRCRAFT_DATA:
         callsign = item["callsign"]
+        speed_mps = float(item["vel"])
+        track_deg = float(item["track"])
+
+        # Dead-reckoning position projection along track bearing
+        dist_m = speed_mps * elapsed
+        bearing_rad = math.radians(track_deg)
+        lat_rad = math.radians(item["lat"])
+        lon_rad = math.radians(item["lon"])
+        angular_dist = dist_m / earth_radius_m
+
+        cur_lat_rad = math.asin(
+            math.sin(lat_rad) * math.cos(angular_dist)
+            + math.cos(lat_rad) * math.sin(angular_dist) * math.cos(bearing_rad)
+        )
+        cur_lon_rad = lon_rad + math.atan2(
+            math.sin(bearing_rad) * math.sin(angular_dist) * math.cos(lat_rad),
+            math.cos(angular_dist) - math.sin(lat_rad) * math.sin(cur_lat_rad),
+        )
+        cur_lat = math.degrees(cur_lat_rad)
+        cur_lon = (math.degrees(cur_lon_rad) + 540.0) % 360.0 - 180.0
+
         content_hash = hashlib.sha256(f"{item['icao24']}:{callsign}:{epoch.isoformat()}".encode("utf-8")).hexdigest()
         records.append(
             AircraftStateRecord(
@@ -209,12 +326,12 @@ def load_sample_aircraft(now: datetime | None = None) -> list[AircraftStateRecor
                 origin_country=item["country"],
                 time_position=epoch,
                 last_contact=epoch,
-                longitude=item["lon"],
-                latitude=item["lat"],
+                longitude=round(cur_lon, 4),
+                latitude=round(cur_lat, 4),
                 baro_altitude=float(item["alt"]),
                 on_ground=False,
-                velocity=float(item["vel"]),
-                true_track=float(item["track"]),
+                velocity=speed_mps,
+                true_track=track_deg,
                 vertical_rate=0.0,
                 geo_altitude=float(item["alt"]),
                 squawk="1000",

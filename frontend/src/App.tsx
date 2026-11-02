@@ -459,13 +459,19 @@ export default function App() {
         }
         if (acStates) {
           setAircraft(acStates);
-          setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', acStates.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
+          setLayers((prev) => {
+            if (bbox && acStates.length === 0) return prev;
+            return withSnapshotFeedHealth(prev, 'aircraft-states', acStates.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.');
+          });
         } else {
           setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', [], 5 * 60_000, 'Aircraft snapshot unavailable.'));
         }
         if (vesStates) {
           setVessels(vesStates);
-          setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesStates.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
+          setLayers((prev) => {
+            if (bbox && vesStates.length === 0) return prev;
+            return withSnapshotFeedHealth(prev, 'maritime-vessels', vesStates.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.');
+          });
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {

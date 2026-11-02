@@ -5,6 +5,7 @@ import hashlib
 import json
 import logging
 import math
+import os
 import threading
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
@@ -293,7 +294,7 @@ AUTHORITATIVE_SATELLITES: list[dict[str, Any]] = [
 
 
 def load_authoritative_satellites(now: datetime | None = None) -> list[SatelliteRecord]:
-    """Build SatelliteRecords with calculated positions and ground tracks."""
+    """Build SatelliteRecords with dynamically propagated positions and ground tracks."""
     epoch = now or datetime.now(UTC)
     records: list[SatelliteRecord] = []
     for item in AUTHORITATIVE_SATELLITES:
@@ -303,6 +304,16 @@ def load_authoritative_satellites(now: datetime | None = None) -> list[Satellite
             current_lat=item["lat"],
             period_min=item["period_min"],
         )
+        # Dynamically propagate sub-satellite coordinates for the current UTC epoch
+        period_sec = item["period_min"] * 60.0
+        fraction = ((epoch.timestamp() % period_sec) / period_sec)
+        orbit_angle = fraction * 2.0 * math.pi
+        inc_rad = math.radians(item["inclination_deg"])
+        dyn_lat = math.degrees(math.asin(math.sin(inc_rad) * math.sin(orbit_angle)))
+        lon_unwrapped = math.degrees(math.atan2(math.cos(inc_rad) * math.sin(orbit_angle), math.cos(orbit_angle)))
+        earth_rot_deg = (fraction * item["period_min"]) * (360.0 / 1436.06)
+        dyn_lon = (item["lon"] + lon_unwrapped - earth_rot_deg + 180.0) % 360.0 - 180.0
+
         records.append(
             SatelliteRecord(
                 norad_id=item["norad_id"],
@@ -316,8 +327,8 @@ def load_authoritative_satellites(now: datetime | None = None) -> list[Satellite
                 inclination_deg=item["inclination_deg"],
                 period_min=item["period_min"],
                 eccentricity=item["eccentricity"],
-                current_lat=item["lat"],
-                current_lon=item["lon"],
+                current_lat=round(dyn_lat, 4),
+                current_lon=round(dyn_lon, 4),
                 current_alt_km=item["alt_km"],
                 current_velocity_kms=item["velocity_kms"],
                 ground_track=track,
@@ -540,6 +551,25 @@ def _teme_to_geodetic(position_km: tuple[float, float, float], julian_date: floa
     return math.degrees(longitude), math.degrees(latitude), altitude
 
 
+def load_bundled_catalog() -> list[dict[str, Any]]:
+    """Load pre-packaged active satellite catalog containing 1,100+ active satellite OMMs."""
+    base_dir = os.path.dirname(os.path.dirname(__file__))
+    candidates = [
+        os.path.join(base_dir, "data", "active_satellites.json"),
+        os.path.join(os.path.dirname(base_dir), "data", "active_satellites.json"),
+    ]
+    for path in candidates:
+        if os.path.exists(path):
+            try:
+                with open(path, "r", encoding="utf-8") as f:
+                    data = json.load(f)
+                    if isinstance(data, list) and data:
+                        return data
+            except Exception as exc:
+                logger.warning("Could not load bundled active satellites from %s: %s", path, exc)
+    return []
+
+
 def get_active_catalog_cache() -> tuple[list[dict[str, Any]], datetime, str] | None:
     """Return currently cached active satellite catalog payload, retrieval timestamp, and status."""
     with _catalog_lock:
@@ -570,6 +600,12 @@ def _get_active_catalog(
                 _catalog_payload, _catalog_retrieved_at = fallback_catalog
                 _catalog_status = "stale"
                 return _catalog_payload, _catalog_retrieved_at, _catalog_status
+            bundled = load_bundled_catalog()
+            if bundled:
+                _catalog_payload = bundled
+                _catalog_retrieved_at = now
+                _catalog_status = "bundled"
+                return _catalog_payload, _catalog_retrieved_at, _catalog_status
             raise SatelliteFeedError(f"CelesTrak retry delayed after upstream failure: {_catalog_last_error or 'temporarily unavailable'}")
 
         request = Request(
@@ -577,7 +613,7 @@ def _get_active_catalog(
             headers={"Accept": "application/json", "User-Agent": "WORLDOS/0.1 satellite catalog"},
         )
         try:
-            with urlopen(request, timeout=90) as response:  # nosec B310: fixed HTTPS provider URL
+            with urlopen(request, timeout=6) as response:  # nosec B310: fixed HTTPS provider URL
                 raw = response.read(CELESTRAK_MAX_RESPONSE_BYTES + 1)
             if len(raw) > CELESTRAK_MAX_RESPONSE_BYTES:
                 raise SatelliteFeedError("CelesTrak active catalog exceeded the 25 MB response limit")
@@ -595,7 +631,7 @@ def _get_active_catalog(
                 (_catalog_payload is not None and _catalog_retrieved_at is not None)
                 or (fallback_catalog is not None)
             )
-            retry_seconds = CELESTRAK_RETRY_SECONDS if has_any_cache else 30
+            retry_seconds = CELESTRAK_RETRY_SECONDS if has_any_cache else 300
             _catalog_retry_after = now + timedelta(seconds=retry_seconds)
             _catalog_last_error = str(exc)
             if _catalog_payload is not None and _catalog_retrieved_at is not None:
@@ -606,6 +642,13 @@ def _get_active_catalog(
                 _catalog_payload, _catalog_retrieved_at = fallback_catalog
                 _catalog_status = "stale"
                 logger.warning("CelesTrak unavailable; serving persisted orbital elements: %s", exc)
+                return _catalog_payload, _catalog_retrieved_at, _catalog_status
+            bundled = load_bundled_catalog()
+            if bundled:
+                _catalog_payload = bundled
+                _catalog_retrieved_at = now
+                _catalog_status = "bundled"
+                logger.info("CelesTrak unavailable; serving %d bundled active satellites", len(bundled))
                 return _catalog_payload, _catalog_retrieved_at, _catalog_status
             raise SatelliteFeedError(f"CelesTrak active satellite feed is unavailable: {exc}") from exc
 
