@@ -26,6 +26,21 @@ export type LayerCategory =
 
 export type BasemapMode = 'dark-tactical' | 'satellite-hybrid' | 'oceanic';
 
+export interface SelectedItemPayload {
+  type:
+    | 'geometry'
+    | 'event'
+    | 'observation'
+    | 'alert'
+    | 'aircraft'
+    | 'vessel'
+    | 'satellite'
+    | 'camera'
+    | 'fire'
+    | 'infrastructure';
+  data: any;
+}
+
 export interface LayerDefinition {
   id: LayerId;
   name: string;

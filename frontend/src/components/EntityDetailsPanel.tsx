@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { SelectedItemPayload } from './MapEngine2D';
+import { SelectedItemPayload } from '../types/layers';
 import {
   X,
   ExternalLink,

@@ -50,8 +50,7 @@ import {
   RoutePlanResponse,
   splitTrackAtAntimeridian,
 } from '../api';
-import { BasemapMode, LayerDefinition } from '../types/layers';
-import { SelectedItemPayload } from './MapEngine2D';
+import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
 
 // Cesium asset base path configuration
 (window as any).CESIUM_BASE_URL = '/cesium/';
@@ -353,7 +352,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
     if (boundaryGeoms.length === 0) return;
 
-    const featureCollection: GeoJSON.FeatureCollection = {
+    const featureCollection = {
       type: 'FeatureCollection',
       features: boundaryGeoms.map((g) => ({
         type: 'Feature' as const,

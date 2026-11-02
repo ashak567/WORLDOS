@@ -23,8 +23,8 @@ import {
 } from 'lucide-react';
 
 interface HudBarProps {
-  viewMode: '2d' | '3d';
-  onToggleViewMode: (mode: '2d' | '3d') => void;
+  viewMode?: '2d' | '3d';
+  onToggleViewMode?: (mode: '2d' | '3d') => void;
   basemapMode: BasemapMode;
   onSetBasemapMode: (mode: BasemapMode) => void;
   viewportBbox: BoundingBox | null;
@@ -137,26 +137,13 @@ export const HudBar: React.FC<HudBarProps> = ({
       </div>
 
       <div className="hud-center-group">
-        {/* 2D / 3D Projection Switcher */}
+        {/* 3D Geospatial Globe Badge */}
         <div className="mode-switcher" role="group" aria-label="Geospatial Projection Mode">
-          <button
-            className={`mode-btn ${viewMode === '2d' ? 'active' : ''}`}
-            onClick={() => onToggleViewMode('2d')}
-            aria-pressed={viewMode === '2d'}
-          >
-            <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-              <Map size={12} /> 2D FLAT
-            </span>
-          </button>
-          <button
-            className={`mode-btn ${viewMode === '3d' ? 'active' : ''}`}
-            onClick={() => onToggleViewMode('3d')}
-            aria-pressed={viewMode === '3d'}
-          >
+          <div className="mode-btn active" style={{ cursor: 'default', pointerEvents: 'none' }}>
             <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
               <Globe size={12} /> 3D GLOBE
             </span>
-          </button>
+          </div>
         </div>
 
         {/* Basemap Selection Group */}

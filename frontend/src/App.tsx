@@ -33,7 +33,7 @@ import {
   AssistantAction,
 } from './api';
 import { BasemapMode, INITIAL_LAYERS, LayerDefinition, LayerId } from './types/layers';
-import { MapEngine2D, SelectedItemPayload } from './components/MapEngine2D';
+import { SelectedItemPayload } from './types/layers';
 import { GlobeEngine3D } from './components/GlobeEngine3D';
 import { HudBar } from './components/HudBar';
 import { LayerDock } from './components/LayerDock';
@@ -103,7 +103,6 @@ function withSnapshotFeedHealth(
 }
 
 export default function App() {
-  const [viewMode, setViewMode] = useState<'2d' | '3d'>('3d');
   const [basemapMode, setBasemapMode] = useState<BasemapMode>('satellite-hybrid');
   const [layers, setLayers] = useState<LayerDefinition[]>(INITIAL_LAYERS);
   const [viewportBbox, setViewportBbox] = useState<BoundingBox | null>(null);
@@ -156,10 +155,10 @@ export default function App() {
     } else if (action.type === 'fly_to') {
       setTargetLocation({
         center: action.center,
-        zoom: action.zoom ?? (viewMode === '3d' ? 12 : 13),
+        zoom: action.zoom ?? 12,
       });
     }
-  }, [viewMode]);
+  }, []);
 
   useEffect(() => {
     if (viewportZoom >= 15.5 && viewportBbox && !streetViewCenter) {
@@ -369,7 +368,7 @@ export default function App() {
       typeof latitude === 'number' && Number.isFinite(latitude)) {
       setTargetLocation({
         center: [longitude, latitude],
-        zoom: item.type === 'camera' ? 15.5 : item.type === 'satellite' && viewMode === '3d' ? 4.5 : 9,
+        zoom: item.type === 'camera' ? 15.5 : item.type === 'satellite' ? 4.5 : 9,
       });
     }
 
@@ -397,7 +396,7 @@ export default function App() {
           : current);
       }).catch(() => {});
     }
-  }, [viewMode]);
+  }, []);
 
   // Viewport-aware context querying with debouncing
   const handleViewportChange = useCallback((bbox: BoundingBox, zoom?: number) => {
@@ -512,8 +511,6 @@ export default function App() {
 
       {/* Mission Control HUD Bar */}
       <HudBar
-        viewMode={viewMode}
-        onToggleViewMode={setViewMode}
         basemapMode={basemapMode}
         onSetBasemapMode={setBasemapMode}
         viewportBbox={viewportBbox}
@@ -538,51 +535,27 @@ export default function App() {
 
       {/* Master Geospatial Viewport Stage */}
       <main className="viewport-stage" aria-label="Geospatial Tactical Viewport">
-        {viewMode === '2d' ? (
-          <MapEngine2D
-            layers={layers}
-            basemapMode={basemapMode}
-            geometries={geometries}
-            events={events}
-            naturalEvents={naturalEvents}
-            observations={observations}
-            alerts={alerts}
-            aircraft={aircraft}
-            vessels={vessels}
-            satellites={satellites}
-            cameras={cameras}
-            thermalEvents={thermalEvents}
-            infrastructure={infrastructure}
-            selectedTrack={selectedTrack}
-            activeRoute={activeRoute}
-            targetLocation={targetLocation}
-            selectedItem={selectedItem}
-            onViewportChange={handleViewportChange}
-            onSelectItem={handleSelectItem}
-          />
-        ) : (
-          <GlobeEngine3D
-            layers={layers}
-            basemapMode={basemapMode}
-            geometries={geometries}
-            events={events}
-            naturalEvents={naturalEvents}
-            observations={observations}
-            alerts={alerts}
-            aircraft={aircraft}
-            vessels={vessels}
-            satellites={satellites}
-            cameras={cameras}
-            thermalEvents={thermalEvents}
-            infrastructure={infrastructure}
-            selectedTrack={selectedTrack}
-            activeRoute={activeRoute}
-            targetLocation={targetLocation}
-            selectedItem={selectedItem}
-            onViewportChange={handleViewportChange}
-            onSelectItem={handleSelectItem}
-          />
-        )}
+        <GlobeEngine3D
+          layers={layers}
+          basemapMode={basemapMode}
+          geometries={geometries}
+          events={events}
+          naturalEvents={naturalEvents}
+          observations={observations}
+          alerts={alerts}
+          aircraft={aircraft}
+          vessels={vessels}
+          satellites={satellites}
+          cameras={cameras}
+          thermalEvents={thermalEvents}
+          infrastructure={infrastructure}
+          selectedTrack={selectedTrack}
+          activeRoute={activeRoute}
+          targetLocation={targetLocation}
+          selectedItem={selectedItem}
+          onViewportChange={handleViewportChange}
+          onSelectItem={handleSelectItem}
+        />
       </main>
 
       {viewportZoom >= 14.5 && streetViewCenter && (
@@ -631,15 +604,13 @@ export default function App() {
           setSelectedItem(null);
           setSelectedTrack(null);
         }}
-        onFlyTo={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || (viewMode === '3d' ? 14 : 15) })}
+        onFlyTo={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || 14 })}
       />
 
       {/* Keyboard-Accessible Command Palette (cmdk) */}
       <CommandPalette
         isOpen={isCommandOpen}
         onClose={() => setIsCommandOpen(false)}
-        viewMode={viewMode}
-        onSetViewMode={setViewMode}
         layers={layers}
         onToggleLayer={handleToggleLayer}
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
@@ -662,7 +633,7 @@ export default function App() {
         onClose={() => setIsRoutePlannerOpen(false)}
         activeRoute={activeRoute}
         onSelectRoute={setActiveRoute}
-        onFlyToRoute={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || (viewMode === '3d' ? 5 : 4) })}
+        onFlyToRoute={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || 5 })}
       />
     </div>
   );

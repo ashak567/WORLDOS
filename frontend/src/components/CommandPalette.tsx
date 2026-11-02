@@ -7,8 +7,8 @@ import { Globe, Map, Layers, Activity, Compass, ShieldAlert, Sparkles, X, Video,
 interface CommandPaletteProps {
   isOpen: boolean;
   onClose: () => void;
-  viewMode: '2d' | '3d';
-  onSetViewMode: (mode: '2d' | '3d') => void;
+  viewMode?: '2d' | '3d';
+  onSetViewMode?: (mode: '2d' | '3d') => void;
   layers: LayerDefinition[];
   onToggleLayer: (id: LayerId) => void;
   onOpenSourceHealth: () => void;
@@ -95,30 +95,6 @@ export const CommandPalette: React.FC<CommandPaletteProps> = ({
               </Command.Item>
             </Command.Group>
 
-            {/* Projection Mode Commands */}
-            <Command.Group heading="GEOSPATIAL PROJECTION">
-              <Command.Item
-                className="command-item"
-                onSelect={() => runAction(() => onSetViewMode('2d'))}
-              >
-                <div className="command-item-left">
-                  <Map size={14} color="var(--cy)" />
-                  <span>Switch to 2D Flat Map (MapLibre + Deck.gl)</span>
-                </div>
-                {viewMode === '2d' && <span className="command-shortcut">CURRENT</span>}
-              </Command.Item>
-
-              <Command.Item
-                className="command-item"
-                onSelect={() => runAction(() => onSetViewMode('3d'))}
-              >
-                <div className="command-item-left">
-                  <Globe size={14} color="var(--blue)" />
-                  <span>Switch to 3D Globe (CesiumJS)</span>
-                </div>
-                {viewMode === '3d' && <span className="command-shortcut">CURRENT</span>}
-              </Command.Item>
-            </Command.Group>
 
             {/* Layer Toggle Commands */}
             <Command.Group heading="INTELLIGENCE LAYERS">
