@@ -56,6 +56,24 @@ import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/laye
 (window as any).CESIUM_BASE_URL = '/cesium/';
 Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN ?? '';
 
+interface AircraftKinematicState {
+  billboard: any;
+  lon: number;
+  lat: number;
+  altMeters: number;
+  velocityMps: number;
+  trackDeg: number;
+}
+
+interface SatelliteKinematicState {
+  billboard: any;
+  lon: number;
+  lat: number;
+  altMeters: number;
+  periodMin: number;
+  inclinationDeg: number;
+}
+
 interface GlobeEngine3DProps {
   layers: LayerDefinition[];
   basemapMode: BasemapMode;
@@ -110,6 +128,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const selectedAircraftTrackRef = useRef<any>(null);
   const aircraftBillboardsRef = useRef<BillboardCollection | null>(null);
   const satelliteBillboardsRef = useRef<BillboardCollection | null>(null);
+  const aircraftKinematicsRef = useRef<AircraftKinematicState[]>([]);
+  const satelliteKinematicsRef = useRef<SatelliteKinematicState[]>([]);
 
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
     const requestId = ++imageryRequestRef.current;
@@ -223,9 +243,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       navigationHelpButton: false,
       infoBox: false,
       selectionIndicator: false,
-      targetFrameRate: 30,
-      requestRenderMode: true,
-      maximumRenderTimeChange: Infinity,
+      targetFrameRate: 60,
+      requestRenderMode: false,
     });
 
     applyImageryLayers(viewer, basemapMode);
@@ -260,6 +279,51 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.camera.moveEnd.addEventListener(emitCameraBounds);
     emitCameraBounds();
 
+    // Live continuous motion loop: 60 FPS dead-reckoning for aircraft & orbital propagation for satellites
+    let lastAnimTime = performance.now();
+    const onPreRenderAnim = () => {
+      const now = performance.now();
+      const dt = Math.min(0.2, (now - lastAnimTime) / 1000);
+      lastAnimTime = now;
+      if (dt <= 0) return;
+
+      // 1. Advance airborne aircraft along track heading
+      const aircraftList = aircraftKinematicsRef.current;
+      for (let i = 0; i < aircraftList.length; i++) {
+        const item = aircraftList[i];
+        const distM = item.velocityMps * dt;
+        const trackRad = (item.trackDeg * Math.PI) / 180.0;
+        const latRad = (item.lat * Math.PI) / 180.0;
+        const dLat = (distM * Math.cos(trackRad)) / 111139.0;
+        const cosLat = Math.cos(latRad);
+        const dLon = (distM * Math.sin(trackRad)) / (111139.0 * (Math.abs(cosLat) > 0.02 ? cosLat : 0.02));
+
+        item.lat += dLat;
+        item.lon = ((item.lon + dLon + 540.0) % 360.0) - 180.0;
+        item.billboard.position = Cartesian3.fromDegrees(item.lon, item.lat, item.altMeters);
+      }
+
+      // 2. Advance active satellites smoothly along their Keplerian orbital velocity in space
+      const satelliteList = satelliteKinematicsRef.current;
+      const earthRotDegPerSec = 360.0 / 86164.09;
+      for (let i = 0; i < satelliteList.length; i++) {
+        const item = satelliteList[i];
+        const orbitDegPerSec = 360.0 / (item.periodMin * 60.0);
+        const incRad = (item.inclinationDeg * Math.PI) / 180.0;
+        const dLat = orbitDegPerSec * Math.cos(incRad) * dt;
+        const cosLat = Math.cos((item.lat * Math.PI) / 180.0);
+        const dLon = (orbitDegPerSec * Math.sin(incRad) * dt) / (Math.abs(cosLat) > 0.05 ? cosLat : 0.05) - (earthRotDegPerSec * dt);
+
+        item.lat += dLat;
+        if (item.lat > 85.0) item.lat = 85.0;
+        else if (item.lat < -85.0) item.lat = -85.0;
+        item.lon = ((item.lon + dLon + 540.0) % 360.0) - 180.0;
+        item.billboard.position = Cartesian3.fromDegrees(item.lon, item.lat, item.altMeters);
+      }
+    };
+
+    viewer.scene.preRender.addEventListener(onPreRenderAnim);
+
     // Screen-space click picking handler
     const handler = new ScreenSpaceEventHandler(viewer.scene.canvas);
     handler.setInputAction((movement: { position: any }) => {
@@ -279,6 +343,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewerRef.current = viewer;
 
     return () => {
+      viewer.scene.preRender.removeEventListener(onPreRenderAnim);
       viewer.camera.moveEnd.removeEventListener(emitCameraBounds);
       if (handlerRef.current) {
         handlerRef.current.destroy();
@@ -409,6 +474,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     satelliteBillboardsRef.current = satelliteBillboards;
     aircraftBillboards.removeAll();
     satelliteBillboards.removeAll();
+    aircraftKinematicsRef.current = [];
+    satelliteKinematicsRef.current = [];
 
     // Batch the high-volume feeds into Cesium billboard collections instead of thousands of Entity objects.
     if (layerMap.get('aircraft-states') && aircraft.length > 0) {
@@ -430,7 +497,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
         const isGround = a.attributes?.on_ground ?? false;
 
-        aircraftBillboards.add({
+        const acBillboard = aircraftBillboards.add({
           id: { _worldosType: 'aircraft', _worldosData: a },
           position,
           image: isGround ? AIRPLANE_ICON_GROUND : AIRPLANE_ICON_BLUE,
@@ -440,6 +507,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
           distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.4e7),
         });
+        const acVelocity = a.attributes?.velocity ?? 0;
+        if (!isGround && acVelocity > 10) {
+          aircraftKinematicsRef.current.push({
+            billboard: acBillboard,
+            lon: a.longitude,
+            lat: a.latitude,
+            altMeters,
+            velocityMps: acVelocity,
+            trackDeg: a.attributes?.true_track ?? 0,
+          });
+        }
       }
     }
 
@@ -471,13 +549,21 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const altMeters = altitudeKm * 1000;
         const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
-        satelliteBillboards.add({
+        const satBillboard = satelliteBillboards.add({
           id: { _worldosType: 'satellite', _worldosData: s },
           position,
           image: SATELLITE_ICON_NEON_RED,
           width: 14,
           height: 14,
           scaleByDistance: new NearFarScalar(1.0e6, 1.4, 8.0e7, 0.85),
+        });
+        satelliteKinematicsRef.current.push({
+          billboard: satBillboard,
+          lon: s.longitude,
+          lat: s.latitude,
+          altMeters,
+          periodMin: s.attributes?.period_min || 92.8,
+          inclinationDeg: s.attributes?.inclination_deg || 51.6,
         });
       }
     }

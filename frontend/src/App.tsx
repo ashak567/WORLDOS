@@ -313,7 +313,7 @@ export default function App() {
       }
       if (fireResult.status === 'fulfilled') setThermalEvents(fireResult.value);
     };
-    const interval = setInterval(() => { void refreshSnapshots(); }, 5 * 60_000);
+    const interval = setInterval(() => { void refreshSnapshots(); }, 15_000);
     return () => { mounted = false; clearInterval(interval); };
   }, []);
 
@@ -352,7 +352,7 @@ export default function App() {
         })
         .catch(() => setLayers((prev) => withSatelliteFeedHealth(prev, null, 'Satellite feed unavailable')));
     };
-    const interval = setInterval(refreshSatellites, 60_000);
+    const interval = setInterval(refreshSatellites, 15_000);
     return () => clearInterval(interval);
   }, []);
 
@@ -456,21 +456,32 @@ export default function App() {
             setObservations(context.observations);
           }
         }
-        if (acStates) {
+        if (acStates && acStates.length > 0) {
+          setAircraft((prev) => {
+            if (!bbox || prev.length === 0) return acStates;
+            const map = new Map(prev.map((a) => [a.entity_id || a.attributes?.icao24 || a.id, a]));
+            for (const a of acStates) {
+              const key = a.entity_id || a.attributes?.icao24 || a.id;
+              map.set(key, a);
+            }
+            return Array.from(map.values());
+          });
+          setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', acStates.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.'));
+        } else if (!bbox && acStates) {
           setAircraft(acStates);
-          setLayers((prev) => {
-            if (bbox && acStates.length === 0) return prev;
-            return withSnapshotFeedHealth(prev, 'aircraft-states', acStates.map((a) => a.observed_at), 5 * 60_000, 'No stored OpenSky observations; configure credentials and ingest a snapshot.');
-          });
-        } else {
-          setLayers((prev) => withSnapshotFeedHealth(prev, 'aircraft-states', [], 5 * 60_000, 'Aircraft snapshot unavailable.'));
         }
-        if (vesStates) {
-          setVessels(vesStates);
-          setLayers((prev) => {
-            if (bbox && vesStates.length === 0) return prev;
-            return withSnapshotFeedHealth(prev, 'maritime-vessels', vesStates.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.');
+        if (vesStates && vesStates.length > 0) {
+          setVessels((prev) => {
+            if (!bbox || prev.length === 0) return vesStates;
+            const map = new Map(prev.map((v) => [v.entity_id, v]));
+            for (const v of vesStates) {
+              map.set(v.entity_id, v);
+            }
+            return Array.from(map.values());
           });
+          setLayers((prev) => withSnapshotFeedHealth(prev, 'maritime-vessels', vesStates.map((v) => v.observed_at), 10 * 60_000, 'No stored AIS observations; configure AISStream and ingest positions.'));
+        } else if (!bbox && vesStates) {
+          setVessels(vesStates);
         }
       } catch (err: any) {
         if (err.name !== 'AbortError') {

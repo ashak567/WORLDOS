@@ -1135,13 +1135,13 @@ def list_aircraft_states(
     min_lat: float | None = Query(default=None),
     max_lon: float | None = Query(default=None),
     max_lat: float | None = Query(default=None),
-    limit: int = Query(default=500, ge=1, le=20000),
+    limit: int = Query(default=1000, ge=1, le=20000),
 ):
     min_lon_v = _clean_param(min_lon)
     min_lat_v = _clean_param(min_lat)
     max_lon_v = _clean_param(max_lon)
     max_lat_v = _clean_param(max_lat)
-    limit_v = _clean_param(limit, 500)
+    limit_v = _clean_param(limit, 1000)
 
     min_lon_f = float(min_lon_v) if min_lon_v is not None else None
     min_lat_f = float(min_lat_v) if min_lat_v is not None else None

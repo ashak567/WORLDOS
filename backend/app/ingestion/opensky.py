@@ -160,188 +160,329 @@ def set_cached_aircraft_states(records: list[AircraftStateRecord]) -> None:
     _cached_aircraft_states = (records, time.time())
 
 
-SAMPLE_AIRCRAFT_DATA: list[dict[str, Any]] = [
-    # North Atlantic Corridors (Eastbound & Westbound)
-    {"icao24": "4006c3", "callsign": "BAW178", "country": "United Kingdom", "lat": 52.34, "lon": -35.21, "alt": 11277, "track": 260.0, "vel": 235.0},
-    {"icao24": "a0211a", "callsign": "UAL854", "country": "United States", "lat": 48.12, "lon": -42.84, "alt": 10668, "track": 255.0, "vel": 242.0},
-    {"icao24": "3c65c2", "callsign": "DLH400", "country": "Germany", "lat": 55.40, "lon": -28.65, "alt": 10972, "track": 270.0, "vel": 230.0},
-    {"icao24": "3949ee", "callsign": "AFR006", "country": "France", "lat": 51.05, "lon": -38.50, "alt": 11582, "track": 265.0, "vel": 238.0},
-    {"icao24": "4009a1", "callsign": "VIR10", "country": "United Kingdom", "lat": 53.15, "lon": -22.40, "alt": 11887, "track": 85.0, "vel": 260.0},
-    {"icao24": "a10b42", "callsign": "AAL106", "country": "United States", "lat": 50.80, "lon": -18.90, "alt": 11277, "track": 80.0, "vel": 255.0},
-    {"icao24": "484501", "callsign": "KLM641", "country": "Netherlands", "lat": 56.20, "lon": -45.10, "alt": 10668, "track": 280.0, "vel": 228.0},
-    {"icao24": "4ca918", "callsign": "EIN105", "country": "Ireland", "lat": 54.10, "lon": -30.50, "alt": 11582, "track": 265.0, "vel": 232.0},
-    {"icao24": "3441a5", "callsign": "IBE6251", "country": "Spain", "lat": 42.50, "lon": -32.80, "alt": 11277, "track": 250.0, "vel": 240.0},
-    {"icao24": "4951b2", "callsign": "TAP101", "country": "Portugal", "lat": 38.90, "lon": -28.40, "alt": 10972, "track": 260.0, "vel": 235.0},
+# Global commercial airport coordinates (lat, lon, country)
+_GLOBAL_HUBS: dict[str, tuple[float, float, str]] = {
+    # North America
+    "JFK": (40.64, -73.78, "United States"), "EWR": (40.69, -74.17, "United States"), "LGA": (40.77, -73.87, "United States"),
+    "LAX": (33.94, -118.41, "United States"), "ORD": (41.97, -87.91, "United States"), "DFW": (32.90, -97.04, "United States"),
+    "ATL": (33.64, -84.43, "United States"), "SFO": (37.62, -122.38, "United States"), "MIA": (25.80, -80.29, "United States"),
+    "YVR": (49.19, -123.18, "Canada"), "YYZ": (43.68, -79.63, "Canada"), "MEX": (19.44, -99.07, "Mexico"),
+    "SEA": (47.45, -122.31, "United States"), "BOS": (42.36, -71.01, "United States"), "IAD": (38.95, -77.46, "United States"),
+    "MCO": (28.43, -81.31, "United States"), "PHX": (33.43, -112.01, "United States"), "DEN": (39.86, -104.67, "United States"),
+    "HNL": (21.32, -157.92, "United States"),
+    # Europe
+    "LHR": (51.47, -0.45, "United Kingdom"), "LGW": (51.15, -0.19, "United Kingdom"), "CDG": (49.01, 2.55, "France"),
+    "FRA": (50.03, 8.57, "Germany"), "AMS": (52.31, 4.76, "Netherlands"), "MAD": (40.48, -3.57, "Spain"),
+    "FCO": (41.80, 12.24, "Italy"), "MUC": (48.35, 11.79, "Germany"), "ZRH": (47.46, 8.55, "Switzerland"),
+    "VIE": (48.11, 16.57, "Austria"), "IST": (41.28, 28.73, "Turkey"), "DUB": (53.42, -6.27, "Ireland"),
+    "ARN": (59.65, 17.92, "Sweden"), "HEL": (60.32, 24.96, "Finland"), "OSL": (60.19, 11.10, "Norway"),
+    "CPH": (55.62, 12.66, "Denmark"), "BCN": (41.30, 2.08, "Spain"), "ATH": (37.94, 23.94, "Greece"),
+    "WAW": (52.17, 20.97, "Poland"),
+    # Middle East
+    "DXB": (25.25, 55.36, "United Arab Emirates"), "DOH": (25.27, 51.61, "Qatar"), "AUH": (24.43, 54.65, "United Arab Emirates"),
+    "JED": (21.68, 39.16, "Saudi Arabia"), "RUH": (24.96, 46.70, "Saudi Arabia"), "KWI": (29.23, 47.98, "Kuwait"),
+    # Asia
+    "HND": (35.55, 139.78, "Japan"), "NRT": (35.76, 140.39, "Japan"), "KIX": (34.43, 135.23, "Japan"), "ITM": (34.78, 135.44, "Japan"),
+    "ICN": (37.47, 126.44, "Republic of Korea"), "PEK": (40.08, 116.58, "China"), "PVG": (31.14, 121.81, "China"),
+    "CAN": (23.39, 113.30, "China"), "HKG": (22.31, 113.91, "Hong Kong"), "TPE": (25.08, 121.23, "Taiwan"),
+    "SIN": (1.36, 103.99, "Singapore"), "BKK": (13.69, 100.75, "Thailand"), "KUL": (2.75, 101.71, "Malaysia"),
+    "CGK": (-6.13, 106.66, "Indonesia"), "MNL": (14.51, 121.02, "Philippines"), "DEL": (28.56, 77.10, "India"),
+    "BOM": (19.09, 72.87, "India"), "BLR": (13.20, 77.71, "India"), "MAA": (12.99, 80.17, "India"),
+    "HYD": (17.24, 78.43, "India"), "CCU": (22.65, 88.45, "India"), "SGN": (10.82, 106.65, "Viet Nam"),
+    # Oceania
+    "SYD": (-33.95, 151.18, "Australia"), "MEL": (-37.67, 144.84, "Australia"), "BNE": (-27.38, 153.12, "Australia"),
+    "PER": (-31.94, 115.97, "Australia"), "AKL": (-37.01, 174.79, "New Zealand"), "CHC": (-43.49, 172.53, "New Zealand"),
+    # South America
+    "GRU": (-23.44, -46.47, "Brazil"), "GIG": (-22.81, -43.25, "Brazil"), "EZE": (-34.82, -58.54, "Argentina"),
+    "SCL": (-33.39, -70.79, "Chile"), "BOG": (4.70, -74.15, "Colombia"), "LIM": (-12.02, -77.11, "Peru"),
+    # Africa
+    "JNB": (-26.14, 28.25, "South Africa"), "CPT": (-33.97, 18.60, "South Africa"), "ADD": (8.98, 38.80, "Ethiopia"),
+    "NBO": (-1.32, 36.93, "Kenya"), "CAI": (30.12, 31.41, "Egypt"), "CMN": (33.37, -7.59, "Morocco"),
+    "LOS": (6.58, 3.32, "Nigeria"), "ALG": (36.69, 3.22, "Algeria"),
+}
 
-    # North America Transcontinental & Regional
-    {"icao24": "a3b102", "callsign": "AAL100", "country": "United States", "lat": 40.71, "lon": -74.00, "alt": 9144, "track": 75.0, "vel": 245.0},
-    {"icao24": "a79401", "callsign": "DAL221", "country": "United States", "lat": 33.64, "lon": -84.42, "alt": 10668, "track": 285.0, "vel": 232.0},
-    {"icao24": "a9314e", "callsign": "SWA421", "country": "United States", "lat": 37.61, "lon": -122.37, "alt": 10058, "track": 90.0, "vel": 228.0},
-    {"icao24": "c01823", "callsign": "ACA872", "country": "Canada", "lat": 45.47, "lon": -73.74, "alt": 11277, "track": 60.0, "vel": 240.0},
-    {"icao24": "a2401f", "callsign": "UAL1", "country": "United States", "lat": 37.77, "lon": -122.41, "alt": 11582, "track": 265.0, "vel": 250.0},
-    {"icao24": "a5518b", "callsign": "JBU523", "country": "United States", "lat": 26.07, "lon": -80.15, "alt": 9753, "track": 185.0, "vel": 220.0},
-    {"icao24": "a88c30", "callsign": "DAL445", "country": "United States", "lat": 44.88, "lon": -93.22, "alt": 10363, "track": 120.0, "vel": 230.0},
-    {"icao24": "c058e1", "callsign": "WJA128", "country": "Canada", "lat": 51.11, "lon": -114.02, "alt": 10668, "track": 95.0, "vel": 235.0},
-    {"icao24": "a4190c", "callsign": "ASA62", "country": "United States", "lat": 58.36, "lon": -134.58, "alt": 10972, "track": 145.0, "vel": 240.0},
-    {"icao24": "a0592e", "callsign": "FFT142", "country": "United States", "lat": 39.86, "lon": -104.67, "alt": 9144, "track": 210.0, "vel": 215.0},
-    {"icao24": "a7d189", "callsign": "AAL4", "country": "United States", "lat": 33.94, "lon": -118.40, "alt": 11277, "track": 65.0, "vel": 255.0},
-    {"icao24": "a34fe2", "callsign": "FDX382", "country": "United States", "lat": 35.04, "lon": -89.97, "alt": 10668, "track": 330.0, "vel": 245.0},
-    {"icao24": "a29b01", "callsign": "UPS102", "country": "United States", "lat": 38.17, "lon": -85.73, "alt": 9753, "track": 15.0, "vel": 238.0},
+# Major global route templates (origin, dest, airline_code, base_flight_number, country, speed_mps, altitude_m)
+_GLOBAL_ROUTE_TEMPLATES: list[tuple[str, str, str, int, str, float, float]] = [
+    # North Atlantic Trunk Corridors
+    ("JFK", "LHR", "BAW", 178, "United Kingdom", 245.0, 11277),
+    ("LHR", "JFK", "VIR", 10, "United Kingdom", 235.0, 11582),
+    ("JFK", "CDG", "AFR", 7, "France", 240.0, 10972),
+    ("CDG", "JFK", "AFR", 6, "France", 232.0, 11277),
+    ("BOS", "LHR", "BAW", 212, "United Kingdom", 242.0, 11887),
+    ("ORD", "FRA", "DLH", 431, "Germany", 238.0, 10668),
+    ("FRA", "ORD", "UAL", 907, "United States", 230.0, 10972),
+    ("EWR", "AMS", "KLM", 642, "Netherlands", 240.0, 11277),
+    ("IAD", "LHR", "UAL", 918, "United States", 242.0, 11582),
+    ("MIA", "MAD", "IBE", 6124, "Spain", 238.0, 11277),
+    ("MAD", "MIA", "AAL", 68, "United States", 235.0, 10972),
+    ("YYZ", "LHR", "ACA", 856, "Canada", 245.0, 11582),
+    ("LAX", "LHR", "BAW", 268, "United Kingdom", 248.0, 11887),
+    ("SFO", "FRA", "DLH", 455, "Germany", 246.0, 11582),
+    ("JFK", "MAD", "IBE", 6251, "Spain", 240.0, 11277),
+    ("MCO", "LGW", "VIR", 16, "United Kingdom", 242.0, 10972),
+    ("ATL", "AMS", "DAL", 72, "United States", 240.0, 11277),
+    ("DFW", "LHR", "AAL", 50, "United States", 245.0, 11582),
+    ("SEA", "LHR", "BAW", 48, "United Kingdom", 244.0, 11887),
+    ("PHX", "LHR", "AAL", 194, "United States", 246.0, 11582),
 
-    # European Airspace
-    {"icao24": "4ca255", "callsign": "RYR415", "country": "Ireland", "lat": 48.85, "lon": 2.35, "alt": 9753, "track": 140.0, "vel": 215.0},
-    {"icao24": "407172", "callsign": "EZY812", "country": "United Kingdom", "lat": 51.50, "lon": -0.12, "alt": 8534, "track": 180.0, "vel": 210.0},
-    {"icao24": "4b1802", "callsign": "SWR124", "country": "Switzerland", "lat": 46.81, "lon": 8.22, "alt": 10363, "track": 125.0, "vel": 220.0},
-    {"icao24": "468e21", "callsign": "SAS532", "country": "Sweden", "lat": 59.32, "lon": 18.06, "alt": 10668, "track": 200.0, "vel": 225.0},
-    {"icao24": "3c4b26", "callsign": "DLH102", "country": "Germany", "lat": 50.03, "lon": 8.57, "alt": 9144, "track": 350.0, "vel": 220.0},
-    {"icao24": "39b891", "callsign": "AFR124", "country": "France", "lat": 43.66, "lon": 7.21, "alt": 10058, "track": 320.0, "vel": 225.0},
-    {"icao24": "4bb201", "callsign": "THY198", "country": "Turkey", "lat": 41.27, "lon": 28.75, "alt": 11277, "track": 300.0, "vel": 240.0},
-    {"icao24": "3002b1", "callsign": "ITY401", "country": "Italy", "lat": 41.80, "lon": 12.23, "alt": 9448, "track": 340.0, "vel": 218.0},
-    {"icao24": "471f45", "callsign": "WZZ202", "country": "Hungary", "lat": 47.43, "lon": 19.25, "alt": 10363, "track": 270.0, "vel": 222.0},
-    {"icao24": "4401a8", "callsign": "AUA301", "country": "Austria", "lat": 48.11, "lon": 16.56, "alt": 9753, "track": 110.0, "vel": 220.0},
-    {"icao24": "461e05", "callsign": "FIN132", "country": "Finland", "lat": 60.31, "lon": 24.96, "alt": 10972, "track": 190.0, "vel": 230.0},
-    {"icao24": "4840e4", "callsign": "KLM141", "country": "Netherlands", "lat": 52.31, "lon": 4.76, "alt": 8839, "track": 130.0, "vel": 212.0},
-    {"icao24": "4b8294", "callsign": "LOT381", "country": "Poland", "lat": 52.16, "lon": 20.96, "alt": 10668, "track": 240.0, "vel": 228.0},
-    {"icao24": "45ce21", "callsign": "BEL441", "country": "Belgium", "lat": 50.90, "lon": 4.48, "alt": 9144, "track": 175.0, "vel": 215.0},
-    {"icao24": "491204", "callsign": "NOZ551", "country": "Norway", "lat": 60.19, "lon": 11.10, "alt": 10058, "track": 160.0, "vel": 225.0},
-    {"icao24": "4510b2", "callsign": "AEE601", "country": "Greece", "lat": 37.93, "lon": 23.94, "alt": 10363, "track": 315.0, "vel": 228.0},
+    # North America Transcontinental & Regional Corridors
+    ("JFK", "LAX", "AAL", 1, "United States", 235.0, 10668),
+    ("LAX", "JFK", "DAL", 4, "United States", 255.0, 11277),
+    ("BOS", "SFO", "UAL", 312, "United States", 230.0, 10972),
+    ("SFO", "BOS", "JBU", 634, "United States", 252.0, 11582),
+    ("JFK", "SFO", "DAL", 412, "United States", 232.0, 10668),
+    ("EWR", "LAX", "UAL", 112, "United States", 234.0, 10972),
+    ("ORD", "LAX", "AAL", 215, "United States", 228.0, 9753),
+    ("LAX", "ORD", "UAL", 480, "United States", 245.0, 10363),
+    ("ATL", "DFW", "DAL", 891, "United States", 225.0, 9144),
+    ("DFW", "ATL", "AAL", 124, "United States", 230.0, 9753),
+    ("MIA", "JFK", "AAL", 1102, "United States", 240.0, 10058),
+    ("JFK", "MIA", "DAL", 305, "United States", 225.0, 9753),
+    ("SEA", "LAX", "ASA", 412, "United States", 220.0, 9448),
+    ("LAX", "SEA", "DAL", 502, "United States", 222.0, 9753),
+    ("DEN", "ORD", "UAL", 610, "United States", 235.0, 10058),
+    ("ORD", "DEN", "SWA", 114, "United States", 220.0, 9144),
+    ("ATL", "MCO", "DAL", 182, "United States", 215.0, 8534),
+    ("DFW", "ORD", "AAL", 404, "United States", 225.0, 9753),
+    ("LAX", "HNL", "HAL", 2, "United States", 240.0, 11277),
+    ("HNL", "LAX", "UAL", 115, "United States", 250.0, 11582),
 
-    # Middle East & Gulf Hubs
-    {"icao24": "896081", "callsign": "UAE201", "country": "United Arab Emirates", "lat": 25.25, "lon": 55.36, "alt": 10972, "track": 310.0, "vel": 248.0},
-    {"icao24": "06a12e", "callsign": "QTR701", "country": "Qatar", "lat": 28.50, "lon": 51.53, "alt": 11582, "track": 320.0, "vel": 245.0},
-    {"icao24": "896422", "callsign": "ETD101", "country": "United Arab Emirates", "lat": 24.43, "lon": 54.65, "alt": 11277, "track": 305.0, "vel": 242.0},
-    {"icao24": "70014a", "callsign": "OMA105", "country": "Oman", "lat": 23.59, "lon": 58.28, "alt": 10668, "track": 290.0, "vel": 235.0},
-    {"icao24": "71c045", "callsign": "SVA124", "country": "Saudi Arabia", "lat": 21.68, "lon": 39.15, "alt": 11887, "track": 335.0, "vel": 250.0},
-    {"icao24": "706012", "callsign": "KAC102", "country": "Kuwait", "lat": 29.22, "lon": 47.97, "alt": 10972, "track": 300.0, "vel": 240.0},
-    {"icao24": "89619a", "callsign": "FDB512", "country": "United Arab Emirates", "lat": 27.80, "lon": 52.10, "alt": 9753, "track": 120.0, "vel": 225.0},
-    {"icao24": "0101b4", "callsign": "MSR777", "country": "Egypt", "lat": 30.12, "lon": 31.40, "alt": 11277, "track": 325.0, "vel": 245.0},
-    {"icao24": "73804f", "callsign": "GFA002", "country": "Bahrain", "lat": 26.27, "lon": 50.63, "alt": 10668, "track": 105.0, "vel": 238.0},
-    {"icao24": "7500c8", "callsign": "RJA261", "country": "Jordan", "lat": 31.72, "lon": 35.99, "alt": 10972, "track": 295.0, "vel": 240.0},
+    # Europe High-Density Corridors
+    ("LHR", "CDG", "BAW", 304, "United Kingdom", 210.0, 7620),
+    ("CDG", "LHR", "AFR", 1680, "France", 212.0, 7620),
+    ("LHR", "AMS", "KLM", 1000, "Netherlands", 205.0, 7315),
+    ("AMS", "LHR", "BAW", 428, "United Kingdom", 208.0, 7315),
+    ("LHR", "FRA", "DLH", 901, "Germany", 220.0, 8534),
+    ("FRA", "LHR", "BAW", 902, "United Kingdom", 218.0, 8534),
+    ("FRA", "CDG", "AFR", 1819, "France", 210.0, 7924),
+    ("CDG", "FRA", "DLH", 1029, "Germany", 212.0, 7924),
+    ("CDG", "MAD", "IBE", 3401, "Spain", 225.0, 10058),
+    ("MAD", "CDG", "AFR", 1400, "France", 228.0, 10363),
+    ("LHR", "MAD", "BAW", 460, "United Kingdom", 230.0, 10668),
+    ("MAD", "LHR", "IBE", 3164, "Spain", 232.0, 10972),
+    ("AMS", "CDG", "AFR", 1141, "France", 208.0, 7620),
+    ("FRA", "MAD", "DLH", 1112, "Germany", 228.0, 10363),
+    ("MUC", "FCO", "DLH", 1842, "Germany", 220.0, 9144),
+    ("FCO", "MUC", "ITY", 102, "Italy", 222.0, 9448),
+    ("ZRH", "LHR", "SWR", 316, "Switzerland", 220.0, 8839),
+    ("LHR", "ZRH", "BAW", 712, "United Kingdom", 218.0, 8839),
+    ("VIE", "FRA", "AUA", 111, "Austria", 215.0, 8534),
+    ("DUB", "LHR", "EIN", 152, "Ireland", 205.0, 7315),
+    ("CPH", "OSL", "SAS", 452, "Sweden", 210.0, 8229),
+    ("ARN", "CPH", "SAS", 1419, "Sweden", 212.0, 8534),
+    ("HEL", "ARN", "FIN", 801, "Finland", 205.0, 7620),
+    ("WAW", "FRA", "LOT", 379, "Poland", 222.0, 9448),
+    ("IST", "FRA", "THY", 1587, "Turkey", 235.0, 10668),
+    ("FRA", "IST", "DLH", 1300, "Germany", 238.0, 10972),
+    ("ATH", "LHR", "AEE", 600, "Greece", 235.0, 10668),
+    ("LHR", "ATH", "BAW", 632, "United Kingdom", 238.0, 10972),
 
-    # Asia & Pacific
-    {"icao24": "76ce81", "callsign": "SIA22", "country": "Singapore", "lat": 1.36, "lon": 103.99, "alt": 11887, "track": 335.0, "vel": 252.0},
-    {"icao24": "7809a4", "callsign": "CCA981", "country": "China", "lat": 39.90, "lon": 116.40, "alt": 10668, "track": 45.0, "vel": 235.0},
-    {"icao24": "8619bc", "callsign": "ANA106", "country": "Japan", "lat": 35.77, "lon": 139.77, "alt": 11277, "track": 65.0, "vel": 242.0},
-    {"icao24": "710115", "callsign": "KAL081", "country": "Republic of Korea", "lat": 37.46, "lon": 126.44, "alt": 10972, "track": 55.0, "vel": 240.0},
-    {"icao24": "780512", "callsign": "CPA830", "country": "Hong Kong", "lat": 22.31, "lon": 113.91, "alt": 11582, "track": 35.0, "vel": 245.0},
-    {"icao24": "800311", "callsign": "AIC101", "country": "India", "lat": 28.55, "lon": 77.10, "alt": 10668, "track": 305.0, "vel": 238.0},
-    {"icao24": "800bc4", "callsign": "IGO204", "country": "India", "lat": 19.09, "lon": 72.87, "alt": 9753, "track": 135.0, "vel": 225.0},
-    {"icao24": "8005d2", "callsign": "SEJ312", "country": "India", "lat": 12.97, "lon": 77.59, "alt": 10058, "track": 20.0, "vel": 230.0},
-    {"icao24": "7812a1", "callsign": "CES587", "country": "China", "lat": 31.14, "lon": 121.80, "alt": 11277, "track": 50.0, "vel": 248.0},
-    {"icao24": "780b43", "callsign": "CSN327", "country": "China", "lat": 23.39, "lon": 113.30, "alt": 11582, "track": 60.0, "vel": 250.0},
-    {"icao24": "8632f0", "callsign": "JAL004", "country": "Japan", "lat": 34.78, "lon": 135.44, "alt": 11887, "track": 70.0, "vel": 255.0},
-    {"icao24": "888042", "callsign": "THA910", "country": "Thailand", "lat": 13.69, "lon": 100.75, "alt": 10972, "track": 310.0, "vel": 245.0},
-    {"icao24": "750284", "callsign": "MAS001", "country": "Malaysia", "lat": 2.74, "lon": 101.70, "alt": 11277, "track": 320.0, "vel": 248.0},
-    {"icao24": "8a0149", "callsign": "GIA880", "country": "Indonesia", "lat": -6.12, "lon": 106.65, "alt": 10668, "track": 45.0, "vel": 240.0},
-    {"icao24": "758112", "callsign": "PAL102", "country": "Philippines", "lat": 14.51, "lon": 121.01, "alt": 11277, "track": 40.0, "vel": 242.0},
-    {"icao24": "885141", "callsign": "HVN36", "country": "Viet Nam", "lat": 21.22, "lon": 105.80, "alt": 10972, "track": 305.0, "vel": 238.0},
-    {"icao24": "7104b2", "callsign": "AAR202", "country": "Republic of Korea", "lat": 35.18, "lon": 128.94, "alt": 11582, "track": 85.0, "vel": 252.0},
-    {"icao24": "899015", "callsign": "CAL008", "country": "Taiwan", "lat": 25.08, "lon": 121.23, "alt": 11277, "track": 60.0, "vel": 248.0},
-    {"icao24": "89912a", "callsign": "EVA016", "country": "Taiwan", "lat": 24.80, "lon": 121.00, "alt": 11887, "track": 55.0, "vel": 250.0},
+    # Europe - Middle East - Asia Corridors
+    ("LHR", "DXB", "UAE", 2, "United Arab Emirates", 252.0, 11887),
+    ("DXB", "LHR", "UAE", 1, "United Arab Emirates", 242.0, 11277),
+    ("CDG", "DXB", "AFR", 662, "France", 250.0, 11582),
+    ("FRA", "DXB", "DLH", 630, "Germany", 248.0, 11582),
+    ("LHR", "DOH", "QTR", 4, "Qatar", 250.0, 11887),
+    ("DOH", "LHR", "BAW", 122, "United Kingdom", 242.0, 11277),
+    ("FRA", "DOH", "QTR", 70, "Qatar", 246.0, 11582),
+    ("LHR", "SIN", "SIA", 305, "Singapore", 255.0, 11887),
+    ("SIN", "LHR", "SIA", 306, "Singapore", 245.0, 11277),
+    ("LHR", "HKG", "CPA", 250, "Hong Kong", 250.0, 11582),
+    ("HKG", "LHR", "BAW", 28, "United Kingdom", 244.0, 11277),
+    ("CDG", "HND", "AFR", 274, "France", 252.0, 11887),
+    ("HND", "CDG", "ANA", 215, "Japan", 248.0, 11582),
+    ("LHR", "HND", "BAW", 5, "United Kingdom", 252.0, 11887),
+    ("FRA", "HND", "DLH", 716, "Germany", 250.0, 11582),
+    ("LHR", "DEL", "AIC", 162, "India", 248.0, 11277),
+    ("DEL", "LHR", "AIC", 161, "India", 242.0, 10972),
+    ("FRA", "DEL", "DLH", 760, "Germany", 246.0, 11277),
+    ("LHR", "BOM", "BAW", 199, "United Kingdom", 246.0, 11277),
+    ("CDG", "BKK", "AFR", 166, "France", 250.0, 11582),
 
-    # Transpacific Routes
-    {"icao24": "a12c40", "callsign": "UAL837", "country": "United States", "lat": 42.50, "lon": -165.20, "alt": 11277, "track": 285.0, "vel": 240.0},
-    {"icao24": "a341b5", "callsign": "DAL295", "country": "United States", "lat": 48.20, "lon": -155.80, "alt": 10972, "track": 290.0, "vel": 238.0},
-    {"icao24": "8620b4", "callsign": "ANA008", "country": "Japan", "lat": 45.10, "lon": 175.40, "alt": 11887, "track": 85.0, "vel": 262.0},
-    {"icao24": "863110", "callsign": "JAL062", "country": "Japan", "lat": 39.80, "lon": -170.10, "alt": 11582, "track": 90.0, "vel": 258.0},
-    {"icao24": "7c4581", "callsign": "QFA11", "country": "Australia", "lat": -15.40, "lon": -160.20, "alt": 11277, "track": 60.0, "vel": 250.0},
-    {"icao24": "c81d24", "callsign": "ANZ002", "country": "New Zealand", "lat": -20.10, "lon": -150.50, "alt": 10972, "track": 45.0, "vel": 245.0},
-    {"icao24": "a5501e", "callsign": "HAL21", "country": "United States", "lat": 21.32, "lon": -157.92, "alt": 10668, "track": 70.0, "vel": 240.0},
-    {"icao24": "a77192", "callsign": "UAL115", "country": "United States", "lat": 28.50, "lon": -140.20, "alt": 11277, "track": 245.0, "vel": 235.0},
+    # Middle East Hub Corridors
+    ("DXB", "DEL", "UAE", 510, "United Arab Emirates", 240.0, 10668),
+    ("DEL", "DXB", "AIC", 995, "India", 238.0, 10363),
+    ("DXB", "BOM", "UAE", 500, "United Arab Emirates", 238.0, 10363),
+    ("BOM", "DXB", "IGO", 21, "India", 236.0, 10058),
+    ("DXB", "SIN", "UAE", 354, "United Arab Emirates", 250.0, 11582),
+    ("SIN", "DXB", "SIA", 494, "Singapore", 246.0, 11277),
+    ("DXB", "BKK", "UAE", 384, "United Arab Emirates", 248.0, 11277),
+    ("DXB", "SYD", "UAE", 414, "United Arab Emirates", 255.0, 11887),
+    ("DOH", "SIN", "QTR", 942, "Qatar", 250.0, 11582),
+    ("DOH", "DEL", "QTR", 678, "Qatar", 240.0, 10668),
+    ("DOH", "SYD", "QTR", 906, "Qatar", 255.0, 11887),
+    ("AUH", "LHR", "ETD", 19, "United Arab Emirates", 245.0, 11582),
+    ("JED", "CAI", "SVA", 301, "Saudi Arabia", 230.0, 9753),
+    ("RUH", "DXB", "FDB", 872, "United Arab Emirates", 225.0, 9448),
+    ("KWI", "DXB", "KAC", 107, "Kuwait", 228.0, 9753),
 
-    # Oceania & Southern Hemisphere
-    {"icao24": "7c0142", "callsign": "QFA401", "country": "Australia", "lat": -33.94, "lon": 151.17, "alt": 10668, "track": 225.0, "vel": 235.0},
-    {"icao24": "7c19b0", "callsign": "VOZ801", "country": "Australia", "lat": -37.67, "lon": 144.84, "alt": 9753, "track": 300.0, "vel": 225.0},
-    {"icao24": "7c2841", "callsign": "JST502", "country": "Australia", "lat": -27.38, "lon": 153.11, "alt": 10363, "track": 195.0, "vel": 230.0},
-    {"icao24": "7c331a", "callsign": "QFA581", "country": "Australia", "lat": -31.94, "lon": 115.96, "alt": 11277, "track": 95.0, "vel": 245.0},
-    {"icao24": "c8201a", "callsign": "ANZ404", "country": "New Zealand", "lat": -41.33, "lon": 174.80, "alt": 9144, "track": 210.0, "vel": 215.0},
-    {"icao24": "c80521", "callsign": "ANZ601", "country": "New Zealand", "lat": -43.48, "lon": 172.53, "alt": 8534, "track": 30.0, "vel": 210.0},
+    # Asia & Pacific Corridors
+    ("HND", "ITM", "ANA", 15, "Japan", 210.0, 7315),
+    ("NRT", "ICN", "KAL", 702, "Republic of Korea", 228.0, 9753),
+    ("ICN", "NRT", "AAR", 102, "Republic of Korea", 230.0, 10058),
+    ("HND", "PEK", "CCA", 182, "China", 238.0, 10668),
+    ("PEK", "HND", "ANA", 962, "Japan", 242.0, 10972),
+    ("PVG", "HND", "CES", 537, "China", 235.0, 10363),
+    ("HKG", "TPE", "CPA", 468, "Hong Kong", 220.0, 8534),
+    ("TPE", "HKG", "CAL", 919, "Taiwan", 222.0, 8839),
+    ("HKG", "SIN", "CPA", 711, "Hong Kong", 242.0, 10972),
+    ("SIN", "HKG", "SIA", 856, "Singapore", 245.0, 11277),
+    ("SIN", "KUL", "MAS", 606, "Malaysia", 200.0, 6096),
+    ("KUL", "SIN", "SIA", 119, "Singapore", 202.0, 6096),
+    ("SIN", "CGK", "GIA", 823, "Indonesia", 215.0, 8534),
+    ("BKK", "SIN", "THA", 403, "Thailand", 230.0, 9753),
+    ("SIN", "BKK", "SIA", 710, "Singapore", 232.0, 10058),
+    ("HKG", "BKK", "THA", 601, "Thailand", 235.0, 10363),
+    ("PEK", "PVG", "CCA", 1501, "China", 230.0, 9753),
+    ("PVG", "PEK", "CES", 5102, "China", 232.0, 10058),
+    ("CAN", "PEK", "CSN", 3101, "China", 236.0, 10363),
+    ("HKG", "MNL", "PAL", 301, "Philippines", 225.0, 9144),
+    ("TPE", "NRT", "EVA", 198, "Taiwan", 238.0, 10668),
+    ("ICN", "HKG", "KAL", 607, "Republic of Korea", 236.0, 10668),
 
-    # Latin America & Caribbean
-    {"icao24": "e08422", "callsign": "LAN800", "country": "Chile", "lat": -33.39, "lon": -70.78, "alt": 10668, "track": 240.0, "vel": 235.0},
-    {"icao24": "e4811a", "callsign": "GLO142", "country": "Brazil", "lat": -23.55, "lon": -46.63, "alt": 9753, "track": 15.0, "vel": 225.0},
-    {"icao24": "e49052", "callsign": "TAM8060", "country": "Brazil", "lat": -22.81, "lon": -43.25, "alt": 11277, "track": 345.0, "vel": 245.0},
-    {"icao24": "e01048", "callsign": "ARG1302", "country": "Argentina", "lat": -34.82, "lon": -58.53, "alt": 10972, "track": 355.0, "vel": 240.0},
-    {"icao24": "0b001a", "callsign": "AVA010", "country": "Colombia", "lat": 4.70, "lon": -74.14, "alt": 11582, "track": 350.0, "vel": 245.0},
-    {"icao24": "0d0491", "callsign": "AMX001", "country": "Mexico", "lat": 19.43, "lon": -99.07, "alt": 11277, "track": 50.0, "vel": 240.0},
-    {"icao24": "0d0822", "callsign": "VOI502", "country": "Mexico", "lat": 20.52, "lon": -103.31, "alt": 9753, "track": 10.0, "vel": 225.0},
-    {"icao24": "0e4120", "callsign": "CMP302", "country": "Panama", "lat": 9.07, "lon": -79.38, "alt": 10668, "track": 340.0, "vel": 238.0},
-    {"icao24": "e80112", "callsign": "LPE212", "country": "Peru", "lat": -12.02, "lon": -77.11, "alt": 10363, "track": 330.0, "vel": 232.0},
+    # Transpacific Corridors
+    ("LAX", "HND", "ANA", 105, "Japan", 248.0, 11277),
+    ("HND", "LAX", "JAL", 62, "Japan", 260.0, 11887),
+    ("SFO", "HND", "UAL", 875, "United States", 246.0, 11277),
+    ("HND", "SFO", "ANA", 108, "Japan", 258.0, 11887),
+    ("LAX", "ICN", "KAL", 12, "Republic of Korea", 248.0, 11277),
+    ("ICN", "LAX", "AAR", 202, "Republic of Korea", 262.0, 11887),
+    ("SFO", "TPE", "EVA", 27, "Taiwan", 246.0, 11277),
+    ("TPE", "SFO", "CAL", 4, "Taiwan", 260.0, 11887),
+    ("LAX", "SYD", "QFA", 12, "Australia", 250.0, 11582),
+    ("SYD", "LAX", "QFA", 11, "Australia", 255.0, 11887),
+    ("SFO", "SYD", "UAL", 863, "United States", 250.0, 11582),
+    ("LAX", "AKL", "ANZ", 5, "New Zealand", 250.0, 11582),
+    ("AKL", "LAX", "ANZ", 6, "New Zealand", 255.0, 11887),
+    ("YVR", "HKG", "CPA", 889, "Hong Kong", 248.0, 11277),
+
+    # India Domestic & Regional
+    ("DEL", "BOM", "IGO", 204, "India", 230.0, 9753),
+    ("BOM", "DEL", "AIC", 887, "India", 232.0, 10058),
+    ("DEL", "BLR", "IGO", 512, "India", 236.0, 10363),
+    ("BLR", "DEL", "AIC", 505, "India", 238.0, 10668),
+    ("BOM", "BLR", "IGO", 314, "India", 220.0, 8839),
+    ("DEL", "HYD", "AIC", 542, "India", 232.0, 10058),
+    ("DEL", "CCU", "IGO", 251, "India", 234.0, 10363),
+    ("MAA", "DEL", "AIC", 430, "India", 238.0, 10668),
+
+    # Australia & Oceania Domestic
+    ("SYD", "MEL", "QFA", 401, "Australia", 225.0, 9144),
+    ("MEL", "SYD", "VOZ", 811, "Australia", 228.0, 9448),
+    ("SYD", "BNE", "QFA", 502, "Australia", 226.0, 9144),
+    ("BNE", "SYD", "JST", 511, "Australia", 228.0, 9448),
+    ("MEL", "PER", "QFA", 775, "Australia", 242.0, 11277),
+    ("PER", "MEL", "VOZ", 682, "Australia", 250.0, 11582),
+    ("SYD", "PER", "QFA", 581, "Australia", 240.0, 11277),
+    ("AKL", "CHC", "ANZ", 509, "New Zealand", 215.0, 8534),
+    ("CHC", "AKL", "ANZ", 534, "New Zealand", 218.0, 8839),
+
+    # Latin America
+    ("GRU", "EZE", "TAM", 8010, "Brazil", 232.0, 10363),
+    ("EZE", "GRU", "ARG", 1240, "Argentina", 235.0, 10668),
+    ("SCL", "EZE", "LAN", 445, "Chile", 220.0, 9753),
+    ("GRU", "GIG", "GLO", 1024, "Brazil", 205.0, 6705),
+    ("BOG", "MIA", "AVA", 6, "Colombia", 238.0, 10668),
+    ("MIA", "BOG", "AAL", 916, "United States", 235.0, 10363),
+    ("MEX", "LAX", "AMX", 648, "Mexico", 230.0, 10058),
+    ("LIM", "SCL", "LAN", 531, "Chile", 236.0, 10668),
 
     # Africa
-    {"icao24": "00a124", "callsign": "SAA203", "country": "South Africa", "lat": -26.13, "lon": 28.24, "alt": 10363, "track": 300.0, "vel": 230.0},
-    {"icao24": "040049", "callsign": "ETH500", "country": "Ethiopia", "lat": 8.98, "lon": 38.80, "alt": 11582, "track": 315.0, "vel": 248.0},
-    {"icao24": "02a110", "callsign": "KQA101", "country": "Kenya", "lat": -1.32, "lon": 36.92, "alt": 11277, "track": 330.0, "vel": 245.0},
-    {"icao24": "020084", "callsign": "RAM200", "country": "Morocco", "lat": 33.37, "lon": -7.59, "alt": 10972, "track": 285.0, "vel": 240.0},
-    {"icao24": "06401a", "callsign": "NGR102", "country": "Nigeria", "lat": 6.58, "lon": 3.32, "alt": 10058, "track": 355.0, "vel": 230.0},
-    {"icao24": "00205b", "callsign": "DAH100", "country": "Algeria", "lat": 36.69, "lon": 3.21, "alt": 10668, "track": 350.0, "vel": 235.0},
-
-    # Central & South Asia Corridors
-    {"icao24": "151a02", "callsign": "UZB101", "country": "Uzbekistan", "lat": 41.26, "lon": 69.28, "alt": 10668, "track": 280.0, "vel": 235.0},
-    {"icao24": "683015", "callsign": "KZR901", "country": "Kazakhstan", "lat": 43.35, "lon": 77.04, "alt": 10972, "track": 295.0, "vel": 240.0},
-    {"icao24": "760084", "callsign": "PIA785", "country": "Pakistan", "lat": 31.52, "lon": 74.40, "alt": 11277, "track": 305.0, "vel": 242.0},
-    {"icao24": "708021", "callsign": "BBC001", "country": "Bangladesh", "lat": 23.84, "lon": 90.40, "alt": 10363, "track": 290.0, "vel": 232.0},
-    {"icao24": "704042", "callsign": "ALK503", "country": "Sri Lanka", "lat": 7.18, "lon": 79.88, "alt": 10668, "track": 310.0, "vel": 235.0},
+    ("JNB", "CPT", "SAA", 317, "South Africa", 235.0, 10363),
+    ("CPT", "JNB", "SAA", 322, "South Africa", 238.0, 10668),
+    ("ADD", "NBO", "ETH", 801, "Ethiopia", 220.0, 9144),
+    ("NBO", "JNB", "KQA", 760, "Kenya", 240.0, 10972),
+    ("CAI", "DXB", "MSR", 912, "Egypt", 242.0, 11277),
+    ("CMN", "CDG", "RAM", 750, "Morocco", 236.0, 10668),
+    ("LOS", "LHR", "BAW", 75, "United Kingdom", 246.0, 11582),
+    ("ALG", "CDG", "DAH", 1004, "Algeria", 228.0, 10058),
 ]
 
 
 def load_sample_aircraft(now: datetime | None = None) -> list[AircraftStateRecord]:
-    """Provide realistic worldwide commercial flight states with dynamic flight motion."""
+    """Provide realistic worldwide commercial flight states (850+ flights) with real-time forward flight motion."""
     epoch = now or datetime.now(UTC)
+    elapsed = epoch.timestamp()
     records: list[AircraftStateRecord] = []
+    flight_idx = 0
 
-    # 4-hour cycle for global route progression
-    cycle_seconds = 14400.0
-    elapsed = epoch.timestamp() % cycle_seconds
-    earth_radius_m = 6371000.0
+    for orig, dest, airline, base_num, country, speed, alt in _GLOBAL_ROUTE_TEMPLATES:
+        if orig not in _GLOBAL_HUBS or dest not in _GLOBAL_HUBS:
+            continue
+        orig_lat, orig_lon, _ = _GLOBAL_HUBS[orig]
+        dest_lat, dest_lon, _ = _GLOBAL_HUBS[dest]
 
-    for item in SAMPLE_AIRCRAFT_DATA:
-        callsign = item["callsign"]
-        speed_mps = float(item["vel"])
-        track_deg = float(item["track"])
-
-        # Dead-reckoning position projection along track bearing
-        dist_m = speed_mps * elapsed
-        bearing_rad = math.radians(track_deg)
-        lat_rad = math.radians(item["lat"])
-        lon_rad = math.radians(item["lon"])
-        angular_dist = dist_m / earth_radius_m
-
-        cur_lat_rad = math.asin(
-            math.sin(lat_rad) * math.cos(angular_dist)
-            + math.cos(lat_rad) * math.sin(angular_dist) * math.cos(bearing_rad)
+        # Calculate great-circle distance
+        dlat = math.radians(dest_lat - orig_lat)
+        dlon = math.radians(dest_lon - orig_lon)
+        a = (
+            math.sin(dlat / 2.0) ** 2
+            + math.cos(math.radians(orig_lat)) * math.cos(math.radians(dest_lat)) * math.sin(dlon / 2.0) ** 2
         )
-        cur_lon_rad = lon_rad + math.atan2(
-            math.sin(bearing_rad) * math.sin(angular_dist) * math.cos(lat_rad),
-            math.cos(angular_dist) - math.sin(lat_rad) * math.sin(cur_lat_rad),
-        )
-        cur_lat = math.degrees(cur_lat_rad)
-        cur_lon = (math.degrees(cur_lon_rad) + 540.0) % 360.0 - 180.0
+        c = 2.0 * math.atan2(math.sqrt(max(0.0, a)), math.sqrt(max(0.0, 1.0 - a)))
+        dist_m = max(50000.0, 6371000.0 * c)
+        duration_sec = max(1800.0, dist_m / speed)
 
-        content_hash = hashlib.sha256(f"{item['icao24']}:{callsign}:{epoch.isoformat()}".encode("utf-8")).hexdigest()
-        records.append(
-            AircraftStateRecord(
-                icao24=item["icao24"],
-                callsign=callsign,
-                origin_country=item["country"],
-                time_position=epoch,
-                last_contact=epoch,
-                longitude=round(cur_lon, 4),
-                latitude=round(cur_lat, 4),
-                baro_altitude=float(item["alt"]),
-                on_ground=False,
-                velocity=speed_mps,
-                true_track=track_deg,
-                vertical_rate=0.0,
-                geo_altitude=float(item["alt"]),
-                squawk="1000",
-                position_source=0,
-                category=1,
-                locator="worldos://simulated-flight-corridor",
-                content_hash=content_hash,
+        # Bearing from origin to destination
+        y = math.sin(dlon) * math.cos(math.radians(dest_lat))
+        x = (
+            math.cos(math.radians(orig_lat)) * math.sin(math.radians(dest_lat))
+            - math.sin(math.radians(orig_lat)) * math.cos(math.radians(dest_lat)) * math.cos(dlon)
+        )
+        track_deg = round((math.degrees(math.atan2(y, x)) + 360.0) % 360.0, 1)
+
+        # 5 staggered flights along this route leg
+        for offset_ratio in [0.08, 0.28, 0.48, 0.68, 0.88]:
+            flight_idx += 1
+            progress = (elapsed / duration_sec + offset_ratio) % 1.0
+            cur_lat = round(orig_lat + (dest_lat - orig_lat) * progress, 4)
+            cur_lon = round(orig_lon + (dest_lon - orig_lon) * progress, 4)
+
+            # Unique non-duplicated ICAO24 and callsign
+            icao24 = f"a{flight_idx:05x}"
+            fnum = base_num + (int(offset_ratio * 100) % 70)
+            callsign = f"{airline}{fnum}"
+            content_hash = hashlib.sha256(f"{icao24}:{callsign}:{epoch.isoformat()}".encode("utf-8")).hexdigest()
+
+            records.append(
+                AircraftStateRecord(
+                    icao24=icao24,
+                    callsign=callsign,
+                    origin_country=country,
+                    time_position=epoch,
+                    last_contact=epoch,
+                    longitude=cur_lon,
+                    latitude=cur_lat,
+                    baro_altitude=float(alt),
+                    on_ground=False,
+                    velocity=float(speed),
+                    true_track=track_deg,
+                    vertical_rate=0.0,
+                    geo_altitude=float(alt),
+                    squawk="1000",
+                    position_source=0,
+                    category=1,
+                    locator="worldos://simulated-flight-corridor",
+                    content_hash=content_hash,
+                )
             )
-        )
+
     return records
+
+
+SAMPLE_AIRCRAFT_DATA: list[dict[str, Any]] = [
+    {
+        "icao24": r.icao24,
+        "callsign": r.callsign,
+        "country": r.origin_country,
+        "lat": r.latitude,
+        "lon": r.longitude,
+        "alt": r.baro_altitude,
+        "track": r.true_track,
+        "vel": r.velocity,
+    }
+    for r in load_sample_aircraft()[:100]
+]
 
 
 def get_token_manager() -> OpenSkyTokenManager:
@@ -437,25 +578,25 @@ def fetch_aircraft_states(
     lomax: float | None = None,
     token_manager: OpenSkyTokenManager | None = None,
 ) -> list[AircraftStateRecord]:
-    """Query OpenSky Network /states/all with OAuth2 authentication and bounding box scoping."""
-    if lamin is None and lomin is None and lamax is None and lomax is None:
-        cached = get_cached_aircraft_states(max_age_seconds=30.0)
-        if cached is not None:
-            return cached
+    """Query OpenSky Network /states/all with OAuth2 authentication and smart memory-cached bounding box scoping."""
+    has_bbox = lamin is not None and lomin is not None and lamax is not None and lomax is not None
 
+    # 1. Check in-memory global cache first (valid for 30s)
+    cached = get_cached_aircraft_states(max_age_seconds=30.0)
+    if cached is not None:
+        if has_bbox:
+            return [
+                r for r in cached
+                if lamin <= r.latitude <= lamax and lomin <= r.longitude <= lomax
+            ]
+        return cached
+
+    # 2. Fetch fresh global states from OpenSky /states/all
     mgr = token_manager or get_token_manager()
     token = mgr.get_token()
 
-    params: dict[str, str] = {}
-    if lamin is not None and lomin is not None and lamax is not None and lomax is not None:
-        params["lamin"] = f"{lamin:.4f}"
-        params["lomin"] = f"{lomin:.4f}"
-        params["lamax"] = f"{lamax:.4f}"
-        params["lomax"] = f"{lomax:.4f}"
-
-    query_str = f"?{urlencode(params)}" if params else ""
-    locator = f"{OPENSKY_STATES_URL}{query_str}"
-
+    # Always query global /states/all so we populate the in-memory cache for all viewport queries
+    locator = OPENSKY_STATES_URL
     req = Request(
         locator,
         headers={
@@ -494,6 +635,12 @@ def fetch_aircraft_states(
             records.append(record)
 
     logger.info("Parsed %d valid aircraft state vectors from OpenSky (total states: %d)", len(records), len(raw_states))
-    if lamin is None and lomin is None and lamax is None and lomax is None and records:
+    if records:
         set_cached_aircraft_states(records)
+
+    if has_bbox:
+        return [
+            r for r in records
+            if lamin <= r.latitude <= lamax and lomin <= r.longitude <= lomax
+        ]
     return records
