@@ -85,6 +85,7 @@ def generate_orbital_ground_track(
     period_min: float,
     num_points: int = 72,
     points: int | None = None,
+    **kwargs: Any,
 ) -> list[list[float]]:
     """Compute ground track coordinates [lon, lat] for one full orbit."""
     total_points = points if points is not None else num_points
