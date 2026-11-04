@@ -2,14 +2,17 @@ import React, { useEffect, useRef } from 'react';
 import {
   Cartesian3,
   BillboardCollection,
+  BoundingSphere,
   Cesium3DTileset,
   Color,
+  CustomDataSource,
   JulianDate,
   Simon1994PlanetaryPositions,
   ConstantProperty,
   DistanceDisplayCondition,
   GeoJsonDataSource,
   GoogleMaps,
+  HeadingPitchRange,
   Ion,
   IonGeocodeProviderType,
   Math as CesiumMath,
@@ -86,6 +89,52 @@ interface SatelliteKinematicState {
   inclinationDeg: number;
 }
 
+/**
+ * Compute closed 3D Keplerian orbital loop and sub-satellite ground track.
+ */
+function computeKeplerianOrbit3D(
+  lonDeg: number,
+  latDeg: number,
+  altMeters: number,
+  inclinationDeg: number,
+  numPoints = 140
+): { positions3D: Cartesian3[]; groundPoints: [number, number][] } {
+  const R = 6371000 + altMeters;
+  const inc = CesiumMath.toRadians(inclinationDeg);
+  const currentLat = CesiumMath.toRadians(latDeg);
+  const currentLon = CesiumMath.toRadians(lonDeg);
+
+  let sinInc = Math.sin(inc);
+  if (Math.abs(sinInc) < 1e-4) {
+    sinInc = sinInc >= 0 ? 1e-4 : -1e-4;
+  }
+
+  const sinU0 = Math.max(-1.0, Math.min(1.0, Math.sin(currentLat) / sinInc));
+  const u0 = Math.asin(sinU0);
+  const nodeLon = currentLon - Math.atan2(Math.sin(u0) * Math.cos(inc), Math.cos(u0));
+
+  const positions3D: Cartesian3[] = [];
+  const groundPoints: [number, number][] = [];
+
+  for (let step = 0; step <= numPoints; step++) {
+    const u = u0 + (step / numPoints) * CesiumMath.TWO_PI;
+    const xOrb = R * Math.cos(u);
+    const yOrb = R * Math.sin(u);
+
+    const x = xOrb * Math.cos(nodeLon) - yOrb * Math.cos(inc) * Math.sin(nodeLon);
+    const y = xOrb * Math.sin(nodeLon) + yOrb * Math.cos(inc) * Math.cos(nodeLon);
+    const z = yOrb * Math.sin(inc);
+
+    positions3D.push(new Cartesian3(x, y, z));
+
+    const gLat = CesiumMath.toDegrees(Math.atan2(z, Math.sqrt(x * x + y * y)));
+    const gLon = CesiumMath.toDegrees(Math.atan2(y, x));
+    groundPoints.push([gLon, gLat]);
+  }
+
+  return { positions3D, groundPoints };
+}
+
 interface GlobeEngine3DProps {
   layers: LayerDefinition[];
   basemapMode: BasemapMode;
@@ -146,6 +195,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const selectedAircraftTrackRef = useRef<any>(null);
   const aircraftBillboardsRef = useRef<BillboardCollection | null>(null);
   const satelliteBillboardsRef = useRef<BillboardCollection | null>(null);
+  const satelliteTracksSourceRef = useRef<CustomDataSource | null>(null);
   const aircraftKinematicsRef = useRef<AircraftKinematicState[]>([]);
   const satelliteKinematicsRef = useRef<SatelliteKinematicState[]>([]);
 
@@ -303,6 +353,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.camera.moveEnd.addEventListener(emitCameraBounds);
     emitCameraBounds();
 
+    // Persistent data source for 3D satellite orbital tracks (isolated from entities.removeAll)
+    const tracksDs = new CustomDataSource('satellite-orbital-tracks');
+    viewer.dataSources.add(tracksDs);
+    satelliteTracksSourceRef.current = tracksDs;
+
     // User interaction tracking for realistic Earth rotation when idle
     let isInteracting = false;
     let lastInteractionTime = Date.now();
@@ -413,6 +468,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       selectedAircraftTrackRef.current = null;
       aircraftBillboardsRef.current = null;
       satelliteBillboardsRef.current = null;
+      if (satelliteTracksSourceRef.current) {
+        viewer.dataSources.remove(satelliteTracksSourceRef.current, true);
+        satelliteTracksSourceRef.current = null;
+      }
       viewer.destroy();
     };
   }, []);
@@ -937,9 +996,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     }
 
     if (selectedItem?.type === 'satellite') {
-      const noradId = selectedItem.data?.attributes?.norad_id;
-      const satellite = satellites.find((item) => item.entity_id === selectedItem.data?.entity_id ||
-        (noradId && item.attributes?.norad_id === noradId));
+      const satData = selectedItem.data;
+      const noradId = satData?.attributes?.norad_id;
+      const satellite = satellites.find((item) => item.entity_id === satData?.entity_id ||
+        (noradId && item.attributes?.norad_id === noradId)) || satData;
+
       const satelliteIcons = satelliteBillboardsRef.current;
       const billboard = satelliteIcons && Array.from({ length: satelliteIcons.length }, (_, index) => satelliteIcons.get(index))
         .find((item: any) => item.id?._worldosData?.entity_id === satellite?.entity_id ||
@@ -949,31 +1010,102 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         billboard.width = 24;
         billboard.height = 24;
       }
-      const groundTrack = selectedItem.data?.attributes?.ground_track || satellite?.attributes?.ground_track;
-      if (groundTrack && groundTrack.length > 1) {
-        const highlight = selectedHighlightRef.current ?? { entity: null, width: 0, height: 0, tracks: [] };
-        const altMeters = ((satellite?.attributes?.altitude_km ?? 500) * 1000);
-        splitTrackAtAntimeridian(groundTrack).forEach((segment) => {
-          // 1. Surface ground track projection in luminous neon red
-          highlight.tracks.push(viewer.entities.add({
+
+      const tracksDs = satelliteTracksSourceRef.current;
+      if (tracksDs) {
+        tracksDs.entities.removeAll();
+
+        const isLunar = satData?.attributes?.orbit_domain === 'LUNAR_ORBIT' || satData?.attributes?.central_body === 'MOON';
+        const altKm = satellite?.attributes?.altitude_km ?? 550;
+        const altMeters = altKm * 1000;
+        const incDeg = satellite?.attributes?.inclination_deg ?? 51.6;
+        const lon = satellite?.longitude ?? satData?.longitude ?? 0;
+        const lat = satellite?.latitude ?? satData?.latitude ?? 0;
+
+        if (isLunar) {
+          try {
+            const time = viewer.clock.currentTime || JulianDate.now();
+            const moonPos = Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(time);
+            if (moonPos) {
+              const r = 2_000_000;
+              const lunarOrbitPoints: Cartesian3[] = [];
+              for (let step = 0; step <= 90; step++) {
+                const theta = (step / 90) * CesiumMath.TWO_PI;
+                const ox = r * Math.cos(theta);
+                const oy = r * Math.sin(theta) * Math.cos(CesiumMath.toRadians(incDeg));
+                const oz = r * Math.sin(theta) * Math.sin(CesiumMath.toRadians(incDeg));
+                lunarOrbitPoints.push(new Cartesian3(moonPos.x + ox, moonPos.y + oy, moonPos.z + oz));
+              }
+
+              tracksDs.entities.add({
+                name: `${satData?.canonical_name || 'Lunar Orbiter'} Orbit`,
+                polyline: {
+                  positions: lunarOrbitPoints,
+                  width: 3.5,
+                  material: new PolylineGlowMaterialProperty({ glowPower: 0.4, color: Color.fromCssColorString('#ff1744') }),
+                },
+              });
+
+              // Focus camera on the lunar orbiter in cislunar space
+              const satPos = lunarOrbitPoints[0];
+              viewer.camera.flyToBoundingSphere(new BoundingSphere(satPos, 800_000), {
+                duration: 2.0,
+                offset: new HeadingPitchRange(0, CesiumMath.toRadians(-25), 3_000_000),
+              });
+            }
+          } catch {}
+        } else {
+          // Earth Satellite (LEO, MEO, GEO)
+          const { positions3D, groundPoints } = computeKeplerianOrbit3D(lon, lat, altMeters, incDeg, 140);
+
+          // 1. True 3D orbital trajectory in space (continuous loop)
+          tracksDs.entities.add({
+            name: `${satData?.canonical_name || 'Satellite'} 3D Orbit`,
             polyline: {
-              positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, 0)),
-              width: 2.0,
-              material: Color.fromCssColorString('#ff1744').withAlpha(0.55),
+              positions: positions3D,
+              width: 4.0,
+              material: new PolylineGlowMaterialProperty({ glowPower: 0.45, color: Color.fromCssColorString('#ff1744') }),
             },
-          }));
-          // 2. True 3D orbital trajectory in space at actual satellite altitude
-          highlight.tracks.push(viewer.entities.add({
-            polyline: {
-              positions: segment.map(([lon, lat]) => Cartesian3.fromDegrees(lon, lat, altMeters)),
-              width: 3.5,
-              material: new PolylineGlowMaterialProperty({ glowPower: 0.35, color: Color.fromCssColorString('#ff1744') }),
-            },
-          }));
-        });
-        selectedHighlightRef.current = highlight;
+          });
+
+          // 2. Surface ground track projection
+          splitTrackAtAntimeridian(groundPoints).forEach((segment) => {
+            tracksDs.entities.add({
+              polyline: {
+                positions: segment.map(([tLon, tLat]) => Cartesian3.fromDegrees(tLon, tLat, 0)),
+                width: 2.0,
+                material: Color.fromCssColorString('#ff1744').withAlpha(0.6),
+              },
+            });
+          });
+
+          // 3. Focus camera directly onto the satellite in space
+          const satPos = Cartesian3.fromDegrees(lon, lat, altMeters);
+          let viewRange = 400_000;
+          if (altKm < 1500) {
+            viewRange = Math.max(300_000, altMeters * 0.5);
+          } else if (altKm < 25000) {
+            // MEO (e.g. GPS at 20,200 km)
+            viewRange = Math.max(2_500_000, altMeters * 0.22);
+          } else {
+            // GEO (e.g. 35,786 km)
+            viewRange = Math.max(5_000_000, altMeters * 0.18);
+          }
+
+          viewer.camera.flyToBoundingSphere(new BoundingSphere(satPos, 20_000), {
+            duration: 1.8,
+            offset: new HeadingPitchRange(
+              viewer.camera.heading,
+              CesiumMath.toRadians(-25),
+              viewRange
+            ),
+          });
+        }
       }
-    } else if (selectedItem?.type === 'camera') {
+    } else {
+      satelliteTracksSourceRef.current?.entities.removeAll();
+    }
+    if (selectedItem?.type === 'camera') {
       const entity = viewer.entities.values.find((item) => (item as any)._worldosType === 'camera' &&
         (item as any)._worldosData?.entity_id === selectedItem.data?.entity_id);
       if (entity?.billboard) {

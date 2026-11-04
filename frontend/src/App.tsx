@@ -346,12 +346,14 @@ export default function App() {
     const coords = item.data?.point || item.data?.coordinates || item.data?.geometry?.coordinates;
     const longitude = item.data?.longitude ?? (Array.isArray(coords) ? coords[0] : undefined);
     const latitude = item.data?.latitude ?? (Array.isArray(coords) ? coords[1] : undefined);
-    if (typeof longitude === 'number' && Number.isFinite(longitude) &&
-      typeof latitude === 'number' && Number.isFinite(latitude)) {
-      setTargetLocation({
-        center: [longitude, latitude],
-        zoom: item.type === 'camera' ? 15.5 : item.type === 'satellite' ? 4.5 : 9,
-      });
+    if (item.type !== 'satellite') {
+      if (typeof longitude === 'number' && Number.isFinite(longitude) &&
+        typeof latitude === 'number' && Number.isFinite(latitude)) {
+        setTargetLocation({
+          center: [longitude, latitude],
+          zoom: item.type === 'camera' ? 15.5 : 9,
+        });
+      }
     }
 
     // If an aircraft is selected, query its historical observation track
@@ -660,7 +662,13 @@ export default function App() {
           setSelectedItem(null);
           setSelectedTrack(null);
         }}
-        onFlyTo={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || 14 })}
+        onFlyTo={(coords, zoom) => {
+          if (selectedItem?.type === 'satellite') {
+            setSelectedItem({ ...selectedItem });
+          } else {
+            setTargetLocation({ center: coords, zoom: zoom || 14 });
+          }
+        }}
       />
 
       {/* Keyboard-Accessible Command Palette (cmdk) */}
