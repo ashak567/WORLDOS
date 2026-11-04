@@ -13,6 +13,9 @@ function createSvgDataUrl(svgContent: string, fillColorHex: string): string {
 // 1. Aircraft (Jet / Airplane)
 const AIRPLANE_PATH = `<path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>`;
 export const AIRPLANE_ICON_BLUE = createSvgDataUrl(AIRPLANE_PATH, '#38bdf8');
+export const AIRPLANE_ICON_AMBER = createSvgDataUrl(AIRPLANE_PATH, '#f59e0b');
+export const AIRPLANE_ICON_INTERNATIONAL = AIRPLANE_ICON_AMBER;
+export const AIRPLANE_ICON_DOMESTIC = AIRPLANE_ICON_BLUE;
 export const AIRPLANE_ICON_GROUND = createSvgDataUrl(AIRPLANE_PATH, '#94a3b8');
 export const AIRPLANE_ICON_WHITE = createSvgDataUrl(AIRPLANE_PATH, '#ffffff');
 
@@ -47,3 +50,16 @@ export const PORT_ICON_TEAL = createSvgDataUrl(PORT_PATH, '#14b8a6');
 // 8. Spaceport / Launch Facility (Rocket)
 const SPACEPORT_PATH = `<path d="M13.13 22.19l-1.63-3.83c1.57-.58 3.04-1.5 4.31-2.77l2.55 3.32c-.57.88-1.28 1.68-2.11 2.37l-3.12.91zm-2.26 0l-3.12-.91c-.83-.69-1.54-1.49-2.11-2.37l2.55-3.32c1.27 1.27 2.74 2.19 4.31 2.77l-1.63 3.83zM12 2c3.5 3.5 5 7.5 5 12H7c0-4.5 1.5-8.5 5-12zm0 8c1.1 0 2-.9 2-2s-.9-2-2-2-2 .9-2 2 .9 2 2 2z"/>`;
 export const SPACEPORT_ICON_ROSE = createSvgDataUrl(SPACEPORT_PATH, '#f43f5e');
+
+// 9. Multimodal Places & Stays
+const HOTEL_PATH = `<path d="M7 13c1.66 0 3-1.34 3-3S8.66 7 7 7s-3 1.34-3 3 1.34 3 3 3zm12-6h-8v7H3V5H1v15h2v-3h18v3h2v-9c0-2.21-1.79-4-4-4z"/>`;
+export const HOTEL_ICON_GOLD = createSvgDataUrl(HOTEL_PATH, '#eab308');
+
+const DINING_PATH = `<path d="M11 9H9V2H7v7H5V2H3v7c0 2.12 1.66 3.84 3.75 3.97V22h2.5v-9.03C11.34 12.84 13 11.12 13 9V2h-2v7zm5-3v8h2.5v8H21V2c-2.76 0-5 2.24-5 4z"/>`;
+export const DINING_ICON_ROSE = createSvgDataUrl(DINING_PATH, '#f43f5e');
+
+const SCENERY_PATH = `<path d="M14 6l-3.75 5 2.85 3.8-1.6 1.2L7 10l-6 8h22L14 6z"/>`;
+export const SCENERY_ICON_EMERALD = createSvgDataUrl(SCENERY_PATH, '#10b981');
+
+const NIGHTLIFE_PATH = `<path d="M21 5V3H3v2l8 9v5H6v2h12v-2h-5v-5l8-9zM7.43 7L5.66 5h12.69l-1.78 2H7.43z"/>`;
+export const NIGHTLIFE_ICON_PURPLE = createSvgDataUrl(NIGHTLIFE_PATH, '#a855f7');

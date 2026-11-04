@@ -31,6 +31,7 @@ import {
   geometryFeatures,
   populationObservations,
   AssistantAction,
+  PlaceItem,
 } from './api';
 import { BasemapMode, INITIAL_LAYERS, LayerDefinition, LayerId } from './types/layers';
 import { SelectedItemPayload } from './types/layers';
@@ -42,6 +43,7 @@ import { EntityDetailsPanel } from './components/EntityDetailsPanel';
 import { SourceHealthModal } from './components/SourceHealthModal';
 import { RoutePlannerModal } from './components/RoutePlannerModal';
 import { AssistantPanel } from './components/AssistantPanel';
+import { PlaceDiscoveryDeck } from './components/PlaceDiscoveryDeck';
 import './styles.css';
 
 function withLiveFeedHealth(layers: LayerDefinition[], sources: LiveEventsResponse['sources']): LayerDefinition[] {
@@ -107,7 +109,6 @@ export default function App() {
   const [layers, setLayers] = useState<LayerDefinition[]>(INITIAL_LAYERS);
   const [viewportBbox, setViewportBbox] = useState<BoundingBox | null>(null);
   const [viewportZoom, setViewportZoom] = useState(0);
-  const [streetViewCenter, setStreetViewCenter] = useState<[number, number] | null>(null);
 
   // Multi-domain intelligence collections
   const [geometries, setGeometries] = useState<GeometryFeature[]>([]);
@@ -135,6 +136,9 @@ export default function App() {
   const [activeRoute, setActiveRoute] = useState<RoutePlanResponse | null>(null);
   const [isDockCollapsed, setIsDockCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isPlacesDeckOpen, setIsPlacesDeckOpen] = useState(false);
+  const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
+  const [discoveredPlaces, setDiscoveredPlaces] = useState<PlaceItem[]>([]);
 
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -148,28 +152,6 @@ export default function App() {
     );
   }, []);
 
-  const handleAssistantAction = useCallback((action: AssistantAction) => {
-    if (action.type === 'set_layer_visibility') {
-      if (!INITIAL_LAYERS.some((layer) => layer.id === action.layer_id)) return;
-      setLayers((prev) => prev.map((layer) => layer.id === action.layer_id ? { ...layer, enabled: action.visible } : layer));
-    } else if (action.type === 'fly_to') {
-      setTargetLocation({
-        center: action.center,
-        zoom: action.zoom ?? 12,
-      });
-    }
-  }, []);
-
-  useEffect(() => {
-    if (viewportZoom >= 15.5 && viewportBbox && !streetViewCenter) {
-      setStreetViewCenter([
-        (viewportBbox.min_lon + viewportBbox.max_lon) / 2,
-        (viewportBbox.min_lat + viewportBbox.max_lat) / 2,
-      ]);
-    } else if (viewportZoom < 14.5 && streetViewCenter) {
-      setStreetViewCenter(null);
-    }
-  }, [viewportBbox, viewportZoom, streetViewCenter]);
 
   useEffect(() => {
     const refreshSnapshotHealth = () => {
@@ -398,6 +380,61 @@ export default function App() {
     }
   }, []);
 
+  const handleAssistantAction = useCallback((action: AssistantAction) => {
+    if (action.type === 'set_layer_visibility') {
+      if (!INITIAL_LAYERS.some((layer) => layer.id === action.layer_id)) return;
+      setLayers((prev) => prev.map((layer) => layer.id === action.layer_id ? { ...layer, enabled: action.visible } : layer));
+    } else if (action.type === 'fly_to') {
+      setTargetLocation({
+        center: action.center,
+        zoom: action.zoom ?? 12,
+      });
+    } else if (action.type === 'select_entity') {
+      const q = action.id.toLowerCase();
+      let matchedItem: SelectedItemPayload | null = null;
+      if (action.entity_type === 'aircraft') {
+        const found = aircraft.find((a) => a.id?.toLowerCase() === q || a.attributes?.callsign?.toLowerCase() === q || a.attributes?.icao24?.toLowerCase() === q || a.canonical_name?.toLowerCase().includes(q));
+        if (found) matchedItem = { type: 'aircraft', data: found };
+      } else if (action.entity_type === 'satellite') {
+        const found = satellites.find((s) => String(s.attributes?.norad_id) === q || s.id?.toLowerCase() === q || s.canonical_name?.toLowerCase().includes(q));
+        if (found) matchedItem = { type: 'satellite', data: found };
+      } else if (action.entity_type === 'vessel') {
+        const found = vessels.find((v) => v.id?.toLowerCase() === q || String(v.attributes?.mmsi) === q || v.canonical_name?.toLowerCase().includes(q));
+        if (found) matchedItem = { type: 'vessel', data: found };
+      } else if (action.entity_type === 'camera') {
+        const found = cameras.find((c) => c.id?.toLowerCase() === q || c.canonical_name?.toLowerCase().includes(q));
+        if (found) matchedItem = { type: 'camera', data: found };
+      } else if (action.entity_type === 'event' || action.entity_type === 'hazard') {
+        const found = naturalEvents.find((e) => e.id?.toLowerCase() === q || e.canonical_name?.toLowerCase().includes(q));
+        if (found) matchedItem = { type: 'event', data: found };
+      }
+
+      if (!matchedItem && action.coordinates) {
+        matchedItem = {
+          type: action.entity_type === 'hazard' ? 'event' : (action.entity_type as any),
+          data: {
+            id: action.id,
+            canonical_name: action.name || action.id,
+            longitude: action.coordinates[0],
+            latitude: action.coordinates[1],
+            attributes: {},
+          },
+        };
+      }
+
+      if (matchedItem) {
+        handleSelectItem(matchedItem);
+      } else if (action.coordinates) {
+        setTargetLocation({ center: action.coordinates, zoom: 12 });
+      }
+    } else if (action.type === 'discover_places') {
+      setIsPlacesDeckOpen(true);
+      if (action.center) {
+        setTargetLocation({ center: action.center, zoom: 15 });
+      }
+    }
+  }, [aircraft, satellites, vessels, cameras, naturalEvents, handleSelectItem]);
+
   // Viewport-aware context querying with debouncing
   const handleViewportChange = useCallback((bbox: BoundingBox, zoom?: number) => {
     setViewportBbox(bbox);
@@ -531,6 +568,8 @@ export default function App() {
         onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
         onOpenAssistant={() => setIsAssistantOpen(true)}
         isAssistantOpen={isAssistantOpen}
+        onTogglePlacesDeck={() => setIsPlacesDeckOpen((prev) => !prev)}
+        isPlacesDeckOpen={isPlacesDeckOpen}
         isRouteActive={activeRoute !== null}
         isDockCollapsed={isDockCollapsed}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
@@ -562,30 +601,18 @@ export default function App() {
           infrastructure={infrastructure}
           selectedTrack={selectedTrack}
           activeRoute={activeRoute}
+          discoveredPlaces={discoveredPlaces}
+          selectedPlace={selectedPlace}
+          onSelectPlace={(place) => {
+            setSelectedPlace(place);
+            setSelectedItem({ type: 'place', data: place });
+          }}
           targetLocation={targetLocation}
           selectedItem={selectedItem}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
       </main>
-
-      {viewportZoom >= 14.5 && streetViewCenter && (
-        <section className="street-view-panel" aria-label="Community street-level imagery">
-          <header className="street-view-panel-header">
-            <div>
-              <strong>STREET LEVEL</strong>
-              <span>Community photo coverage · Panoramax</span>
-            </div>
-          </header>
-          <iframe
-            title="Panoramax street-level photo map"
-            src={`https://explore.panoramax.fr/?map=17/${streetViewCenter[1]}/${streetViewCenter[0]}&focus=map`}
-            loading="lazy"
-            allowFullScreen
-          />
-          <p>Zoom out to return to globe view. Street photos appear only where contributors have mapped them.</p>
-        </section>
-      )}
 
       {/* Floating Tactical Layer Dock */}
       <LayerDock
@@ -605,6 +632,24 @@ export default function App() {
         }}
         onClose={() => setIsAssistantOpen(false)}
         onAction={handleAssistantAction}
+      />
+
+      {/* Multimodal Places & Stays Discovery Deck (Google Places, Aerial View, YouTube) */}
+      <PlaceDiscoveryDeck
+        currentCoordinates={targetLocation?.center || [139.6917, 35.6895]}
+        isOpen={isPlacesDeckOpen}
+        onToggle={() => setIsPlacesDeckOpen((prev) => !prev)}
+        onFlyToPlace={(lon, lat) => {
+          setTargetLocation({ center: [lon, lat], zoom: 16 });
+        }}
+        onSelectPlace={(place) => {
+          setSelectedPlace(place);
+          setSelectedItem({ type: 'place', data: place });
+        }}
+        onAddToRoute={() => {
+          setIsRoutePlannerOpen(true);
+        }}
+        selectedPlace={selectedPlace}
       />
 
       {/* Entity & Event Details Dossier Drawer */}

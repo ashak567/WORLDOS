@@ -34,6 +34,8 @@ interface HudBarProps {
   onOpenRoutePlanner?: () => void;
   onOpenAssistant: () => void;
   isAssistantOpen: boolean;
+  onTogglePlacesDeck?: () => void;
+  isPlacesDeckOpen?: boolean;
   isRouteActive?: boolean;
   isDockCollapsed: boolean;
   onToggleDock: () => void;
@@ -59,6 +61,8 @@ export const HudBar: React.FC<HudBarProps> = ({
   onOpenRoutePlanner,
   onOpenAssistant,
   isAssistantOpen,
+  onTogglePlacesDeck,
+  isPlacesDeckOpen,
   isRouteActive = false,
   isDockCollapsed,
   onToggleDock,
@@ -261,6 +265,16 @@ export const HudBar: React.FC<HudBarProps> = ({
       </div>
 
       <div className="hud-actions">
+        <button
+          className={`hud-btn ${isPlacesDeckOpen ? 'active' : ''}`}
+          onClick={onTogglePlacesDeck}
+          title="Discover stays, fine dining, scenery, and nightlife via Google Places"
+          aria-expanded={isPlacesDeckOpen}
+        >
+          <Building2 size={13} color="#eab308" />
+          <span>STAYS & PLACES</span>
+        </button>
+
         <button
           className="hud-btn"
           onClick={onOpenAssistant}

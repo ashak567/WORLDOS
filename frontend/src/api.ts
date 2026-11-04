@@ -118,7 +118,57 @@ export type AssistantAction =
       type: 'fly_to';
       center: [number, number];
       zoom?: number;
+    }
+  | {
+      type: 'select_entity';
+      entity_type: 'aircraft' | 'satellite' | 'vessel' | 'event' | 'hazard' | 'camera';
+      id: string;
+      name?: string;
+      coordinates?: [number, number];
+    }
+  | {
+      type: 'discover_places';
+      category?: PlaceCategory;
+      query?: string;
+      center?: [number, number];
     };
+
+export type PlaceCategory = 'stays' | 'food' | 'scenery' | 'nightlife';
+
+export interface PlaceItem {
+  id: string;
+  name: string;
+  category: PlaceCategory;
+  latitude: number;
+  longitude: number;
+  rating?: number | null;
+  user_rating_count?: number | null;
+  price_level?: string | null;
+  price_display?: string | null;
+  formatted_address: string;
+  summary: string;
+  photos: string[];
+  google_maps_url?: string | null;
+  website_url?: string | null;
+  aerial_view_url?: string | null;
+  verified?: boolean;
+}
+
+export interface YouTubeTour {
+  video_id: string;
+  title: string;
+  channel_title: string;
+  thumbnail_url: string;
+  video_url: string;
+  published_at: string;
+}
+
+export interface AerialViewVideo {
+  state: string;
+  video_url?: string;
+  landscape_uri?: string;
+  portrait_uri?: string;
+}
 
 export type AircraftState = {
   id: string;
@@ -574,12 +624,26 @@ export async function fetchLiveContext(): Promise<LiveContextResponse> {
   return response.json();
 }
 
-export async function getAssistantSessionToken(): Promise<string> {
+export type AssistantSessionResponse = {
+  signedUrl?: string;
+  conversationToken?: string;
+};
+
+export async function getAssistantSession(): Promise<AssistantSessionResponse> {
   const response = await fetch(`${apiBase}/assistant/elevenlabs/session`, { method: 'POST' });
   const body = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(body.detail || `Voice assistant unavailable (${response.status})`);
-  if (typeof body.conversation_token !== 'string') throw new Error('Voice assistant returned an invalid session token');
-  return body.conversation_token;
+  const signedUrl = typeof body.signed_url === 'string' && body.signed_url.trim() ? body.signed_url.trim() : undefined;
+  const conversationToken = typeof body.conversation_token === 'string' && body.conversation_token.trim() ? body.conversation_token.trim() : undefined;
+  if (!signedUrl && !conversationToken) {
+    throw new Error('Voice assistant returned an invalid session token or signed URL');
+  }
+  return { signedUrl, conversationToken };
+}
+
+export async function getAssistantSessionToken(): Promise<string> {
+  const session = await getAssistantSession();
+  return session.signedUrl || session.conversationToken || '';
 }
 
 export async function fetchAssistantMapContext(context: AssistantContext): Promise<AssistantMapContext> {
@@ -841,5 +905,46 @@ export async function planStrategicRoute(req: RoutePlanRequest): Promise<RoutePl
   }
   return response.json();
 }
+
+export async function fetchDiscoveredPlaces(params: {
+  latitude: number;
+  longitude: number;
+  category?: PlaceCategory;
+  query?: string;
+  radius_meters?: number;
+  limit?: number;
+}): Promise<PlaceItem[]> {
+  const query = new URLSearchParams();
+  query.set('latitude', params.latitude.toString());
+  query.set('longitude', params.longitude.toString());
+  if (params.category) query.set('category', params.category);
+  if (params.query) query.set('query', params.query);
+  if (params.radius_meters) query.set('radius_meters', params.radius_meters.toString());
+  if (params.limit) query.set('limit', params.limit.toString());
+
+  const response = await fetch(`${apiBase}/places/discover?${query.toString()}`);
+  if (!response.ok) {
+    throw new Error(`API error ${response.status} fetching places`);
+  }
+  const data = await response.json();
+  return data.places ?? [];
+}
+
+export async function fetchPlaceYouTubeTours(placeName: string, cityName = '', limit = 4): Promise<YouTubeTour[]> {
+  const query = new URLSearchParams({ place_name: placeName, city_name: cityName, limit: limit.toString() });
+  const response = await fetch(`${apiBase}/places/youtube-tours?${query.toString()}`);
+  if (!response.ok) return [];
+  const data = await response.json();
+  return data.tours ?? [];
+}
+
+export async function fetchPlaceAerialView(address: string, lat = 0, lon = 0): Promise<AerialViewVideo | null> {
+  const query = new URLSearchParams({ address, latitude: lat.toString(), longitude: lon.toString() });
+  const response = await fetch(`${apiBase}/places/aerial-view?${query.toString()}`);
+  if (!response.ok) return null;
+  const data = await response.json();
+  return data.video ?? null;
+}
+
 
 

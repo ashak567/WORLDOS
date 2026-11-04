@@ -1,7 +1,7 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ConversationProvider, useConversation } from '@elevenlabs/react';
 import { Mic, PhoneOff, Send, Trash2, Volume2, X } from 'lucide-react';
-import { AssistantAction, AssistantContext, fetchAssistantMapContext, getAssistantSessionToken } from '../api';
+import { AssistantAction, AssistantContext, fetchAssistantMapContext, getAssistantSession } from '../api';
 
 interface AssistantPanelProps {
   isOpen: boolean;
@@ -102,6 +102,55 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
           message: `Navigated map to [${args.longitude.toFixed(4)}, ${args.latitude.toFixed(4)}] at zoom ${zoom}.`,
         });
       },
+      select_entity: async (args: {
+        entity_type: 'aircraft' | 'satellite' | 'vessel' | 'event' | 'hazard' | 'camera';
+        id: string;
+        name?: string;
+        longitude?: number;
+        latitude?: number;
+      }) => {
+        if (!args.id || !args.entity_type) {
+          return JSON.stringify({ success: false, message: 'Missing entity_type or id' });
+        }
+        const coords: [number, number] | undefined =
+          typeof args.longitude === 'number' && typeof args.latitude === 'number'
+            ? [args.longitude, args.latitude]
+            : undefined;
+
+        onActionRef.current({
+          type: 'select_entity',
+          entity_type: args.entity_type,
+          id: String(args.id),
+          name: args.name,
+          coordinates: coords,
+        });
+        return JSON.stringify({
+          success: true,
+          message: `Selected ${args.entity_type} '${args.name || args.id}' and opened detailed dossier drawer.`,
+        });
+      },
+      discover_places: async (args: {
+        category?: 'stays' | 'food' | 'scenery' | 'nightlife';
+        query?: string;
+        longitude?: number;
+        latitude?: number;
+      }) => {
+        const coords: [number, number] | undefined =
+          typeof args.longitude === 'number' && typeof args.latitude === 'number'
+            ? [args.longitude, args.latitude]
+            : undefined;
+
+        onActionRef.current({
+          type: 'discover_places',
+          category: args.category,
+          query: args.query,
+          center: coords,
+        });
+        return JSON.stringify({
+          success: true,
+          message: `Opened places & stays discovery deck for ${args.category || 'stays'} recommendations.`,
+        });
+      },
     },
   });
 
@@ -126,8 +175,14 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
     setIsStarting(true);
     setMessage('Connecting to your WORLDOS assistant…');
     try {
-      const conversationToken = await getAssistantSessionToken();
-      await conversation.startSession({ conversationToken });
+      const session = await getAssistantSession();
+      if (session.signedUrl) {
+        await conversation.startSession({ signedUrl: session.signedUrl });
+      } else if (session.conversationToken) {
+        await conversation.startSession({ conversationToken: session.conversationToken });
+      } else {
+        throw new Error('No valid session credentials received from server');
+      }
       setMessage('Connected. Ask about the map or tell me what to show.');
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not connect to ElevenLabs.');

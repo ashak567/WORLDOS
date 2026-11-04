@@ -88,6 +88,7 @@ from .config import get_aisstream_settings, get_firms_settings, get_opensky_sett
 from .assistant import (
     AssistantUnavailable,
     create_elevenlabs_conversation_token,
+    create_elevenlabs_signed_url,
 )
 from .alerts import AlertEngine
 from .anomalies import (
@@ -148,6 +149,12 @@ from .simulation import (
 )
 from .snapshots import SnapshotCatalog, SnapshotManager
 from .storage import WorldRepository
+from .places import (
+    PlaceCategory,
+    get_aerial_view_video,
+    search_places_nearby,
+    search_youtube_tours,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -1616,9 +1623,68 @@ def assistant_elevenlabs_session(request: Request) -> dict[str, str]:
         recent.append(now)
         _assistant_session_requests[host] = recent
     try:
-        return {"conversation_token": create_elevenlabs_conversation_token()}
+        signed_url = create_elevenlabs_signed_url()
+        return {"signed_url": signed_url, "conversation_token": signed_url}
     except AssistantUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/places/discover")
+def discover_places_endpoint(
+    latitude: float = Query(..., ge=-90.0, le=90.0),
+    longitude: float = Query(..., ge=-180.0, le=180.0),
+    category: str = Query("stays"),
+    query: str | None = Query(None),
+    radius_meters: float = Query(25000.0, ge=500.0, le=100000.0),
+    limit: int = Query(10, ge=1, le=20),
+) -> dict[str, Any]:
+    """Discover hotels, dining, scenery, and nightlife via Google Places API with caching."""
+    cat = category if category in ("stays", "food", "scenery", "nightlife") else "stays"
+    places = search_places_nearby(
+        latitude=latitude,
+        longitude=longitude,
+        category=cat,  # type: ignore[arg-type]
+        query=query,
+        radius_meters=radius_meters,
+        limit=limit,
+    )
+    return {
+        "status": "success",
+        "category": cat,
+        "center": {"latitude": latitude, "longitude": longitude},
+        "count": len(places),
+        "places": places,
+    }
+
+
+@app.get("/places/youtube-tours")
+def get_place_youtube_tours_endpoint(
+    place_name: str = Query(..., min_length=1),
+    city_name: str = Query(""),
+    limit: int = Query(4, ge=1, le=8),
+) -> dict[str, Any]:
+    """Retrieve travel vlogs, hotel walkthroughs, and walking tours via YouTube Data API v3."""
+    tours = search_youtube_tours(place_name=place_name, city_name=city_name, limit=limit)
+    return {
+        "status": "success",
+        "place_name": place_name,
+        "count": len(tours),
+        "tours": tours,
+    }
+
+
+@app.get("/places/aerial-view")
+def get_place_aerial_view_endpoint(
+    address: str = Query(""),
+    latitude: float = Query(0.0),
+    longitude: float = Query(0.0),
+) -> dict[str, Any]:
+    """Query Google Aerial View API for cinematic 3D drone flyover videos."""
+    aerial = get_aerial_view_video(address=address, latitude=latitude, longitude=longitude)
+    return {
+        "status": "success" if aerial else "unavailable",
+        "video": aerial,
+    }
 
 
 @app.get("/entities/{entity_id}/context")

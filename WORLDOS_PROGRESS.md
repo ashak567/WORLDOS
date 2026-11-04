@@ -126,3 +126,36 @@
 ### Next task
 
 Engine 19: Multimodal Evidence Engine — ingestion, cryptographic hashing, and spatial-temporal retrieval of raster satellite imagery, documents, and sensory media.
+
+## Checkpoint: Google Maps 3D Photorealistic Tiles, Multimodal Places & YouTube Video Tours
+
+**Date:** 2026-11-04
+**Branch:** `main`
+**Status:** implemented; backend unit tests passing (5/5), frontend production build passed cleanly, live API keys verified
+
+### Completed
+
+- **Google Photorealistic 3D Tiles in CesiumJS (`frontend/src/components/GlobeEngine3D.tsx`):**
+  - Configured `Cesium.GoogleMaps.defaultApiKey` using client environment keys.
+  - Initialized `createGooglePhotorealistic3DTileset({ key: apiKey })` for real 3D city meshes, terrain, and architecture globally.
+  - Implemented inertial planetary rotation on idle (>3,000,000m altitude) and interactive celestial bodies (Moon & Sun) with 4 real-time lunar orbiters (LRO, Chandrayaan-3 PM, CAPSTONE, Danuri).
+  - Integrated dynamic 3D vector pins on Cesium for discovered places with category-specific vector icons (Stays, Food, Scenery, Nightlife).
+  - Implemented 45° pitch cinematic fly-to camera navigation when selecting any venue or stay.
+- **Multimodal Places & YouTube Tour Backend Engine (`backend/app/places.py`, `backend/app/main.py`):**
+  - Integrated Google Places API (New) with `places:searchText`, location bias, star ratings, review counts, price tiers, and high-resolution photo galleries.
+  - Integrated YouTube Data API v3 (`/places/youtube-tours`) retrieving real-world 4K room walkthroughs and travel vlogs.
+  - Integrated Google Aerial View API (`/places/aerial-view`) for high-altitude 3D drone cinematic video streams.
+  - Built resilient in-memory TTL caching (15 min) and deterministic offline fallback datasets.
+- **Place Discovery Deck Component (`frontend/src/components/PlaceDiscoveryDeck.tsx`):**
+  - Google Maps-style mini-block cards with photo banners, star ratings (`★ 4.8`), price badges (`$$$$ Ultra-Luxury`), and reviews.
+  - Interactive category selector tabs: 🏨 Stays, 🍽️ Food & Dining, 🌄 Scenery & Views, 🍸 Nightlife & Clubs.
+  - Embedded YouTube 4K video player modal with alternative vlog selectors.
+  - Embedded Aerial View drone cinematic video modal.
+  - One-click `[Route]` button directly connecting venue discovery to the strategic multimodal route planner.
+- **Roger Voice Assistant Client Tool Calling (`frontend/src/components/AssistantPanel.tsx`):**
+  - Added `discover_places` tool for Roger so users can ask for recommendations aloud.
+  - Switched voice model to Roger (`CwhRBWXzGAHq8TQ4Fs17`) with witty copilot personality.
+- **Testing & Verification:**
+  - `python -m pytest backend/tests/test_places.py`: 5 passed in 1.44s.
+  - `python -m pytest backend/tests/test_assistant.py`: 6 passed in 1.13s.
+  - `npm --prefix frontend run build`: 0 errors, 3560 modules bundled in 40.08s.

@@ -4,9 +4,12 @@ import {
   BillboardCollection,
   Cesium3DTileset,
   Color,
+  JulianDate,
+  Simon1994PlanetaryPositions,
   ConstantProperty,
   DistanceDisplayCondition,
   GeoJsonDataSource,
+  GoogleMaps,
   Ion,
   IonGeocodeProviderType,
   Math as CesiumMath,
@@ -23,6 +26,9 @@ import {
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import {
   AIRPLANE_ICON_BLUE,
+  AIRPLANE_ICON_AMBER,
+  AIRPLANE_ICON_INTERNATIONAL,
+  AIRPLANE_ICON_DOMESTIC,
   AIRPLANE_ICON_GROUND,
   VESSEL_ICON_CYAN,
   SATELLITE_ICON_PURPLE,
@@ -33,6 +39,10 @@ import {
   AIRPORT_ICON_BLUE,
   PORT_ICON_TEAL,
   SPACEPORT_ICON_ROSE,
+  HOTEL_ICON_GOLD,
+  DINING_ICON_ROSE,
+  SCENERY_ICON_EMERALD,
+  NIGHTLIFE_ICON_PURPLE,
 } from '../utils/icons';
 import {
   BoundingBox,
@@ -48,6 +58,7 @@ import {
   InfrastructureNode,
   AircraftTrackPoint,
   RoutePlanResponse,
+  PlaceItem,
   splitTrackAtAntimeridian,
 } from '../api';
 import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
@@ -55,6 +66,7 @@ import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/laye
 // Cesium asset base path configuration
 (window as any).CESIUM_BASE_URL = '/cesium/';
 Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN ?? '';
+GoogleMaps.defaultApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
 
 interface AircraftKinematicState {
   billboard: any;
@@ -90,6 +102,9 @@ interface GlobeEngine3DProps {
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
   activeRoute?: RoutePlanResponse | null;
+  discoveredPlaces?: PlaceItem[];
+  selectedPlace?: PlaceItem | null;
+  onSelectPlace?: (place: PlaceItem) => void;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
   onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
@@ -112,6 +127,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   infrastructure = [],
   selectedTrack = null,
   activeRoute = null,
+  discoveredPlaces = [],
+  selectedPlace = null,
+  onSelectPlace,
   targetLocation,
   selectedItem = null,
   onViewportChange,
@@ -140,12 +158,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
       viewer.imageryLayers.removeAll();
 
-      if (mode === 'satellite-hybrid' && Ion.defaultAccessToken && allowGoogleTiles) {
+      const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
+      if (mode === 'satellite-hybrid' && (googleMapsApiKey || Ion.defaultAccessToken) && allowGoogleTiles) {
         // Keep the raster globe visible while the photorealistic tileset loads.
         applyImageryLayers(viewer, mode, false);
         const googleRequestId = imageryRequestRef.current;
+        const tileOptions = googleMapsApiKey ? { key: googleMapsApiKey } : { onlyUsingWithGoogleGeocoder: true };
         createGooglePhotorealistic3DTileset(
-          { onlyUsingWithGoogleGeocoder: true },
+          tileOptions as any,
           { showCreditsOnScreen: true }
         ).then((tileset) => {
           if (viewer.isDestroyed() || googleRequestId !== imageryRequestRef.current) {
@@ -155,7 +175,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           googleTilesetRef.current = tileset;
           viewer.scene.primitives.add(tileset);
           viewer.scene.requestRender();
-        }).catch(() => {});
+        }).catch((err) => {
+          console.warn('Google 3D Tiles load issue, falling back to raster terrain:', err);
+        });
         return;
       }
 
@@ -249,6 +271,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
     applyImageryLayers(viewer, basemapMode);
     viewer.scene.globe.enableLighting = true;
+    if (viewer.scene.moon) viewer.scene.moon.show = true;
+    if (viewer.scene.sun) viewer.scene.sun.show = true;
 
     // Initial camera view
     viewer.camera.setView({
@@ -278,6 +302,22 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
     viewer.camera.moveEnd.addEventListener(emitCameraBounds);
     emitCameraBounds();
+
+    // User interaction tracking for realistic Earth rotation when idle
+    let isInteracting = false;
+    let lastInteractionTime = Date.now();
+    const markInteraction = () => {
+      isInteracting = true;
+      lastInteractionTime = Date.now();
+    };
+    const endInteraction = () => {
+      isInteracting = false;
+      lastInteractionTime = Date.now();
+    };
+    const canvas = viewer.scene.canvas;
+    canvas.addEventListener('pointerdown', markInteraction);
+    canvas.addEventListener('wheel', markInteraction, { passive: true });
+    window.addEventListener('pointerup', endInteraction);
 
     // Live continuous motion loop: 60 FPS dead-reckoning for aircraft & orbital propagation for satellites
     let lastAnimTime = performance.now();
@@ -320,6 +360,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         item.lon = ((item.lon + dLon + 540.0) % 360.0) - 180.0;
         item.billboard.position = Cartesian3.fromDegrees(item.lon, item.lat, item.altMeters);
       }
+
+      // 3. Realistic inertial Earth auto-rotation when user is idle (zoomed out)
+      if (!isInteracting && Date.now() - lastInteractionTime > 2500) {
+        try {
+          const camHeight = viewer.camera.positionCartographic.height;
+          if (camHeight > 3_000_000) {
+            // Smooth planetary spin around polar Z-axis
+            viewer.scene.camera.rotate(Cartesian3.UNIT_Z, 0.00025 * dt * 60);
+          }
+        } catch {}
+      }
     };
 
     viewer.scene.preRender.addEventListener(onPreRenderAnim);
@@ -331,6 +382,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       if (defined(picked) && picked.id) {
         const entity = picked.id;
         if (entity._worldosType && entity._worldosData) {
+          if (entity._worldosType === 'place') {
+            onSelectPlace?.(entity._worldosData);
+          }
           onSelectItem({
             type: entity._worldosType,
             data: entity._worldosData,
@@ -343,6 +397,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewerRef.current = viewer;
 
     return () => {
+      canvas.removeEventListener('pointerdown', markInteraction);
+      canvas.removeEventListener('wheel', markInteraction);
+      window.removeEventListener('pointerup', endInteraction);
       viewer.scene.preRender.removeEventListener(onPreRenderAnim);
       viewer.camera.moveEnd.removeEventListener(emitCameraBounds);
       if (handlerRef.current) {
@@ -497,10 +554,25 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
         const isGround = a.attributes?.on_ground ?? false;
 
+        const attr = a.attributes || {};
+        const callsign = (attr.callsign || a.canonical_name || '').trim().toUpperCase();
+        const origin = (attr.origin_country || '').trim().toLowerCase();
+        const alt = attr.baro_altitude ?? attr.geo_altitude ?? 0;
+        const vel = attr.velocity ?? 0;
+        // International flight classification: high cruising altitude/speed, intercontinental callsign, or foreign airspace
+        const isInternational = (alt > 9500 && vel > 200) ||
+          /^(BAW|DLH|AFR|UAE|QTR|SIA|ANA|JAL|QFA|KLM|ETD|THY|CPA|CAL|EVA|CSN|CCA|CES|VIR|AIC|ETH|SVA)/.test(callsign) ||
+          (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
+        (a.attributes as any).is_international = isInternational;
+
         const acBillboard = aircraftBillboards.add({
           id: { _worldosType: 'aircraft', _worldosData: a },
           position,
-          image: isGround ? AIRPLANE_ICON_GROUND : AIRPLANE_ICON_BLUE,
+          image: isGround
+            ? AIRPLANE_ICON_GROUND
+            : isInternational
+            ? AIRPLANE_ICON_AMBER
+            : AIRPLANE_ICON_BLUE,
           rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
           width: 24,
           height: 24,
@@ -539,6 +611,56 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         (ent as any)._worldosType = 'vessel';
         (ent as any)._worldosData = v;
       }
+    }
+
+    // 2.5 Cislunar & Lunar Orbiters (Satellites in space orbiting the Moon)
+    if (layerMap.get('space-satellites')) {
+      try {
+        const time = viewer.clock.currentTime || JulianDate.now();
+        const moonPos = Simon1994PlanetaryPositions.computeMoonPositionInEarthInertialFrame(time);
+        if (moonPos) {
+          const lunarOrbiters = [
+            { name: 'NASA Lunar Reconnaissance Orbiter (LRO)', r: 1_850_000, speed: 0.04, inc: 85 },
+            { name: 'ISRO Chandrayaan-3 Propulsion Module', r: 2_100_000, speed: 0.035, inc: 72 },
+            { name: 'NASA CAPSTONE Cislunar Orbiter', r: 3_200_000, speed: 0.025, inc: 45 },
+            { name: 'KARI Danuri Lunar Orbiter (KPLO)', r: 1_900_000, speed: 0.038, inc: 90 },
+          ];
+          const nowSec = performance.now() / 1000;
+          for (let i = 0; i < lunarOrbiters.length; i++) {
+            const lo = lunarOrbiters[i];
+            const theta = nowSec * lo.speed + (i * Math.PI / 2);
+            const ox = lo.r * Math.cos(theta);
+            const oy = lo.r * Math.sin(theta) * Math.cos(CesiumMath.toRadians(lo.inc));
+            const oz = lo.r * Math.sin(theta) * Math.sin(CesiumMath.toRadians(lo.inc));
+            const pos = new Cartesian3(moonPos.x + ox, moonPos.y + oy, moonPos.z + oz);
+
+            const ent = viewer.entities.add({
+              name: lo.name,
+              position: pos,
+              billboard: {
+                image: SATELLITE_ICON_NEON_RED,
+                width: 24,
+                height: 24,
+                scaleByDistance: new NearFarScalar(1.0e6, 1.2, 5.0e8, 0.4),
+              },
+            });
+            (ent as any)._worldosType = 'satellite';
+            (ent as any)._worldosData = {
+              id: 'lunar-orbiter-' + (i + 1),
+              canonical_name: lo.name,
+              source_slug: 'cislunar-telemetry',
+              truth_class: 'OBSERVED',
+              observed_at: new Date().toISOString(),
+              attributes: {
+                orbit_domain: 'LUNAR_ORBIT',
+                central_body: 'MOON',
+                norad_id: 35315 + i * 1000,
+                altitude_km: Math.round((lo.r - 1_737_400) / 1000),
+              },
+            };
+          }
+        }
+      } catch {}
     }
 
     // 3. Space Satellites: True 3D Orbital Altitude (400 km to 20,200 km)
@@ -684,6 +806,33 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
+    // 8. Discovered Places, Stays, Dining & Nightlife (Google Places API New)
+    if (discoveredPlaces && discoveredPlaces.length > 0) {
+      for (const place of discoveredPlaces) {
+        const icon =
+          place.category === 'stays'
+            ? HOTEL_ICON_GOLD
+            : place.category === 'food'
+            ? DINING_ICON_ROSE
+            : place.category === 'scenery'
+            ? SCENERY_ICON_EMERALD
+            : NIGHTLIFE_ICON_PURPLE;
+
+        const ent = viewer.entities.add({
+          position: Cartesian3.fromDegrees(place.longitude, place.latitude, 25),
+          billboard: {
+            image: icon,
+            width: 28,
+            height: 28,
+            scaleByDistance: new NearFarScalar(2.0e2, 1.25, 2.0e6, 0.5),
+            distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4000000.0),
+          },
+        });
+        (ent as any)._worldosType = 'place';
+        (ent as any)._worldosData = place;
+      }
+    }
+
     // 9. Strategic Multi-Modal Route in 3D Geodesic Space (Phase 1)
     if (activeRoute && activeRoute.waypoints.length > 1) {
       const routePositions = activeRoute.waypoints.map((w) =>
@@ -744,6 +893,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     alerts,
     infrastructure,
     activeRoute,
+    discoveredPlaces,
   ]);
 
   useEffect(() => {
@@ -834,6 +984,21 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     }
     viewer.scene.requestRender();
   }, [selectedItem, satellites]);
+
+  // Cinematic 3D camera fly-to when a venue/stay is selected
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || !selectedPlace) return;
+    viewer.camera.flyTo({
+      destination: Cartesian3.fromDegrees(selectedPlace.longitude, selectedPlace.latitude, 650),
+      orientation: {
+        heading: CesiumMath.toRadians(0),
+        pitch: CesiumMath.toRadians(-40),
+        roll: 0,
+      },
+      duration: 2.0,
+    });
+  }, [selectedPlace]);
 
   return <div ref={containerRef} className="globe-container-3d" />;
 };

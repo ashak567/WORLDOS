@@ -37,7 +37,8 @@ export interface SelectedItemPayload {
     | 'satellite'
     | 'camera'
     | 'fire'
-    | 'infrastructure';
+    | 'infrastructure'
+    | 'place';
   data: any;
 }
 

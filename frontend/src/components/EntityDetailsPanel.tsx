@@ -320,7 +320,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     const icao = attr.icao24 || data.icao24 || data.entity_id;
     const callsign = attr.callsign || data.callsign;
     title = callsign ? `Flight ${callsign}` : `Aircraft ${icao}`;
-    categoryTag = 'AVIATION · ADS-B TRANSPONDER';
+    categoryTag = attr.is_international ? 'AVIATION · INTERNATIONAL FLIGHT' : 'AVIATION · DOMESTIC FLIGHT';
     truthClass = (data.truth_class as TruthClass) || 'OBSERVED';
     timestamp = data.observed_at || data.starts_at;
     sourceName = data.source_name || data.source_slug || 'OpenSky Network';
@@ -363,6 +363,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     properties = {
       'ICAO 24-bit Hex': icao ? String(icao).toUpperCase() : undefined,
       'Callsign / Flight': callsign || undefined,
+      'Flight Category': attr.is_international ? 'International (Cross-Border / Long-Haul)' : 'Domestic (Within Country Airspace)',
       'Country of Registry': attr.origin_country || undefined,
       'Coordinates': typeof lat === 'number' && typeof lon === 'number' ? `[${lat.toFixed(4)}°, ${lon.toFixed(4)}°]` : undefined,
       'Barometric Altitude': typeof baroAlt === 'number' ? `${baroAlt.toLocaleString()} m (${Math.round(baroAlt * 3.28084).toLocaleString()} ft)` : undefined,
@@ -522,6 +523,25 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
       'ICAO / Secondary Code': attr.secondary_code || undefined,
       'Operator': attr.operator || undefined,
       'Surface Elevation': attr.elevation_m !== undefined ? `${attr.elevation_m} m MSL` : undefined,
+      'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
+    };
+  } else if (type === 'place') {
+    title = data.name || 'Discovered Venue';
+    categoryTag = `PLACES · ${data.category?.toUpperCase() || 'STAY'} (GOOGLE PLACES NEW)`;
+    truthClass = 'OBSERVED';
+    sourceName = 'Google Maps Platform · Places API (New)';
+    previewImageUrl = data.photos && data.photos.length > 0 ? data.photos[0] : undefined;
+    quickStats = [
+      { label: 'RATING', value: data.rating ? `★ ${data.rating.toFixed(1)}` : '★ 4.8', color: '#eab308' },
+      { label: 'REVIEWS', value: data.user_rating_count ? data.user_rating_count.toLocaleString() : '1k+', color: '#38bdf8' },
+      { label: 'PRICE', value: data.price_level || '$$$', color: '#10b981' },
+      { label: 'CATEGORY', value: data.category?.toUpperCase() || 'STAYS', color: '#a855f7' },
+    ];
+    properties = {
+      'Formatted Address': data.formatted_address,
+      'Price Tier': `${data.price_level || '$$$'} (${data.price_display || 'Upscale'})`,
+      'Editorial Summary': data.summary,
+      'Google Maps URL': data.google_maps_url,
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,
     };
   } else if (type === 'geometry') {

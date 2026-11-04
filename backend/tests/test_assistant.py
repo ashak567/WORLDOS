@@ -18,13 +18,15 @@ from pydantic import ValidationError
 
 
 class AssistantTests(unittest.TestCase):
-    def test_session_token_uses_server_credentials(self) -> None:
-        client = MagicMock()
-        client.conversational_ai.conversations.get_webrtc_token.return_value = SimpleNamespace(token="ephemeral-token")
+    @patch("urllib.request.urlopen")
+    def test_session_token_uses_server_credentials(self, mock_urlopen: MagicMock) -> None:
+        mock_resp = MagicMock()
+        mock_resp.read.return_value = b'{"signed_url": "wss://api.elevenlabs.io/v1/convai/test"}'
+        mock_resp.__enter__.return_value = mock_resp
+        mock_urlopen.return_value = mock_resp
+
         with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "server-key", "WORLDOS_ELEVENLABS_AGENT_ID": "agent-id"}):
-            with patch.dict(sys.modules, {"elevenlabs": SimpleNamespace(ElevenLabs=lambda **_: client)}):
-                self.assertEqual(create_elevenlabs_conversation_token(), "ephemeral-token")
-        client.conversational_ai.conversations.get_webrtc_token.assert_called_once_with(agent_id="agent-id")
+            self.assertEqual(create_elevenlabs_conversation_token(), "wss://api.elevenlabs.io/v1/convai/test")
 
     def test_missing_server_credentials_fail_closed(self) -> None:
         with patch.dict(os.environ, {"ELEVENLABS_API_KEY": "", "WORLDOS_ELEVENLABS_AGENT_ID": ""}):
