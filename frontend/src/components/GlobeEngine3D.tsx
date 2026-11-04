@@ -209,9 +209,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       viewer.imageryLayers.removeAll();
 
       const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
-      if (mode === 'satellite-hybrid' && (googleMapsApiKey || Ion.defaultAccessToken) && allowGoogleTiles) {
-        // Keep the raster globe visible while the photorealistic tileset loads.
-        applyImageryLayers(viewer, mode, false);
+      if (mode === 'google-3d' && allowGoogleTiles) {
+        // Keep the crisp raster globe visible while the photorealistic tileset loads.
+        applyImageryLayers(viewer, 'satellite-hybrid', false);
         const googleRequestId = imageryRequestRef.current;
         const tileOptions = googleMapsApiKey ? { key: googleMapsApiKey } : { onlyUsingWithGoogleGeocoder: true };
         createGooglePhotorealistic3DTileset(
@@ -226,7 +226,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           viewer.scene.primitives.add(tileset);
           viewer.scene.requestRender();
         }).catch((err) => {
-          console.warn('Google 3D Tiles load issue, falling back to raster terrain:', err);
+          console.warn('Google 3D Tiles load issue, falling back to raster satellite:', err);
+          applyImageryLayers(viewer, 'satellite-hybrid', false);
         });
         return;
       }

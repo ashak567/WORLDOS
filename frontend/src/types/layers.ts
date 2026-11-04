@@ -24,7 +24,7 @@ export type LayerCategory =
   | 'infrastructure'
   | 'intelligence';
 
-export type BasemapMode = 'dark-tactical' | 'satellite-hybrid' | 'oceanic';
+export type BasemapMode = 'dark-tactical' | 'satellite-hybrid' | 'oceanic' | 'google-3d';
 
 export interface SelectedItemPayload {
   type:

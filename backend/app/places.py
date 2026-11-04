@@ -16,6 +16,7 @@ import time
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
+from pathlib import Path
 from typing import Any, Literal
 
 logger = logging.getLogger("worldos.places")
@@ -70,14 +71,24 @@ def _get_api_key(service: str = "google_maps") -> str:
     if val:
         return val.strip()
 
-    # Search in .env.local
-    for env_name in [".env.local", ".env"]:
-        if os.path.exists(env_name):
+    # Search in .env.local and .env across root and parent paths
+    root_p = Path(__file__).resolve().parents[2]
+    backend_p = Path(__file__).resolve().parents[1]
+    candidates = [
+        root_p / ".env.local",
+        root_p / ".env",
+        backend_p / ".env.local",
+        backend_p / ".env",
+        Path(".env.local"),
+        Path(".env"),
+    ]
+    for p in candidates:
+        if p.exists():
             try:
-                with open(env_name, "r", encoding="utf-8") as f:
+                with open(p, "r", encoding="utf-8") as f:
                     for line in f:
                         line = line.strip()
-                        if service == "youtube" and (line.startswith("YOUTUBE_API_KEY=") or line.startswith("GOOGLE_MAPS_API_KEY=")):
+                        if service == "youtube" and (line.startswith("YOUTUBE_API_KEY=") or line.startswith("VITE_YOUTUBE_API_KEY=") or line.startswith("GOOGLE_MAPS_API_KEY=")):
                             return line.split("=", 1)[1].strip().strip('"').strip("'")
                         if service != "youtube" and (line.startswith("GOOGLE_MAPS_API_KEY=") or line.startswith("VITE_GOOGLE_MAPS_API_KEY=")):
                             return line.split("=", 1)[1].strip().strip('"').strip("'")

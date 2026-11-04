@@ -638,7 +638,12 @@ export default function App() {
 
       {/* Multimodal Places & Stays Discovery Deck (Google Places, Aerial View, YouTube) */}
       <PlaceDiscoveryDeck
-        currentCoordinates={targetLocation?.center || [139.6917, 35.6895]}
+        currentCoordinates={
+          targetLocation?.center ||
+          (viewportBbox
+            ? [(viewportBbox.min_lon + viewportBbox.max_lon) / 2, (viewportBbox.min_lat + viewportBbox.max_lat) / 2]
+            : [139.6917, 35.6895])
+        }
         isOpen={isPlacesDeckOpen}
         onToggle={() => setIsPlacesDeckOpen((prev) => !prev)}
         onFlyToPlace={(lon, lat) => {

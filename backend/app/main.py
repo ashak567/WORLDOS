@@ -7,8 +7,23 @@ import threading
 import time
 from contextlib import asynccontextmanager
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any, Literal
 from uuid import UUID, uuid4, uuid5
+
+from dotenv import load_dotenv
+
+# Robustly load .env.local and .env from project root and parent directories
+_root_dir = Path(__file__).resolve().parents[2]
+if (_root_dir / '.env.local').exists():
+    load_dotenv(_root_dir / '.env.local')
+if (_root_dir / '.env').exists():
+    load_dotenv(_root_dir / '.env')
+_backend_dir = Path(__file__).resolve().parents[1]
+if (_backend_dir / '.env.local').exists():
+    load_dotenv(_backend_dir / '.env.local')
+if (_backend_dir / '.env').exists():
+    load_dotenv(_backend_dir / '.env')
 
 from fastapi import BackgroundTasks, FastAPI, HTTPException, Query, Request
 from fastapi.responses import JSONResponse

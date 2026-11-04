@@ -11,7 +11,17 @@ from pathlib import Path
 from dotenv import load_dotenv
 
 logger = logging.getLogger("worldos.assistant")
-load_dotenv(Path(__file__).resolve().parents[2] / ".env.local")
+_root = Path(__file__).resolve().parents[2]
+if (_root / ".env.local").exists():
+    load_dotenv(_root / ".env.local")
+if (_root / ".env").exists():
+    load_dotenv(_root / ".env")
+_backend = Path(__file__).resolve().parents[1]
+if (_backend / ".env.local").exists():
+    load_dotenv(_backend / ".env.local")
+if (_backend / ".env").exists():
+    load_dotenv(_backend / ".env")
+
 
 
 class AssistantUnavailable(RuntimeError):
