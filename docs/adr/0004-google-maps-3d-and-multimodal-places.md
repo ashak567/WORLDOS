@@ -29,3 +29,4 @@ WORLDOS requires hyper-immersive metropolitan exploration, travel planning, and 
 ### Negative / Trade-offs
 - Requires Google Maps Platform and YouTube Data API keys with billing configured.
 - Heavy 3D tilesets require WebGL2 and modern GPU support on client browsers.
+

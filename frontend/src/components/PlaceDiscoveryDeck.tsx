@@ -502,3 +502,4 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
     </>
   );
 };
+
