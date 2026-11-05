@@ -646,12 +646,16 @@ export default function App() {
         }
         isOpen={isPlacesDeckOpen}
         onToggle={() => setIsPlacesDeckOpen((prev) => !prev)}
+        onPlacesLoaded={(places) => {
+          setDiscoveredPlaces(places);
+        }}
         onFlyToPlace={(lon, lat) => {
-          setTargetLocation({ center: [lon, lat], zoom: 16 });
+          setTargetLocation({ center: [lon, lat], zoom: 17 });
         }}
         onSelectPlace={(place) => {
           setSelectedPlace(place);
           setSelectedItem({ type: 'place', data: place });
+          setTargetLocation({ center: [place.longitude, place.latitude], zoom: 17 });
         }}
         onAddToRoute={() => {
           setIsRoutePlannerOpen(true);

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 import os
 import re
 import time
@@ -28,10 +29,17 @@ CACHE_TTL_SECONDS = 900.0  # 15 minutes
 PlaceCategory = Literal["stays", "food", "scenery", "nightlife"]
 
 CATEGORY_SEARCH_TEMPLATES = {
-    "stays": "best luxury hotels boutique stays resort",
-    "food": "top rated restaurants culinary fine dining cafes",
-    "scenery": "scenic viewpoints landmarks parks iconic architecture",
-    "nightlife": "vibrant nightlife cocktail lounges clubs speakeasy rooftop bars",
+    "stays": "hotel resort boutique stay",
+    "food": "restaurant fine dining michelin cafe bistro",
+    "scenery": "tourist attraction scenic viewpoint landmark museum",
+    "nightlife": "cocktail bar rooftop lounge club speakeasy pub",
+}
+
+NEARBY_INCLUDED_TYPES: dict[PlaceCategory, list[str]] = {
+    "stays": ["hotel", "resort_hotel", "lodging", "bed_and_breakfast", "inn", "motel"],
+    "food": ["restaurant", "cafe", "fine_dining_restaurant", "bar", "bakery", "meal_takeaway"],
+    "scenery": ["tourist_attraction", "historical_landmark", "museum", "park", "viewpoint", "art_gallery"],
+    "nightlife": ["bar", "night_club", "cocktail_bar", "lounge_bar", "pub"],
 }
 
 CATEGORY_FALLBACK_IMAGES = {
@@ -176,19 +184,36 @@ def search_places_nearby(
         return fallback
 
     category_keyword = CATEGORY_SEARCH_TEMPLATES.get(category, "hotel")
-    search_text = f"{q_str} {category_keyword}".strip() if q_str else category_keyword
 
-    url = "https://places.googleapis.com/v1/places:searchText"
-    payload = {
-        "textQuery": search_text,
-        "maxResultCount": min(lim, 20),
-        "locationBias": {
-            "circle": {
-                "center": {"latitude": lat, "longitude": lon},
-                "radius": float(rad),
-            }
-        },
-    }
+    # Use places:searchNearby for category browsing (guarantees 100% strict local radius results)
+    # Use places:searchText with rectangle location restriction when user searches a specific name/query
+    if q_str:
+        url = "https://places.googleapis.com/v1/places:searchText"
+        d_lat = rad / 111320.0
+        d_lon = rad / max(0.001, 111320.0 * math.cos(math.radians(lat)))
+        rectangle = {
+            "low": {"latitude": max(-90.0, lat - d_lat), "longitude": max(-180.0, lon - d_lon)},
+            "high": {"latitude": min(90.0, lat + d_lat), "longitude": min(180.0, lon + d_lon)},
+        }
+        payload: dict[str, Any] = {
+            "textQuery": f"{q_str} {category_keyword}".strip(),
+            "maxResultCount": min(lim, 20),
+            "locationRestriction": {
+                "rectangle": rectangle
+            },
+        }
+    else:
+        url = "https://places.googleapis.com/v1/places:searchNearby"
+        payload = {
+            "includedTypes": NEARBY_INCLUDED_TYPES.get(category, ["hotel", "lodging"]),
+            "maxResultCount": min(lim, 20),
+            "locationRestriction": {
+                "circle": {
+                    "center": {"latitude": lat, "longitude": lon},
+                    "radius": float(rad),
+                }
+            },
+        }
 
     headers = {
         "Content-Type": "application/json",

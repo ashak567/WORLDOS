@@ -30,6 +30,7 @@ interface PlaceDiscoveryDeckProps {
   currentCoordinates: [number, number]; // [lon, lat]
   onFlyToPlace: (lon: number, lat: number) => void;
   onSelectPlace?: (place: PlaceItem) => void;
+  onPlacesLoaded?: (places: PlaceItem[]) => void;
   onAddToRoute?: (place: PlaceItem) => void;
   selectedPlace?: PlaceItem | null;
   isOpen: boolean;
@@ -40,6 +41,7 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
   currentCoordinates,
   onFlyToPlace,
   onSelectPlace,
+  onPlacesLoaded,
   onAddToRoute,
   selectedPlace,
   isOpen,
@@ -82,6 +84,7 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
         .then((items) => {
           if (!cancelled) {
             setPlaces(items);
+            onPlacesLoaded?.(items);
             setLoading(false);
           }
         })

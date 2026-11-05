@@ -939,15 +939,45 @@ export async function fetchDiscoveredPlaces(params: {
   const apiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
   if (apiKey) {
     try {
-      const categoryTemplate: Record<string, string> = {
-        stays: 'hotel resort stay',
-        food: 'restaurant fine dining michelin cafe',
-        scenery: 'tourist attraction scenic viewpoint landmark',
-        nightlife: 'cocktail bar rooftop lounge club',
+      const nearbyTypes: Record<string, string[]> = {
+        stays: ['hotel', 'resort_hotel', 'lodging', 'bed_and_breakfast', 'inn', 'motel'],
+        food: ['restaurant', 'cafe', 'fine_dining_restaurant', 'bar', 'bakery'],
+        scenery: ['tourist_attraction', 'historical_landmark', 'museum', 'park', 'viewpoint'],
+        nightlife: ['bar', 'night_club', 'cocktail_bar', 'lounge_bar', 'pub'],
       };
-      const catKw = categoryTemplate[params.category || 'stays'] || 'hotel';
-      const searchText = params.query ? `${params.query} ${catKw}` : catKw;
-      const resp = await fetch('https://places.googleapis.com/v1/places:searchText', {
+
+      const rad = params.radius_meters || 25000;
+      let url = 'https://places.googleapis.com/v1/places:searchNearby';
+      let payload: Record<string, any>;
+
+      if (params.query) {
+        url = 'https://places.googleapis.com/v1/places:searchText';
+        const dLat = rad / 111320;
+        const dLon = rad / Math.max(0.001, 111320 * Math.cos((params.latitude * Math.PI) / 180));
+        payload = {
+          textQuery: params.query,
+          maxResultCount: Math.min(params.limit || 10, 20),
+          locationRestriction: {
+            rectangle: {
+              low: { latitude: Math.max(-90, params.latitude - dLat), longitude: Math.max(-180, params.longitude - dLon) },
+              high: { latitude: Math.min(90, params.latitude + dLat), longitude: Math.min(180, params.longitude + dLon) },
+            },
+          },
+        };
+      } else {
+        payload = {
+          includedTypes: nearbyTypes[params.category || 'stays'] || ['hotel', 'lodging'],
+          maxResultCount: Math.min(params.limit || 10, 20),
+          locationRestriction: {
+            circle: {
+              center: { latitude: params.latitude, longitude: params.longitude },
+              radius: rad,
+            },
+          },
+        };
+      }
+
+      const resp = await fetch(url, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -958,16 +988,7 @@ export async function fetchDiscoveredPlaces(params: {
             'places.googleMapsUri,places.websiteUri,places.photos'
           ),
         },
-        body: JSON.stringify({
-          textQuery: searchText,
-          maxResultCount: Math.min(params.limit || 10, 20),
-          locationBias: {
-            circle: {
-              center: { latitude: params.latitude, longitude: params.longitude },
-              radius: params.radius_meters || 25000,
-            },
-          },
-        }),
+        body: JSON.stringify(payload),
       });
 
       if (resp.ok) {

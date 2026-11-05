@@ -1,5 +1,6 @@
 import React, { useEffect, useRef } from 'react';
 import {
+  Cartesian2,
   Cartesian3,
   BillboardCollection,
   BoundingSphere,
@@ -15,12 +16,14 @@ import {
   HeadingPitchRange,
   Ion,
   IonGeocodeProviderType,
+  LabelStyle,
   Math as CesiumMath,
   NearFarScalar,
   PolylineGlowMaterialProperty,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
+  VerticalOrigin,
   Viewer,
   createGooglePhotorealistic3DTileset,
   createWorldTerrainAsync,
@@ -46,6 +49,11 @@ import {
   DINING_ICON_ROSE,
   SCENERY_ICON_EMERALD,
   NIGHTLIFE_ICON_PURPLE,
+  MAP_PIN_STAYS_GOLD,
+  MAP_PIN_DINING_ROSE,
+  MAP_PIN_SCENERY_EMERALD,
+  MAP_PIN_NIGHTLIFE_PURPLE,
+  MAP_PIN_SELECTED_GLOW,
 } from '../utils/icons';
 import {
   BoundingBox,
@@ -234,11 +242,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
       viewer.scene.globe.show = true;
       if (mode === 'satellite-hybrid') {
-        viewer.imageryLayers.addImageryProvider(new UrlTemplateImageryProvider({
-          url: 'https://tile.openstreetmap.org/{z}/{x}/{y}.png',
-          maximumLevel: 19,
-          credit: '© OpenStreetMap contributors',
-        }));
         const satImagery = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
@@ -246,12 +249,49 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
         viewer.imageryLayers.addImageryProvider(satImagery);
 
+        // High-resolution road and street network overlaid on satellite
+        const transOverlay = new UrlTemplateImageryProvider({
+          url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 20,
+        });
+        viewer.imageryLayers.addImageryProvider(transOverlay);
+
+        // World administrative boundaries and places
         const refOverlay = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
         });
         viewer.imageryLayers.addImageryProvider(refOverlay);
+
+        // CartoDB Voyager transparent labels for street names, points of interest, motels, dining, and shops
+        const cartoLabels = new UrlTemplateImageryProvider({
+          url: 'https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
+          maximumLevel: 19,
+        });
+        viewer.imageryLayers.addImageryProvider(cartoLabels);
+
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
+        viewer.scene.requestRender();
+        return;
+      }
+
+      if (mode === 'streets') {
+        // High-detail cartographic street map with roads, buildings, restaurants, motels, shops, and transit
+        const streetBase = new UrlTemplateImageryProvider({
+          url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
+          maximumLevel: 19,
+          credit: 'Esri, OpenStreetMap, HERE, Garmin, USGS',
+        });
+        viewer.imageryLayers.addImageryProvider(streetBase);
+
+        // Overlay crisp CartoDB labels for maximum readability of local streets and POIs
+        const cartoLabels = new UrlTemplateImageryProvider({
+          url: 'https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
+          maximumLevel: 19,
+        });
+        viewer.imageryLayers.addImageryProvider(cartoLabels);
+
+        viewer.scene.globe.baseColor = Color.fromCssColorString('#f8fafc');
         viewer.scene.requestRender();
         return;
       }
@@ -869,23 +909,76 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     // 8. Discovered Places, Stays, Dining & Nightlife (Google Places API New)
     if (discoveredPlaces && discoveredPlaces.length > 0) {
       for (const place of discoveredPlaces) {
+        const isSelected = selectedPlace?.id === place.id;
         const icon =
           place.category === 'stays'
-            ? HOTEL_ICON_GOLD
+            ? MAP_PIN_STAYS_GOLD
             : place.category === 'food'
-            ? DINING_ICON_ROSE
+            ? MAP_PIN_DINING_ROSE
             : place.category === 'scenery'
-            ? SCENERY_ICON_EMERALD
-            : NIGHTLIFE_ICON_PURPLE;
+            ? MAP_PIN_SCENERY_EMERALD
+            : MAP_PIN_NIGHTLIFE_PURPLE;
 
+        const pinColor =
+          place.category === 'stays'
+            ? Color.fromCssColorString('#eab308')
+            : place.category === 'food'
+            ? Color.fromCssColorString('#f43f5e')
+            : place.category === 'scenery'
+            ? Color.fromCssColorString('#10b981')
+            : Color.fromCssColorString('#a855f7');
+
+        // 8a. Vertical Pin Stem from exact ground coordinates (0m) to floating pin head (30m)
+        viewer.entities.add({
+          polyline: {
+            positions: [
+              Cartesian3.fromDegrees(place.longitude, place.latitude, 0),
+              Cartesian3.fromDegrees(place.longitude, place.latitude, 30),
+            ],
+            width: isSelected ? 4 : 2,
+            material: isSelected ? Color.fromCssColorString('#facc15') : pinColor,
+          },
+        });
+
+        // 8b. Ground Target Disc (exact pinpoint anchor on earth surface)
+        viewer.entities.add({
+          position: Cartesian3.fromDegrees(place.longitude, place.latitude, 1),
+          point: {
+            pixelSize: isSelected ? 14 : 8,
+            color: isSelected ? Color.fromCssColorString('#facc15') : pinColor,
+            outlineColor: Color.WHITE,
+            outlineWidth: 2,
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+        });
+
+        // 8c. Pinpoint Teardrop Billboard + High-Legibility Title & Details Label
         const ent = viewer.entities.add({
-          position: Cartesian3.fromDegrees(place.longitude, place.latitude, 25),
+          position: Cartesian3.fromDegrees(place.longitude, place.latitude, 30),
           billboard: {
-            image: icon,
-            width: 28,
-            height: 28,
-            scaleByDistance: new NearFarScalar(2.0e2, 1.25, 2.0e6, 0.5),
-            distanceDisplayCondition: new DistanceDisplayCondition(0.0, 4000000.0),
+            image: isSelected ? MAP_PIN_SELECTED_GLOW : icon,
+            width: isSelected ? 38 : 28,
+            height: isSelected ? 48 : 36,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            scaleByDistance: new NearFarScalar(2.0e2, 1.25, 2.0e6, 0.6),
+            distanceDisplayCondition: new DistanceDisplayCondition(0.0, 5000000.0),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
+          },
+          label: {
+            text: isSelected
+              ? `📍 ${place.name.toUpperCase()}\n★ ${place.rating ? place.rating.toFixed(1) : '4.8'} · ${place.category.toUpperCase()} · ${place.price_level || '$$$'}\n${place.formatted_address}`
+              : `${place.name} ★${place.rating ? place.rating.toFixed(1) : '4.8'}`,
+            font: isSelected ? 'bold 12px "JetBrains Mono", sans-serif' : '10px "JetBrains Mono", sans-serif',
+            fillColor: isSelected ? Color.fromCssColorString('#facc15') : Color.WHITE,
+            outlineColor: Color.BLACK,
+            outlineWidth: 3,
+            style: LabelStyle.FILL_AND_OUTLINE,
+            showBackground: true,
+            backgroundColor: Color.fromCssColorString('rgba(5, 8, 16, 0.90)'),
+            backgroundPadding: new Cartesian2(8, 5),
+            pixelOffset: new Cartesian2(0, isSelected ? -56 : -42),
+            distanceDisplayCondition: new DistanceDisplayCondition(0.0, isSelected ? 800000.0 : 80000.0),
+            disableDepthTestDistance: Number.POSITIVE_INFINITY,
           },
         });
         (ent as any)._worldosType = 'place';
@@ -954,6 +1047,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     infrastructure,
     activeRoute,
     discoveredPlaces,
+    selectedPlace,
   ]);
 
   useEffect(() => {

@@ -18,6 +18,7 @@ import {
   MapPin,
   Navigation,
   Mic,
+  Map,
 } from 'lucide-react';
 
 interface HudBarProps {
@@ -134,6 +135,8 @@ export const HudBar: React.FC<HudBarProps> = ({
 
   const getBasemapLabel = () => {
     switch (basemapMode) {
+      case 'streets':
+        return 'STREETS';
       case 'google-3d':
         return 'GOOGLE 3D';
       case 'dark-tactical':
@@ -183,6 +186,7 @@ export const HudBar: React.FC<HudBarProps> = ({
             aria-expanded={isBasemapMenuOpen}
           >
             {basemapMode === 'satellite-hybrid' && <Satellite size={12} color="var(--cy)" />}
+            {basemapMode === 'streets' && <Map size={12} color="#10b981" />}
             {basemapMode === 'google-3d' && <Building2 size={12} color="#eab308" />}
             {basemapMode === 'dark-tactical' && <Compass size={12} color="var(--cy)" />}
             {basemapMode === 'oceanic' && <Waves size={12} color="#38bdf8" />}
@@ -203,7 +207,21 @@ export const HudBar: React.FC<HudBarProps> = ({
                 <Satellite size={13} color="var(--cy)" />
                 <div className="hud-dropdown-item-desc">
                   <strong>Satellite Hybrid (Esri 4K)</strong>
-                  <span>Photorealistic high-resolution orbital satellite photography</span>
+                  <span>Photorealistic orbital imagery with street network overlay</span>
+                </div>
+              </button>
+
+              <button
+                className={`hud-dropdown-menu-item ${basemapMode === 'streets' ? 'active' : ''}`}
+                onClick={() => {
+                  onSetBasemapMode('streets');
+                  setIsBasemapMenuOpen(false);
+                }}
+              >
+                <Map size={13} color="#10b981" />
+                <div className="hud-dropdown-item-desc">
+                  <strong>Streets &amp; Places Navigation</strong>
+                  <span>Detailed road network, street names, POIs, motels &amp; dining</span>
                 </div>
               </button>
 

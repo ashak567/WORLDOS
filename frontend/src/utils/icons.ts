@@ -63,3 +63,44 @@ export const SCENERY_ICON_EMERALD = createSvgDataUrl(SCENERY_PATH, '#10b981');
 
 const NIGHTLIFE_PATH = `<path d="M21 5V3H3v2l8 9v5H6v2h12v-2h-5v-5l8-9zM7.43 7L5.66 5h12.69l-1.78 2H7.43z"/>`;
 export const NIGHTLIFE_ICON_PURPLE = createSvgDataUrl(NIGHTLIFE_PATH, '#a855f7');
+
+// 10. High-Contrast Pinpoint Location Markers (Pin with needle pointing directly to ground coordinates)
+function createPinpointSvg(pinColorHex: string, innerIconPath: string): string {
+  const encColor = encodeURIComponent(pinColorHex);
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 48" width="36" height="48">
+    <defs>
+      <filter id="pindrop" x="-20%" y="-20%" width="140%" height="140%">
+        <feDropShadow dx="0" dy="2" stdDeviation="2.5" flood-color="#000000" flood-opacity="0.85"/>
+      </filter>
+    </defs>
+    <!-- Outer teardrop pin body -->
+    <path d="M18 2C9.72 2 3 8.72 3 17c0 10.5 15 29 15 29s15-18.5 15-29c0-8.28-6.72-15-15-15z" fill="${encColor}" stroke="#ffffff" stroke-width="2.5" filter="url(#pindrop)"/>
+    <!-- Inner contrast disk -->
+    <circle cx="18" cy="17" r="9" fill="#0a0f1d"/>
+    <!-- Centered category icon scaled inside disk -->
+    <g transform="translate(10, 9) scale(0.65)" fill="${encColor}">
+      ${innerIconPath}
+    </g>
+  </svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+export const MAP_PIN_STAYS_GOLD = createPinpointSvg('#eab308', HOTEL_PATH);
+export const MAP_PIN_DINING_ROSE = createPinpointSvg('#f43f5e', DINING_PATH);
+export const MAP_PIN_SCENERY_EMERALD = createPinpointSvg('#10b981', SCENERY_PATH);
+export const MAP_PIN_NIGHTLIFE_PURPLE = createPinpointSvg('#a855f7', NIGHTLIFE_PATH);
+
+export const MAP_PIN_SELECTED_GLOW = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 44 56" width="44" height="56">
+  <defs>
+    <filter id="goldglow" x="-30%" y="-30%" width="160%" height="160%">
+      <feGaussianBlur in="SourceGraphic" stdDeviation="3" result="blur"/>
+      <feMerge>
+        <feMergeNode in="blur"/>
+        <feMergeNode in="SourceGraphic"/>
+      </feMerge>
+    </filter>
+  </defs>
+  <path d="M22 3C11.5 3 3 11.5 3 22c0 13.5 19 31 19 31s19-17.5 19-31c0-10.5-8.5-19-19-19z" fill="%23facc15" stroke="%23ffffff" stroke-width="3" filter="url(%23goldglow)"/>
+  <circle cx="22" cy="22" r="11" fill="%23050810"/>
+  <circle cx="22" cy="22" r="6.5" fill="%23facc15"/>
+</svg>`;
