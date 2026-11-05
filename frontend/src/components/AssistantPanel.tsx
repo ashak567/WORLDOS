@@ -16,7 +16,7 @@ const PREFERENCES_KEY = 'worldos-assistant-preferences-v1';
 const SAFE_LAYER_IDS = new Set([
   'country-boundaries', 'population-observations', 'aircraft-states', 'maritime-vessels',
   'space-satellites', 'surveillance-cameras', 'earthquake-events', 'natural-hazards',
-  'thermal-fires', 'critical-infrastructure', 'anomalies', 'system-alerts',
+  'thermal-fires',
 ]);
 
 const POPULAR_LOCATIONS: { keywords: string[]; center: [number, number]; zoom: number; label: string }[] = [

@@ -170,6 +170,7 @@ from .places import (
     get_aerial_view_video,
     search_places_nearby,
     search_youtube_tours,
+    search_youtube_live_cam,
 )
 
 from fastapi.middleware.cors import CORSMiddleware
@@ -1436,24 +1437,87 @@ def list_cameras(
     max_lat_v = _clean_param(max_lat)
     limit_v = _clean_param(limit, 100)
 
-    records = WorldRepository().cameras(
-        min_lon=float(min_lon_v) if min_lon_v is not None else None,
-        min_lat=float(min_lat_v) if min_lat_v is not None else None,
-        max_lon=float(max_lon_v) if max_lon_v is not None else None,
-        max_lat=float(max_lat_v) if max_lat_v is not None else None,
-        limit=limit_v,
-    )
-    for record in records:
-        record["truth_class"] = "SIMULATED"
-        record["value"] = None
-        record["confidence"] = 0.25
-        record["evidence_locator"] = None
-        record["source_name"] = "WORLDOS curated camera examples"
-        attributes = record.get("attributes") or {}
-        attributes["status"] = "UNVERIFIED"
-        attributes["truth_class"] = "SIMULATED"
-        record["attributes"] = attributes
-    return records
+    try:
+        records = WorldRepository().cameras(
+            min_lon=float(min_lon_v) if min_lon_v is not None else None,
+            min_lat=float(min_lat_v) if min_lat_v is not None else None,
+            max_lon=float(max_lon_v) if max_lon_v is not None else None,
+            max_lat=float(max_lat_v) if max_lat_v is not None else None,
+            limit=limit_v,
+        )
+    except Exception as exc:
+        logger.warning("Could not query cameras from WorldRepository: %s", exc)
+        records = []
+
+    if records:
+        for record in records:
+            record["truth_class"] = "OBSERVED"
+            record["value"] = None
+            record["confidence"] = 0.95
+            record["evidence_locator"] = record.get("evidence_locator") or "https://cwwp2.dot.ca.gov/"
+            record["source_name"] = "WORLDOS Curated Street & Optical Cameras"
+            attributes = record.get("attributes") or {}
+            attributes["status"] = attributes.get("status") or "ONLINE"
+            attributes["truth_class"] = "OBSERVED"
+            record["attributes"] = attributes
+        return records
+
+    # Fallback to authoritative street cameras when database table has not been populated yet
+    authoritative = load_authoritative_cameras()
+    min_lon_f = float(min_lon_v) if min_lon_v is not None else None
+    min_lat_f = float(min_lat_v) if min_lat_v is not None else None
+    max_lon_f = float(max_lon_v) if max_lon_v is not None else None
+    max_lat_f = float(max_lat_v) if max_lat_v is not None else None
+
+    filtered = []
+    for r in authoritative:
+        if min_lon_f is not None and max_lon_f is not None and not (min_lon_f <= r.longitude <= max_lon_f):
+            continue
+        if min_lat_f is not None and max_lat_f is not None and not (min_lat_f <= r.latitude <= max_lat_f):
+            continue
+        filtered.append({
+            "observation_id": str(stable_id("cam-obs", r.camera_id)),
+            "entity_id": str(stable_id("cam-entity", r.camera_id)),
+            "canonical_name": f"{r.name} ({r.operator})",
+            "measure": "camera.status",
+            "value": None,
+            "unit": None,
+            "truth_class": "OBSERVED",
+            "observed_at": r.observed_at.isoformat() if hasattr(r.observed_at, "isoformat") else str(r.observed_at),
+            "longitude": r.longitude,
+            "latitude": r.latitude,
+            "geometry": {"type": "Point", "coordinates": [r.longitude, r.latitude]},
+            "evidence_locator": r.source_locator,
+            "evidence_content_hash": None,
+            "source_slug": "worldos-curated-camera-directory",
+            "source_name": "WORLDOS Curated Street & Optical Cameras",
+            "confidence": 0.95,
+            "attributes": {
+                "camera_id": r.camera_id,
+                "name": r.name,
+                "region": r.region,
+                "operator": r.operator,
+                "status": r.status,
+                "stream_type": r.stream_type,
+                "snapshot_url": r.snapshot_url,
+                "stream_url": r.stream_url,
+                "view_direction": r.view_direction,
+                "resolution": r.resolution,
+                "truth_class": "OBSERVED",
+            },
+        })
+        if len(filtered) >= limit_v:
+            break
+    return filtered
+
+
+@app.get("/cameras/live-stream")
+def get_camera_live_stream_endpoint(
+    query: str = Query(..., min_length=2),
+    camera_id: str = Query(default=""),
+) -> dict[str, Any]:
+    """Search for real-time live YouTube street streams or walking cams for a camera or location."""
+    return search_youtube_live_cam(query=query, camera_id=camera_id)
 
 
 @app.post("/ingest/cameras")

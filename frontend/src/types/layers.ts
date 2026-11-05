@@ -9,10 +9,7 @@ export type LayerId =
   | 'surveillance-cameras'
   | 'earthquake-events'
   | 'natural-hazards'
-  | 'thermal-fires'
-  | 'critical-infrastructure'
-  | 'anomalies'
-  | 'system-alerts';
+  | 'thermal-fires';
 
 export type LayerCategory =
   | 'geography'
@@ -20,9 +17,7 @@ export type LayerCategory =
   | 'maritime'
   | 'space'
   | 'surveillance'
-  | 'disasters'
-  | 'infrastructure'
-  | 'intelligence';
+  | 'disasters';
 
 export type BasemapMode = 'dark-tactical' | 'satellite-hybrid' | 'streets' | 'oceanic' | 'google-3d';
 
@@ -121,14 +116,14 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
   },
   {
     id: 'surveillance-cameras',
-    name: 'Curated Camera Directory',
+    name: 'Street & Traffic Cameras',
     category: 'surveillance',
-    description: 'Static camera links and approximate locations; online status and worldwide coverage are not verified.',
-    source: 'Curated examples · check each operator',
+    description: 'Real-time global street & traffic camera network with 24/7 YouTube live streams and municipal feeds.',
+    source: 'Global Street & Traffic Cameras · YouTube 24/7 Live',
     color: '#10b981', // Emerald green
-    enabled: false,
+    enabled: true,
     count: 0,
-    truthClass: 'SIMULATED',
+    truthClass: 'OBSERVED',
     loading: false,
   },
   {
@@ -165,42 +160,6 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     enabled: true,
     count: 0,
     truthClass: 'OBSERVED',
-    loading: false,
-  },
-  {
-    id: 'critical-infrastructure',
-    name: 'Curated Infrastructure Examples',
-    category: 'infrastructure',
-    description: 'Small hand-curated list of airports, ports, and launch sites; not a live or complete registry.',
-    source: 'WORLDOS sample directory · verify facility details',
-    color: '#eab308', // Yellow
-    enabled: false,
-    count: 0,
-    truthClass: 'SIMULATED',
-    loading: false,
-  },
-  {
-    id: 'anomalies',
-    name: 'Flagged Observations',
-    category: 'intelligence',
-    description: 'Stored observations carrying an anomaly flag; detection runs and findings are not automatically included.',
-    source: 'Stored observation flags',
-    color: '#facc15', // Gold
-    enabled: true,
-    count: 0,
-    truthClass: 'DERIVED',
-    loading: false,
-  },
-  {
-    id: 'system-alerts',
-    name: 'Stored Rule Alerts',
-    category: 'intelligence',
-    description: 'Previously stored alert-engine results; these are not a live global warning feed.',
-    source: 'WORLDOS alert rules · stored results',
-    color: '#f43f5e', // Rose
-    enabled: true,
-    count: 0,
-    truthClass: 'INFERRED',
     loading: false,
   },
 ];

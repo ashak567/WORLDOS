@@ -19,8 +19,6 @@ const CATEGORY_TITLES: Record<LayerCategory, string> = {
   space: 'SPACE & ORBITAL',
   surveillance: 'OPTICAL & SENSORS',
   disasters: 'DISASTERS & SEVERE EVENTS',
-  infrastructure: 'CRITICAL INFRASTRUCTURE',
-  intelligence: 'DERIVED INTELLIGENCE',
 };
 
 export const LayerDock: React.FC<LayerDockProps> = ({
@@ -47,9 +45,7 @@ export const LayerDock: React.FC<LayerDockProps> = ({
     'space',
     'surveillance',
     'disasters',
-    'infrastructure',
     'geography',
-    'intelligence',
   ];
 
   // When collapsed, show a sleek floating trigger button instead of sliced-off dock contents

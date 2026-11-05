@@ -340,10 +340,6 @@ export const HudBar: React.FC<HudBarProps> = ({
             <Flame size={11} />
             <span className="telemetry-val">{fireCount}</span>
           </div>
-          <div className="telemetry-badge gold" title="Strategic Ports & Spaceports">
-            <Building2 size={11} />
-            <span className="telemetry-val">{infraCount}</span>
-          </div>
           <div className="telemetry-badge time" title="Universal Coordinated Time">
             <span>{utcTime}</span>
           </div>

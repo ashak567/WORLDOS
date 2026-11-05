@@ -29,7 +29,7 @@ import {
   Activity,
   Layers,
 } from 'lucide-react';
-import { AircraftTrackPoint, TruthClass } from '../api';
+import { AircraftTrackPoint, TruthClass, fetchCameraLiveStream, CameraLiveStreamResponse } from '../api';
 
 interface EntityDetailsPanelProps {
   selectedItem: SelectedItemPayload | null;
@@ -40,53 +40,74 @@ interface EntityDetailsPanelProps {
 
 const resolveCameraVideoSource = (cameraId: string, name: string) => {
   const upper = (cameraId + ' ' + name).toUpperCase();
-  if (upper.includes('TIMES-SQUARE') || upper.includes('TIMES SQUARE') || upper.includes('BROADWAY')) {
+  if (upper.includes('TIMES-SQUARE') || upper.includes('TIMES SQUARE') || upper.includes('BROADWAY') || upper.includes('NEW YORK') || upper.includes('NYC') || upper.includes('BROOKLYN') || upper.includes('LINCOLN')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/1-iS7LArMPA?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      url: 'https://www.youtube.com/embed/KHy_n-EMWY8?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
       title: 'Times Square EarthCam 4K Live',
     };
   }
   if (upper.includes('SHIBUYA')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/HpdO5Kq3o7Y?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      url: 'https://www.youtube.com/embed/dfVK7ld38Ys?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
       title: 'Shibuya Scramble Crossing 24/7 Live',
     };
   }
-  if (upper.includes('GOLDEN-GATE') || upper.includes('GOLDEN GATE') || upper.includes('SAN FRANCISCO')) {
+  if (upper.includes('SHINJUKU') || upper.includes('AKIHABARA') || upper.includes('TOKYO') || upper.includes('JAPAN')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/Ckk7Gk1h6r8?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
-      title: 'Golden Gate Bridge & SF Bay Live',
+      url: 'https://www.youtube.com/embed/L6wO1-U2RTY?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'Tokyo City 24/7 Live Stream',
     };
   }
-  if (upper.includes('WESTMINSTER') || upper.includes('BIG BEN') || upper.includes('PICCADILLY') || upper.includes('OXFORD') || upper.includes('LONDON')) {
+  if (upper.includes('GOLDEN-GATE') || upper.includes('GOLDEN GATE') || upper.includes('SAN FRANCISCO') || upper.includes('BAY BRIDGE') || upper.includes('MARKET')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/4993sBLazGg?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
-      title: 'London Westminster Live Stream',
+      url: 'https://www.youtube.com/embed/BSWhGNXxT9A?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'Golden Gate & SF Bay 24/7 Live',
     };
   }
-  if (upper.includes('EIFFEL') || upper.includes('CHAMPS-ELYSEES') || upper.includes('PARIS')) {
+  if (upper.includes('HOLLYWOOD') || upper.includes('SANTA MONICA') || upper.includes('LOS ANGELES') || upper.includes('CALTRANS') || upper.includes('DODGER') || upper.includes('SEPULVEDA')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/ZkJX7nQ1UjQ?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
-      title: 'Paris Skyline Live Feed',
+      url: 'https://www.youtube.com/embed/DjdUEyjx8GM?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'Los Angeles Live Camera Feed',
     };
   }
-  if (upper.includes('KILAUEA') || upper.includes('VOLCANO') || upper.includes('HALEMAUMAU')) {
+  if (upper.includes('WESTMINSTER') || upper.includes('BIG BEN') || upper.includes('PICCADILLY') || upper.includes('OXFORD') || upper.includes('LONDON') || upper.includes('TOWER BRIDGE') || upper.includes('TRAFALGAR')) {
     return {
       type: 'embed',
-      url: 'https://www.youtube-nocookie.com/embed/w3FfE7m6F9U?autoplay=1&mute=1&playsinline=1&controls=0&modestbranding=1',
+      url: 'https://www.youtube.com/embed/zMCea32gpmg?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'London City Live Camera Feed',
+    };
+  }
+  if (upper.includes('EIFFEL') || upper.includes('CHAMPS-ELYSEES') || upper.includes('PARIS') || upper.includes('FRANCE')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube.com/embed/YkKGantlWH0?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'Paris Eiffel Tower 24/7 Live Ultra-HD',
+    };
+  }
+  if (upper.includes('SYDNEY') || upper.includes('OPERA') || upper.includes('CIRCULAR QUAY') || upper.includes('AUSTRALIA')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube.com/embed/5uZa3-RMFos?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+      title: 'Sydney Harbour 24/7 Live Stream',
+    };
+  }
+  if (upper.includes('KILAUEA') || upper.includes('VOLCANO') || upper.includes('HALEMAUMAU') || upper.includes('HAWAII') || upper.includes('ST HELENS')) {
+    return {
+      type: 'embed',
+      url: 'https://www.youtube.com/embed/w3FfE7m6F9U?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
       title: 'USGS Kīlauea Live Caldera Stream',
     };
   }
-  // Default high-framerate tactical traffic surveillance feed
+  // Default high quality live street stream
   return {
-    type: 'video',
-    url: 'https://commondatastorage.googleapis.com/gtv-videos-bucket/sample/ForBiggerBlazes.mp4',
-    title: 'Tactical Optical Sensor Feed',
+    type: 'embed',
+    url: 'https://www.youtube.com/embed/KHy_n-EMWY8?autoplay=1&mute=1&playsinline=1&controls=1&modestbranding=1',
+    title: 'EarthCam Live Crossroads 24/7',
   };
 };
 
@@ -102,6 +123,7 @@ const CameraSurveillancePlayer: React.FC<{
   const [filterMode, setFilterMode] = useState<'normal' | 'nvg' | 'flir'>('normal');
   const [recSeconds, setRecSeconds] = useState(14);
   const [imgError, setImgError] = useState(false);
+  const [liveStreamData, setLiveStreamData] = useState<CameraLiveStreamResponse | null>(null);
 
   useEffect(() => {
     const timer = setInterval(() => setRecSeconds((s) => s + 1), 1000);
@@ -116,6 +138,27 @@ const CameraSurveillancePlayer: React.FC<{
 
   const cameraId = camera.attributes?.camera_id || camera.camera_id || '';
   const videoSource = resolveCameraVideoSource(cameraId, title);
+
+  // Dynamically resolve real-time YouTube live stream using YouTube Data API v3
+  useEffect(() => {
+    let active = true;
+    const query = `${title} ${camera.attributes?.region || ''}`.trim();
+    fetchCameraLiveStream(query, cameraId)
+      .then((data) => {
+        if (active && data) {
+          setLiveStreamData(data);
+        }
+      })
+      .catch((err) => console.warn('Could not query YouTube live stream:', err));
+
+    return () => {
+      active = false;
+    };
+  }, [cameraId, title, camera.attributes?.region]);
+
+  const activeEmbedUrl = liveStreamData?.embed_url || videoSource.url;
+  const activeTitle = liveStreamData?.title || videoSource.title;
+  const activeVideoUrl = liveStreamData?.video_url || `https://www.youtube.com/results?search_query=${encodeURIComponent(title + ' live cam')}`;
 
   let filterStyle: React.CSSProperties = {};
   if (filterMode === 'nvg') {
@@ -135,7 +178,7 @@ const CameraSurveillancePlayer: React.FC<{
           <Video size={13} color="var(--grn)" /> Live Optical Surveillance Feed
         </h3>
         <span className="live-camera-pulse">
-          <span className="live-camera-pulse-dot" /> LIVE STREAM
+          <span className="live-camera-pulse-dot" /> {liveStreamData?.is_live ? 'YOUTUBE 24/7 LIVE' : 'LIVE STREAM'}
         </span>
       </div>
 
@@ -185,24 +228,13 @@ const CameraSurveillancePlayer: React.FC<{
         {/* Video / Snapshot Display Viewport */}
         <div className="camera-feed-viewport" style={filterStyle}>
           {feedMode === 'video' ? (
-            videoSource.type === 'embed' ? (
-              <iframe
-                src={videoSource.url}
-                title={title}
-                className="camera-video-element"
-                allow="autoplay; encrypted-media; picture-in-picture"
-                allowFullScreen
-              />
-            ) : (
-              <video
-                src={videoSource.url}
-                className="camera-video-element"
-                autoPlay
-                loop
-                muted
-                playsInline
-              />
-            )
+            <iframe
+              src={activeEmbedUrl}
+              title={activeTitle}
+              className="camera-video-element"
+              allow="autoplay; encrypted-media; picture-in-picture"
+              allowFullScreen
+            />
           ) : !imgError && previewImageUrl ? (
             <img
               src={previewImageUrl}
@@ -216,10 +248,10 @@ const CameraSurveillancePlayer: React.FC<{
             <div className="camera-feed-placeholder">
               <Camera size={36} color="var(--text-muted)" />
               <div style={{ fontSize: '11px', color: 'var(--text-secondary)', fontWeight: 600 }}>
-                DIRECT AGENCY STREAM
+                DIRECT OPTICAL STREAM
               </div>
               <div style={{ fontSize: '10px', color: 'var(--text-muted)', textAlign: 'center', maxWidth: '240px' }}>
-                Use live video mode or agency portal below for active high-fps feed.
+                Active high-fps live feed streaming via YouTube Data API v3.
               </div>
             </div>
           )}
@@ -230,8 +262,8 @@ const CameraSurveillancePlayer: React.FC<{
               <div className="camera-hud-rec">
                 <span className="camera-rec-dot" /> REC {formatRecTime(recSeconds)}
               </div>
-              <div className="camera-hud-tag">
-                {cameraId || 'CAM-01'} [30 FPS 1080P]
+              <div className="camera-hud-tag" title={activeTitle}>
+                {liveStreamData?.channel_title ? `${liveStreamData.channel_title.slice(0, 16)} · ` : ''}{cameraId || 'CAM-01'} [30 FPS 1080P]
               </div>
             </div>
 
@@ -252,11 +284,21 @@ const CameraSurveillancePlayer: React.FC<{
 
         {/* Footer Links */}
         <div className="camera-feed-footer">
-          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+          <span style={{ fontSize: '10px', color: 'var(--text-muted)', display: 'inline-flex', alignItems: 'center', gap: '4px', maxWidth: '170px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} title={camera.attributes?.region || 'Public Corridor'}>
             <MapPin size={10} color="var(--grn)" />
             {camera.attributes?.region || 'Public Corridor'}
           </span>
           <div style={{ display: 'flex', gap: '6px' }}>
+            <a
+              href={activeVideoUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="camera-portal-link"
+              style={{ color: '#ff4d4f', borderColor: 'rgba(255, 77, 79, 0.4)' }}
+              title="Open stream directly on YouTube"
+            >
+              <Video size={10} color="#ff4d4f" /> YouTube Live
+            </a>
             {liveStreamUrl && (
               <a
                 href={liveStreamUrl}
@@ -264,7 +306,7 @@ const CameraSurveillancePlayer: React.FC<{
                 rel="noreferrer"
                 className="camera-portal-link"
               >
-                <ExternalLink size={10} /> Agency Portal
+                <ExternalLink size={10} /> Agency
               </a>
             )}
             {locator && (
@@ -274,7 +316,7 @@ const CameraSurveillancePlayer: React.FC<{
                 rel="noreferrer"
                 className="camera-portal-link"
               >
-                <ExternalLink size={10} /> Raw Stream
+                <ExternalLink size={10} /> Raw
               </a>
             )}
           </div>

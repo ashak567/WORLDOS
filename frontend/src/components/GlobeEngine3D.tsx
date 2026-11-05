@@ -866,33 +866,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 7. Critical Infrastructure (Airports, Seaports, Spaceports)
-    if (layerMap.get('critical-infrastructure') && infrastructure.length > 0) {
-      for (const node of infrastructure) {
-        const position = Cartesian3.fromDegrees(node.longitude, node.latitude, Math.max(0, node.attributes?.elevation_m || 0));
-        const type = node.attributes?.node_type;
-        const icon =
-          type === 'spaceport'
-            ? SPACEPORT_ICON_ROSE
-            : type === 'airport'
-            ? AIRPORT_ICON_BLUE
-            : PORT_ICON_TEAL;
-
-        const ent = viewer.entities.add({
-          position,
-          billboard: {
-            image: icon,
-            width: 24,
-            height: 24,
-            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.0e7, 0.45),
-          },
-        });
-        (ent as any)._worldosType = 'infrastructure';
-        (ent as any)._worldosData = node;
-      }
-    }
-
-    // 8. Discovered Places, Stays, Dining & Nightlife (Google Places API New)
+    // 7. Discovered Places, Stays, Dining & Nightlife (Google Places API New)
     if (discoveredPlaces && discoveredPlaces.length > 0) {
       for (const place of discoveredPlaces) {
         const isSelected = selectedPlace?.id === place.id;

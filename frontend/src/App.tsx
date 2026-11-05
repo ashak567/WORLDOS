@@ -175,12 +175,6 @@ export default function App() {
         if (l.id === 'space-satellites') return { ...l, count: satellites.length };
         if (l.id === 'surveillance-cameras') return { ...l, count: cameras.length };
         if (l.id === 'thermal-fires') return { ...l, count: thermalEvents.length };
-        if (l.id === 'critical-infrastructure') return { ...l, count: infrastructure.length };
-        if (l.id === 'anomalies') {
-          const anomCount = observations.filter((o) => o.is_anomaly).length;
-          return { ...l, count: anomCount };
-        }
-        if (l.id === 'system-alerts') return { ...l, count: alerts.length };
         return l;
       })
     );
@@ -195,7 +189,6 @@ export default function App() {
     satellites,
     cameras,
     thermalEvents,
-    infrastructure,
   ]);
 
   // Initial load of global geometries and multi-domain feeds

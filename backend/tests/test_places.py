@@ -12,8 +12,10 @@ from app.places import (
     _generate_fallback_youtube,
     search_places_nearby,
     search_youtube_tours,
+    search_youtube_live_cam,
     get_aerial_view_video,
 )
+from app.main import list_cameras, get_camera_live_stream_endpoint
 
 
 class PlacesServiceTests(unittest.TestCase):
@@ -64,6 +66,22 @@ class PlacesServiceTests(unittest.TestCase):
         self.assertTrue(len(tours) >= 1)
         self.assertIn("title", tours[0])
         self.assertIn("video_url", tours[0])
+
+    def test_search_youtube_live_cam(self) -> None:
+        live = search_youtube_live_cam("Shibuya Scramble Crossing Tokyo")
+        self.assertIn("video_id", live)
+        self.assertIn("embed_url", live)
+        self.assertIn("title", live)
+        self.assertTrue(live["embed_url"].startswith("https://www.youtube.com/embed/"))
+
+    def test_list_cameras_fallback(self) -> None:
+        cams = list_cameras(limit=50)
+        self.assertGreaterEqual(len(cams), 20)
+        self.assertIn("canonical_name", cams[0])
+        self.assertIn("longitude", cams[0])
+        self.assertIn("latitude", cams[0])
+        self.assertIn("attributes", cams[0])
+        self.assertEqual(cams[0]["truth_class"], "OBSERVED")
 
 
 if __name__ == "__main__":

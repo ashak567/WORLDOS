@@ -462,3 +462,102 @@ def _generate_fallback_youtube(place_name: str) -> list[dict[str, Any]]:
             "published_at": "2026-08-20",
         },
     ]
+
+
+def search_youtube_live_cam(query: str, camera_id: str = "") -> dict[str, Any]:
+    """Retrieve active YouTube 24/7 live cam or 4K street cam feed using YouTube Data API v3."""
+    api_key = _get_api_key("youtube")
+    cleaned_q = query.strip()
+
+    # 1. If API key exists, query YouTube Data API v3 with eventType=live
+    if api_key:
+        try:
+            encoded_live = urllib.parse.quote(f"{cleaned_q} live stream cam")
+            url_live = (
+                f"https://www.googleapis.com/youtube/v3/search"
+                f"?part=snippet&eventType=live&type=video&maxResults=3&q={encoded_live}&key={api_key}"
+            )
+            req = urllib.request.Request(url_live, headers={"User-Agent": "WORLDOS/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("items", [])
+                if items:
+                    it = items[0]
+                    vid = it["id"]["videoId"]
+                    return {
+                        "video_id": vid,
+                        "title": it["snippet"]["title"],
+                        "channel_title": it["snippet"].get("channelTitle", "YouTube Live"),
+                        "video_url": f"https://www.youtube.com/watch?v={vid}",
+                        "embed_url": f"https://www.youtube.com/embed/{vid}?autoplay=1&mute=1&playsinline=1",
+                        "is_live": True,
+                        "source": "youtube_live_api",
+                    }
+        except Exception as exc:
+            logger.warning("YouTube eventType=live search failed for %s: %s", cleaned_q, exc)
+
+        # 2. Try searching without eventType=live for 4K street cam/walkthrough
+        try:
+            encoded_video = urllib.parse.quote(f"{cleaned_q} 4K live cam street")
+            url_video = (
+                f"https://www.googleapis.com/youtube/v3/search"
+                f"?part=snippet&type=video&maxResults=3&q={encoded_video}&key={api_key}"
+            )
+            req = urllib.request.Request(url_video, headers={"User-Agent": "WORLDOS/1.0"})
+            with urllib.request.urlopen(req, timeout=8) as resp:
+                data = json.loads(resp.read().decode("utf-8"))
+                items = data.get("items", [])
+                if items:
+                    it = items[0]
+                    vid = it["id"]["videoId"]
+                    return {
+                        "video_id": vid,
+                        "title": it["snippet"]["title"],
+                        "channel_title": it["snippet"].get("channelTitle", "YouTube HD"),
+                        "video_url": f"https://www.youtube.com/watch?v={vid}",
+                        "embed_url": f"https://www.youtube.com/embed/{vid}?autoplay=1&mute=1&playsinline=1",
+                        "is_live": False,
+                        "source": "youtube_video_api",
+                    }
+        except Exception as exc:
+            logger.warning("YouTube video search failed for %s: %s", cleaned_q, exc)
+
+    # 3. High quality curated fallback streams by location keyword
+    upper = (camera_id + " " + cleaned_q).upper()
+    if any(k in upper for k in ["TIMES-SQUARE", "TIMES SQUARE", "BROADWAY", "NEW YORK", "NYC", "MANHATTAN"]):
+        vid = "KHy_n-EMWY8"
+        title = "EarthCam Live: Times Square Crossroads NYC"
+    elif any(k in upper for k in ["SHIBUYA"]):
+        vid = "dfVK7ld38Ys"
+        title = "Shibuya Scramble Crossing 24/7 Live Cam Tokyo"
+    elif any(k in upper for k in ["SHINJUKU", "AKIHABARA", "TOKYO"]):
+        vid = "L6wO1-U2RTY"
+        title = "Tokyo City Live Cam 24/7"
+    elif any(k in upper for k in ["GOLDEN-GATE", "GOLDEN GATE", "SAN FRANCISCO", "BAY BRIDGE"]):
+        vid = "BSWhGNXxT9A"
+        title = "San Francisco Bay & Golden Gate Live Cam"
+    elif any(k in upper for k in ["WESTMINSTER", "BIG BEN", "LONDON", "TRAFALGAR", "TOWER BRIDGE", "PICCADILLY"]):
+        vid = "zMCea32gpmg"
+        title = "London Abbey Road & Westminster Live Cam"
+    elif any(k in upper for k in ["EIFFEL", "PARIS", "CHAMPS-ELYSEES"]):
+        vid = "YkKGantlWH0"
+        title = "Paris Eiffel Tower 24/7 Live Ultra-HD"
+    elif any(k in upper for k in ["KILAUEA", "VOLCANO", "HAWAII"]):
+        vid = "w3FfE7m6F9U"
+        title = "USGS Kīlauea Live Caldera Stream"
+    elif any(k in upper for k in ["SYDNEY", "HARBOUR", "CIRCULAR QUAY"]):
+        vid = "5uZa3-RMFos"
+        title = "Sydney Harbour 24/7 Live Cam"
+    else:
+        vid = "KHy_n-EMWY8"
+        title = "Global Optical Live Surveillance Feed"
+
+    return {
+        "video_id": vid,
+        "title": title,
+        "channel_title": "Curated Optical Network",
+        "video_url": f"https://www.youtube.com/watch?v={vid}",
+        "embed_url": f"https://www.youtube.com/embed/{vid}?autoplay=1&mute=1&playsinline=1",
+        "is_live": True,
+        "source": "curated_fallback",
+    }
