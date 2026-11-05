@@ -249,26 +249,19 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
         viewer.imageryLayers.addImageryProvider(satImagery);
 
-        // High-resolution road and street network overlaid on satellite
+        // High-resolution road and street network overlaid on satellite (no API key required)
         const transOverlay = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
         });
         viewer.imageryLayers.addImageryProvider(transOverlay);
 
-        // World administrative boundaries and places
+        // World administrative boundaries and places (no API key required)
         const refOverlay = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
         });
         viewer.imageryLayers.addImageryProvider(refOverlay);
-
-        // CartoDB Voyager transparent labels for street names, points of interest, motels, dining, and shops
-        const cartoLabels = new UrlTemplateImageryProvider({
-          url: 'https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
-          maximumLevel: 19,
-        });
-        viewer.imageryLayers.addImageryProvider(cartoLabels);
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
         viewer.scene.requestRender();
@@ -276,20 +269,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
 
       if (mode === 'streets') {
-        // High-detail cartographic street map with roads, buildings, restaurants, motels, shops, and transit
+        // High-detail cartographic street map with roads, buildings, restaurants, motels, shops, and transit (no API key required)
         const streetBase = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 19,
           credit: 'Esri, OpenStreetMap, HERE, Garmin, USGS',
         });
         viewer.imageryLayers.addImageryProvider(streetBase);
-
-        // Overlay crisp CartoDB labels for maximum readability of local streets and POIs
-        const cartoLabels = new UrlTemplateImageryProvider({
-          url: 'https://a.basemaps.cartocdn.com/rastertiles/voyager_only_labels/{z}/{x}/{y}.png',
-          maximumLevel: 19,
-        });
-        viewer.imageryLayers.addImageryProvider(cartoLabels);
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#f8fafc');
         viewer.scene.requestRender();
