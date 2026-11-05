@@ -24,8 +24,6 @@ import {
   PlusCircle,
   CheckCircle,
   Loader2,
-  ChevronRight,
-  Maximize2,
 } from 'lucide-react';
 
 interface PlaceDiscoveryDeckProps {
@@ -143,107 +141,94 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
     }, 2500);
   };
 
-  const categories: { key: PlaceCategory; label: string; icon: React.ReactNode; color: string }[] = [
-    { key: 'stays', label: 'Stays & Luxury', icon: <Building2 className="w-4 h-4" />, color: 'text-amber-400 border-amber-500/40' },
-    { key: 'food', label: 'Food & Dining', icon: <Utensils className="w-4 h-4" />, color: 'text-rose-400 border-rose-500/40' },
-    { key: 'scenery', label: 'Scenery & Views', icon: <Mountain className="w-4 h-4" />, color: 'text-emerald-400 border-emerald-500/40' },
-    { key: 'nightlife', label: 'Nightlife & Clubs', icon: <GlassWater className="w-4 h-4" />, color: 'text-purple-400 border-purple-500/40' },
+  const categories: { key: PlaceCategory; label: string; icon: React.ReactNode }[] = [
+    { key: 'stays', label: 'Stays & Luxury', icon: <Building2 size={13} /> },
+    { key: 'food', label: 'Food & Dining', icon: <Utensils size={13} /> },
+    { key: 'scenery', label: 'Scenery & Views', icon: <Mountain size={13} /> },
+    { key: 'nightlife', label: 'Nightlife & Bars', icon: <GlassWater size={13} /> },
   ];
 
   if (!isOpen) {
-    return (
-      <button
-        onClick={onToggle}
-        className="fixed bottom-6 right-6 z-40 flex items-center gap-2.5 px-4 py-2.5 bg-slate-900/90 hover:bg-slate-800 border border-amber-500/40 text-amber-300 rounded-full shadow-2xl backdrop-blur-md transition-all hover:scale-105 active:scale-95 text-xs font-semibold tracking-wider uppercase"
-      >
-        <Building2 className="w-4 h-4 text-amber-400 animate-pulse" />
-        <span>Explore Stays & Places</span>
-      </button>
-    );
+    return null;
   }
 
   return (
     <>
-      <div className="fixed bottom-6 right-6 z-40 w-96 max-h-[82vh] bg-slate-950/95 border border-slate-800 rounded-2xl shadow-2xl backdrop-blur-xl flex flex-col overflow-hidden text-slate-100 font-sans transition-all animate-in fade-in slide-in-from-bottom-4">
+      <aside className="places-deck" aria-label="Places & Stays Engine">
         {/* Header */}
-        <div className="p-4 border-b border-slate-800/80 bg-gradient-to-r from-slate-900 via-slate-900/90 to-slate-950 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            <div className="p-2 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-400">
-              <Building2 className="w-4 h-4" />
+        <div className="places-deck-header">
+          <div className="places-deck-title-group">
+            <div className="places-deck-icon-badge">
+              <Building2 size={16} />
             </div>
             <div>
-              <h3 className="text-sm font-bold tracking-tight text-slate-100">Places & Stays Engine</h3>
-              <p className="text-[11px] text-slate-400">Google Places (New) · 3D Photorealistic Mesh</p>
+              <h3 className="places-deck-title">PLACES &amp; STAYS</h3>
+              <p className="places-deck-subtitle">Google Places (New) · 3D Mesh</p>
             </div>
           </div>
           <button
             onClick={onToggle}
-            className="p-1.5 text-slate-400 hover:text-slate-100 hover:bg-slate-800/60 rounded-lg transition-colors"
+            className="places-deck-close-btn"
+            title="Close Places Deck"
+            aria-label="Close"
           >
-            <X className="w-4 h-4" />
+            <X size={16} />
           </button>
         </div>
 
         {/* Category Tabs */}
-        <div className="p-2.5 grid grid-cols-2 gap-1.5 bg-slate-900/40 border-b border-slate-800/50">
+        <div className="places-deck-categories">
           {categories.map((cat) => {
             const isActive = activeCategory === cat.key;
             return (
               <button
                 key={cat.key}
                 onClick={() => setActiveCategory(cat.key)}
-                className={`flex items-center gap-2 px-3 py-2 rounded-lg text-xs font-medium transition-all ${
-                  isActive
-                    ? `bg-slate-800/90 ${cat.color} border shadow-sm`
-                    : 'text-slate-400 hover:text-slate-200 hover:bg-slate-900/60 border border-transparent'
-                }`}
+                className={`places-cat-btn ${isActive ? 'active' : ''}`}
               >
                 {cat.icon}
-                <span className="truncate">{cat.label}</span>
+                <span>{cat.label}</span>
               </button>
             );
           })}
         </div>
 
         {/* Search Bar */}
-        <div className="p-3 border-b border-slate-800/40 bg-slate-900/20">
-          <div className="relative flex items-center">
-            <Search className="w-3.5 h-3.5 absolute left-3 text-slate-500" />
+        <div className="places-deck-search">
+          <div className="places-search-input-wrap">
+            <Search size={13} className="places-search-icon" />
             <input
               type="text"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               placeholder={`Search ${activeCategory} (e.g. Michelin, boutique, rooftop)...`}
-              className="w-full bg-slate-900/80 border border-slate-800 text-slate-200 text-xs rounded-xl pl-9 pr-3 py-2 focus:outline-none focus:border-amber-500/60 focus:ring-1 focus:ring-amber-500/30 placeholder:text-slate-600 transition-all"
+              className="places-search-input"
             />
             {searchQuery && (
-              <button
-                onClick={() => setSearchQuery('')}
-                className="absolute right-2.5 text-slate-500 hover:text-slate-300"
-              >
-                <X className="w-3 h-3" />
+              <button onClick={() => setSearchQuery('')} className="places-search-clear">
+                <X size={12} />
               </button>
             )}
           </div>
         </div>
 
-        {/* Places List (Google Maps-style Mini-Blocks) */}
-        <div className="flex-1 overflow-y-auto p-3 space-y-3.5 scrollbar-thin scrollbar-thumb-slate-800 scrollbar-track-transparent">
+        {/* Places Cards List */}
+        <div className="places-deck-list">
           {loading && (
-            <div className="flex flex-col items-center justify-center py-12 text-slate-500 text-xs">
-              <Loader2 className="w-6 h-6 animate-spin text-amber-500 mb-2" />
-              <span>Scanning metropolitan coordinates...</span>
+            <div style={{ textAlign: 'center', padding: '36px 0', color: 'var(--text-muted)', fontSize: '11px' }}>
+              <Loader2 size={24} style={{ animation: 'spin 1s linear infinite', color: '#eab308', margin: '0 auto 8px auto', display: 'block' }} />
+              <span>Scanning coordinates for {activeCategory}...</span>
             </div>
           )}
 
           {!loading && error && (
-            <div className="p-4 rounded-xl bg-rose-950/20 border border-rose-900/40 text-rose-300 text-xs text-center">
+            <div style={{ padding: '12px', background: 'rgba(239, 68, 68, 0.1)', border: '1px solid rgba(239, 68, 68, 0.3)', borderRadius: '4px', color: '#fca5a5', fontSize: '11px', textAlign: 'center' }}>
               {error}
             </div>
           )}
 
           {!loading && !error && places.length === 0 && (
-            <div className="text-center py-10 text-slate-500 text-xs">
+            <div style={{ textAlign: 'center', padding: '36px 0', color: 'var(--text-muted)', fontSize: '11px' }}>
               No matching locations found within current area.
             </div>
           )}
@@ -258,154 +243,142 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
                 <div
                   key={place.id}
                   onClick={() => onSelectPlace?.(place)}
-                  className={`group rounded-xl border transition-all cursor-pointer overflow-hidden ${
-                    isSelected
-                      ? 'bg-slate-900/90 border-amber-500/80 ring-2 ring-amber-500/20 shadow-lg shadow-amber-500/10'
-                      : 'bg-slate-900/40 hover:bg-slate-900/70 border-slate-800/80 hover:border-slate-700'
-                  }`}
+                  className={`places-card ${isSelected ? 'selected' : ''}`}
                 >
-                  {/* Photo Thumbnail Banner */}
-                  <div className="relative h-32 w-full overflow-hidden bg-slate-950">
-                    <img
-                      src={heroPhoto}
-                      alt={place.name}
-                      className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-500"
-                      loading="lazy"
-                    />
-                    <div className="absolute inset-0 bg-gradient-to-t from-slate-950 via-slate-950/20 to-transparent" />
-
-                    {/* Price Pill & Category Badge */}
-                    <div className="absolute top-2.5 left-2.5 flex items-center gap-1.5">
-                      <span className="px-2 py-0.5 rounded-full bg-slate-950/80 backdrop-blur-md border border-slate-800 text-[10px] font-semibold text-emerald-400">
+                  <div className="places-card-img-wrap">
+                    <img src={heroPhoto} alt={place.name} className="places-card-img" loading="lazy" />
+                    <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 6 }}>
+                      <span style={{ background: 'rgba(5, 8, 12, 0.85)', padding: '2px 8px', borderRadius: 4, fontSize: '10px', color: '#38bdf8', fontWeight: 700, border: '1px solid rgba(255,255,255,0.1)' }}>
                         {place.price_level || '$$$'} · {place.price_display || 'Upscale'}
                       </span>
                     </div>
 
-                    {/* Star Rating Badge */}
-                    <div className="absolute top-2.5 right-2.5 flex items-center gap-1 px-2 py-0.5 rounded-full bg-slate-950/85 backdrop-blur-md border border-amber-500/40 text-[11px] font-bold text-amber-300">
-                      <Star className="w-3 h-3 fill-amber-400 text-amber-400" />
-                      <span>{place.rating ? place.rating.toFixed(1) : '4.8'}</span>
-                      <span className="text-[9px] text-slate-400 font-normal">
-                        ({place.user_rating_count ? place.user_rating_count.toLocaleString() : '1k+'})
+                    <div style={{ position: 'absolute', top: 8, right: 8 }}>
+                      <span className="places-card-rating" style={{ background: 'rgba(5, 8, 12, 0.85)', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                        <Star size={11} fill="#eab308" color="#eab308" />
+                        <span>{place.rating ? place.rating.toFixed(1) : '4.8'}</span>
+                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                          ({place.user_rating_count ? place.user_rating_count.toLocaleString() : '350+'})
+                        </span>
                       </span>
                     </div>
 
-                    {/* Venue Title Overlay */}
-                    <div className="absolute bottom-2 left-3 right-3">
-                      <h4 className="text-sm font-bold text-white tracking-tight truncate drop-shadow-md">
-                        {place.name}
-                      </h4>
-                      <p className="text-[11px] text-slate-300 flex items-center gap-1 truncate">
-                        <MapPin className="w-2.5 h-2.5 text-slate-400 shrink-0" />
-                        <span className="truncate">{place.formatted_address}</span>
-                      </p>
+                    <div style={{ position: 'absolute', bottom: 8, left: 10, right: 10, textShadow: '0 2px 8px rgba(0,0,0,0.9)' }}>
+                      <div className="places-card-name" style={{ color: '#fff', fontSize: '13px' }}>{place.name}</div>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.8)', fontSize: '10px' }}>
+                        <MapPin size={10} color="#eab308" />
+                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{place.formatted_address}</span>
+                      </div>
                     </div>
                   </div>
 
-                  {/* Summary & Actions */}
-                  <div className="p-3 space-y-2.5">
-                    <p className="text-[11px] text-slate-400 line-clamp-2 leading-relaxed">
+                  <div className="places-card-body">
+                    <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4, margin: 0, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
                       {place.summary}
                     </p>
 
-                    {/* Action Bar */}
-                    <div className="grid grid-cols-3 gap-1.5 pt-1 border-t border-slate-800/60">
-                      {/* Fly To 3D */}
+                    <div className="places-card-actions">
                       <button
+                        className="places-card-btn primary"
                         onClick={(e) => {
                           e.stopPropagation();
                           onFlyToPlace(place.longitude, place.latitude);
                           onSelectPlace?.(place);
                         }}
-                        className="flex items-center justify-center gap-1 py-1.5 px-2 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 text-amber-300 rounded-lg text-[10px] font-medium transition-colors"
-                        title="Fly camera to 3D photorealistic buildings"
+                        title="Fly camera to location"
                       >
-                        <Compass className="w-3 h-3 text-amber-400" />
-                        <span>3D Fly</span>
+                        <Compass size={11} />
+                        <span>Fly 3D</span>
                       </button>
 
-                      {/* YouTube Tours */}
                       <button
+                        className="places-card-btn"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleOpenYouTube(place);
                         }}
-                        className="flex items-center justify-center gap-1 py-1.5 px-2 bg-rose-500/10 hover:bg-rose-500/20 border border-rose-500/30 text-rose-300 rounded-lg text-[10px] font-medium transition-colors"
                         title="Watch 4K room tours and walking vlogs"
                       >
-                        <Video className="w-3 h-3 text-rose-400" />
+                        <Video size={11} color="#f43f5e" />
                         <span>Vlogs</span>
                       </button>
 
-                      {/* Add to Itinerary */}
                       <button
+                        className="places-card-btn"
                         onClick={(e) => {
                           e.stopPropagation();
                           handleAddToRoute(place);
                         }}
-                        className={`flex items-center justify-center gap-1 py-1.5 px-2 rounded-lg text-[10px] font-medium transition-all ${
-                          isAdded
-                            ? 'bg-emerald-500/20 border border-emerald-500/40 text-emerald-300'
-                            : 'bg-slate-800/60 hover:bg-slate-800 border border-slate-700/60 text-slate-300'
-                        }`}
-                        title="Add to active travel route planner"
+                        title="Add to multi-modal route planner"
                       >
                         {isAdded ? (
                           <>
-                            <CheckCircle className="w-3 h-3 text-emerald-400" />
+                            <CheckCircle size={11} color="#10b981" />
                             <span>Added</span>
                           </>
                         ) : (
                           <>
-                            <PlusCircle className="w-3 h-3 text-slate-400" />
+                            <PlusCircle size={11} />
                             <span>Route</span>
                           </>
                         )}
                       </button>
+
+                      {place.google_maps_url && (
+                        <a
+                          href={place.google_maps_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="places-card-btn"
+                          onClick={(e) => e.stopPropagation()}
+                          title="Open in Google Maps"
+                        >
+                          <ExternalLink size={10} />
+                          <span>Maps</span>
+                        </a>
+                      )}
                     </div>
                   </div>
                 </div>
               );
             })}
         </div>
-      </div>
+      </aside>
 
       {/* YouTube Multimodal Video Modal */}
       {activeYouTubePlace && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col max-h-[90vh]">
-            {/* Modal Header */}
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-rose-500/10 border border-rose-500/30 text-rose-400">
-                  <Play className="w-4 h-4 fill-rose-400" />
+        <div className="places-modal-backdrop" onClick={() => setActiveYouTubePlace(null)}>
+          <div className="places-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="places-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ padding: 6, background: 'rgba(244, 63, 94, 0.15)', borderRadius: 4, color: '#f43f5e', display: 'flex' }}>
+                  <Play size={14} fill="#f43f5e" />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white tracking-tight">
+                  <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-brand)' }}>
                     {activeYouTubePlace.name} · Video Tours
                   </h3>
-                  <p className="text-[11px] text-slate-400">Powered by YouTube Data API v3</p>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Powered by YouTube Data API v3</span>
                 </div>
               </div>
               <button
                 onClick={() => setActiveYouTubePlace(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 }}
               >
-                <X className="w-4 h-4" />
+                <X size={16} />
               </button>
             </div>
 
-            {/* Video Player */}
-            <div className="relative aspect-video w-full bg-black">
+            <div className="places-modal-body">
               {loadingYouTube && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-xs">
-                  <Loader2 className="w-8 h-8 animate-spin text-rose-500 mb-2" />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '11px' }}>
+                  <Loader2 size={28} style={{ animation: 'spin 1s linear infinite', color: '#f43f5e', marginBottom: 8 }} />
                   <span>Loading 4K walkthroughs...</span>
                 </div>
               )}
               {!loadingYouTube && selectedVideoId && (
                 <iframe
-                  className="w-full h-full"
+                  style={{ width: '100%', height: '100%', border: 'none' }}
                   src={`https://www.youtube.com/embed/${selectedVideoId}?autoplay=1`}
                   title="YouTube video player"
                   allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
@@ -413,33 +386,36 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
                 />
               )}
               {!loadingYouTube && !selectedVideoId && (
-                <div className="flex items-center justify-center h-full text-slate-500 text-xs">
+                <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '11px' }}>
                   No video streams available for this venue.
                 </div>
               )}
             </div>
 
-            {/* Alternative Tours List */}
             {youTubeTours.length > 1 && (
-              <div className="p-3 bg-slate-950/40 border-t border-slate-800/80 overflow-x-auto flex gap-2 scrollbar-none">
+              <div style={{ padding: '8px 12px', background: 'rgba(5, 8, 12, 0.7)', borderTop: '1px solid var(--border-subtle)', display: 'flex', gap: 8, overflowX: 'auto' }}>
                 {youTubeTours.map((tour) => (
                   <button
                     key={tour.video_id}
                     onClick={() => setSelectedVideoId(tour.video_id)}
-                    className={`flex items-center gap-2 p-2 rounded-xl text-left border shrink-0 transition-all ${
-                      selectedVideoId === tour.video_id
-                        ? 'bg-rose-950/30 border-rose-500/50 text-white'
-                        : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-slate-200'
-                    }`}
+                    style={{
+                      display: 'flex',
+                      alignItems: 'center',
+                      gap: 8,
+                      padding: '6px 8px',
+                      background: selectedVideoId === tour.video_id ? 'rgba(244, 63, 94, 0.2)' : 'rgba(16, 26, 38, 0.6)',
+                      border: selectedVideoId === tour.video_id ? '1px solid #f43f5e' : '1px solid var(--border-subtle)',
+                      borderRadius: 4,
+                      color: 'var(--text-primary)',
+                      cursor: 'pointer',
+                      flexShrink: 0,
+                      textAlign: 'left',
+                    }}
                   >
-                    <img
-                      src={tour.thumbnail_url}
-                      alt={tour.title}
-                      className="w-14 h-9 object-cover rounded-md"
-                    />
-                    <div className="max-w-[180px]">
-                      <p className="text-[11px] font-medium line-clamp-1">{tour.title}</p>
-                      <p className="text-[9px] text-slate-500 truncate">{tour.channel_title}</p>
+                    <img src={tour.thumbnail_url} alt={tour.title} style={{ width: 48, height: 32, objectFit: 'cover', borderRadius: 2 }} />
+                    <div style={{ maxWidth: 160 }}>
+                      <div style={{ fontSize: '10px', fontWeight: 600, whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{tour.title}</div>
+                      <div style={{ fontSize: '9px', color: 'var(--text-muted)' }}>{tour.channel_title}</div>
                     </div>
                   </button>
                 ))}
@@ -449,50 +425,44 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
         </div>
       )}
 
-      {/* Aerial View Drone Video Modal */}
+      {/* Aerial View Modal */}
       {activeAerialPlace && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-md p-4 animate-in fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl w-full max-w-2xl overflow-hidden shadow-2xl flex flex-col">
-            <div className="p-4 border-b border-slate-800 flex items-center justify-between bg-slate-950/60">
-              <div className="flex items-center gap-2.5">
-                <div className="p-2 rounded-lg bg-sky-500/10 border border-sky-500/30 text-sky-400">
-                  <Compass className="w-4 h-4" />
+        <div className="places-modal-backdrop" onClick={() => setActiveAerialPlace(null)}>
+          <div className="places-modal-content" onClick={(e) => e.stopPropagation()}>
+            <div className="places-modal-header">
+              <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                <div style={{ padding: 6, background: 'rgba(56, 189, 248, 0.15)', borderRadius: 4, color: '#38bdf8', display: 'flex' }}>
+                  <Compass size={14} />
                 </div>
                 <div>
-                  <h3 className="text-sm font-bold text-white tracking-tight">
+                  <h3 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: 'var(--text-primary)', fontFamily: 'var(--font-brand)' }}>
                     {activeAerialPlace.name} · 3D Aerial Flyover
                   </h3>
-                  <p className="text-[11px] text-slate-400">Google Aerial View API · High Altitude Drone Cinematic</p>
+                  <span style={{ fontSize: '10px', color: 'var(--text-muted)' }}>Google Aerial View API</span>
                 </div>
               </div>
               <button
                 onClick={() => setActiveAerialPlace(null)}
-                className="p-1.5 text-slate-400 hover:text-white rounded-lg hover:bg-slate-800"
+                style={{ background: 'transparent', border: 'none', color: 'var(--text-muted)', cursor: 'pointer', padding: 4 }}
               >
-                <X className="w-4 h-4" />
+                <X size={16} />
               </button>
             </div>
 
-            <div className="relative aspect-video w-full bg-black">
+            <div className="places-modal-body">
               {loadingAerial && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-slate-400 text-xs">
-                  <Loader2 className="w-8 h-8 animate-spin text-sky-500 mb-2" />
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', color: 'var(--text-muted)', fontSize: '11px' }}>
+                  <Loader2 size={28} style={{ animation: 'spin 1s linear infinite', color: '#38bdf8', marginBottom: 8 }} />
                   <span>Fetching 3D cinematic video...</span>
                 </div>
               )}
               {!loadingAerial && aerialVideo?.video_url && (
-                <video
-                  src={aerialVideo.video_url}
-                  autoPlay
-                  controls
-                  loop
-                  className="w-full h-full object-contain"
-                />
+                <video src={aerialVideo.video_url} autoPlay controls loop style={{ width: '100%', height: '100%', objectFit: 'contain' }} />
               )}
               {!loadingAerial && !aerialVideo?.video_url && (
-                <div className="flex flex-col items-center justify-center h-full p-6 text-center text-slate-400 text-xs">
-                  <p>Aerial View cinematic video is processing or currently exclusive to major metropolitan landmarks.</p>
-                  <p className="text-[10px] text-slate-500 mt-2">Use "3D Fly" to explore Google Photorealistic 3D Tiles directly on the globe.</p>
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', height: '100%', padding: 24, textAlign: 'center', color: 'var(--text-secondary)', fontSize: '11px' }}>
+                  <p style={{ margin: 0 }}>Aerial View cinematic drone video is currently in generation or exclusive to major landmarks.</p>
+                  <p style={{ margin: '8px 0 0 0', fontSize: '10px', color: 'var(--text-muted)' }}>Use "Fly 3D" to view this building in Google Photorealistic 3D on the globe.</p>
                 </div>
               )}
             </div>
@@ -502,4 +472,3 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
     </>
   );
 };
-
