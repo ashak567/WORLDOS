@@ -19,6 +19,7 @@ from pydantic import BaseModel, Field
 
 from .ingestion.flight_routes import (
     WORLD_AIRPORTS,
+    AIRPORTS_BY_IATA,
     Airport,
     haversine_distance_km,
 )
@@ -773,14 +774,28 @@ def _interpolate_geodesic_3d(
     return pts
 
 
-def resolve_destination_airport(destination_name: str) -> Airport:
-    """Find the most representative airport for a world destination name."""
-    clean = destination_name.strip().lower()
+def resolve_airport(query: str) -> Airport | None:
+    """Resolve an airport from user input (IATA code, ICAO code, city, or airport name)."""
+    if not query or not isinstance(query, str):
+        return None
+    clean = query.strip()
+    if not clean:
+        return None
+    upper = clean.upper()
+    lower = clean.lower()
 
-    # Exact or common aliases
+    # 1. Exact ICAO code (4 letters)
+    if upper in WORLD_AIRPORTS:
+        return WORLD_AIRPORTS[upper]
+
+    # 2. Exact IATA code (3 letters)
+    if upper in AIRPORTS_BY_IATA:
+        return AIRPORTS_BY_IATA[upper]
+
+    # 3. Common city aliases
     alias_map = {
         "tokyo": "RJTT",
-        "kyoto": "RJBB",  # Kansai serves Kyoto
+        "kyoto": "RJBB",
         "osaka": "RJBB",
         "new york": "KJFK",
         "nyc": "KJFK",
@@ -807,84 +822,530 @@ def resolve_destination_airport(destination_name: str) -> Airport:
         "doha": "OTHH",
         "cairo": "HECA",
         "delhi": "VIDP",
+        "new delhi": "VIDP",
         "mumbai": "VABB",
+        "bombay": "VABB",
         "bengaluru": "VOBL",
+        "bangalore": "VOBL",
+        "chennai": "VOMM",
+        "madras": "VOMM",
         "toronto": "CYYZ",
         "vancouver": "CYVR",
+        "zurich": "LSZH",
+        "geneva": "LSGG",
+        "madrid": "LEMD",
+        "barcelona": "LEBL",
+        "munich": "EDDM",
+        "istanbul": "LTFM",
+        "beijing": "ZBAA",
+        "shanghai": "ZSPD",
+        "guangzhou": "ZGGG",
+        "taipei": "RCTP",
+        "sao paulo": "SBGR",
+        "buenos aires": "SAEZ",
+        "johannesburg": "FAOR",
+        "cape town": "FACT",
+        "auckland": "NZAA",
     }
-
-    for key, icao in alias_map.items():
-        if key in clean or clean in key:
+    for alias, icao in alias_map.items():
+        if alias == lower or (len(clean) >= 4 and alias in lower) or (len(clean) >= 4 and lower in alias):
             if icao in WORLD_AIRPORTS:
                 return WORLD_AIRPORTS[icao]
 
-    # Search airport names / cities in WORLD_AIRPORTS
+    # 4. Search in WORLD_AIRPORTS (exact city or IATA match first)
     for code, apt in WORLD_AIRPORTS.items():
-        if (
-            clean in apt.city.lower()
-            or clean in apt.name.lower()
-            or clean == apt.iata.lower()
-            or clean == apt.country.lower()
-        ):
+        if lower == apt.city.lower() or lower == apt.iata.lower():
             return apt
 
-    # Default fallback: Tokyo Haneda
+    # Substring in city, name, or country
+    for code, apt in WORLD_AIRPORTS.items():
+        if lower in apt.city.lower() or lower in apt.name.lower() or lower in apt.country.lower():
+            return apt
+
+    return None
+
+
+def resolve_destination_airport(destination_name: str) -> Airport:
+    """Find the most representative airport for a world destination name."""
+    apt = resolve_airport(destination_name)
+    if apt:
+        return apt
     return WORLD_AIRPORTS["RJTT"]
 
 
+def list_airports(query: str = "", limit: int = 40) -> list[AirportSummary]:
+    """Search and list airports by code, city, name, or country."""
+    clean = query.strip().lower() if query and isinstance(query, str) else ""
+    lim = limit if isinstance(limit, int) else 40
+    results: list[AirportSummary] = []
+
+    priority_codes = [
+        "KJFK", "EGLL", "RJTT", "LFPG", "OMDB", "VIDP", "WSSS", "YSSY", "EDDF", "LIRF",
+        "VABB", "KSFO", "KLAX", "KORD", "EHAM", "RKSI", "VHHH", "VTBS", "CYYZ", "OTHH",
+        "LEMD", "LSZH", "SBGR", "FAOR", "HECA", "VOBL", "CYVR", "NZAA", "RJBB", "ZBAA"
+    ]
+
+    if not clean:
+        for code in priority_codes:
+            if code in WORLD_AIRPORTS:
+                apt = WORLD_AIRPORTS[code]
+                results.append(
+                    AirportSummary(
+                        icao=apt.icao,
+                        iata=apt.iata,
+                        name=apt.name,
+                        city=apt.city,
+                        country=apt.country,
+                        latitude=apt.latitude,
+                        longitude=apt.longitude,
+                    )
+                )
+        return results[:lim]
+
+    matches: list[tuple[int, Airport]] = []
+    for code, apt in WORLD_AIRPORTS.items():
+        score = 0
+        if clean == apt.iata.lower():
+            score = 100
+        elif clean == apt.icao.lower():
+            score = 90
+        elif clean == apt.city.lower():
+            score = 80
+        elif apt.city.lower().startswith(clean):
+            score = 70
+        elif clean in apt.city.lower():
+            score = 60
+        elif clean in apt.name.lower():
+            score = 50
+        elif clean in apt.country.lower():
+            score = 40
+
+        if score > 0:
+            matches.append((score, apt))
+
+    matches.sort(key=lambda x: -x[0])
+    for _, apt in matches[:lim]:
+        results.append(
+            AirportSummary(
+                icao=apt.icao,
+                iata=apt.iata,
+                name=apt.name,
+                city=apt.city,
+                country=apt.country,
+                latitude=apt.latitude,
+                longitude=apt.longitude,
+            )
+        )
+    return results
+
+
+# Country flagship carriers for realistic flight route generation
+COUNTRY_CARRIERS: dict[str, tuple[str, str, str, str]] = {
+    # country_name: (airline, icao_code, flight_prefix, aircraft_model)
+    "United States": ("American Airlines", "AAL", "AA", "Boeing 777-300ER"),
+    "United Kingdom": ("British Airways", "BAW", "BA", "Boeing 787-9 Dreamliner"),
+    "France": ("Air France", "AFR", "AF", "Airbus A350-900"),
+    "Germany": ("Lufthansa", "DLH", "LH", "Boeing 747-8 Intercontinental"),
+    "Japan": ("All Nippon Airways", "ANA", "NH", "Boeing 787-9 Dreamliner"),
+    "India": ("Air India", "AIC", "AI", "Boeing 787-8 Dreamliner"),
+    "United Arab Emirates": ("Emirates", "UAE", "EK", "Airbus A380-800"),
+    "Singapore": ("Singapore Airlines", "SIA", "SQ", "Airbus A350-900"),
+    "Australia": ("Qantas", "QFA", "QF", "Boeing 787-9 Dreamliner"),
+    "Canada": ("Air Canada", "ACA", "AC", "Boeing 777-200LR"),
+    "South Korea": ("Korean Air", "KAL", "KE", "Airbus A330-300"),
+    "China": ("Air China", "CCA", "CA", "Boeing 777-300ER"),
+    "Hong Kong": ("Cathay Pacific", "CPA", "CX", "Airbus A350-1000"),
+    "Qatar": ("Qatar Airways", "QTR", "QR", "Airbus A350-1000"),
+    "Italy": ("ITA Airways", "ITY", "AZ", "Airbus A350-900"),
+    "Netherlands": ("KLM Royal Dutch Airlines", "KLM", "KL", "Boeing 787-10 Dreamliner"),
+    "Switzerland": ("SWISS", "SWR", "LX", "Boeing 777-300ER"),
+    "Spain": ("Iberia", "IBE", "IB", "Airbus A350-900"),
+    "Turkey": ("Turkish Airlines", "THY", "TK", "Boeing 787-9 Dreamliner"),
+    "Thailand": ("Thai Airways", "THA", "TG", "Airbus A350-900"),
+    "Malaysia": ("Malaysia Airlines", "MAS", "MH", "Airbus A350-900"),
+    "Brazil": ("LATAM Airlines", "TAM", "LA", "Boeing 777-300ER"),
+    "South Africa": ("South African Airways", "SAA", "SA", "Airbus A330-300"),
+    "Egypt": ("EgyptAir", "MSR", "MS", "Boeing 787-9 Dreamliner"),
+    "New Zealand": ("Air New Zealand", "ANZ", "NZ", "Boeing 787-9 Dreamliner"),
+    "Mexico": ("Aeroméxico", "AMX", "AM", "Boeing 787-9 Dreamliner"),
+    "Saudi Arabia": ("Saudia", "SVA", "SV", "Boeing 787-10 Dreamliner"),
+}
+
+EXPANDED_WORLD_HUBS: list[tuple[str, str, str, str, str, str, str, str]] = [
+    # (orig_icao, c_name, c_code, c_city, airline, a_code, flt_num, ac)
+    ("KJFK", "United States", "US", "New York", "American Airlines", "AAL", "AA101", "Boeing 777-300ER"),
+    ("KSFO", "United States", "US", "San Francisco", "United Airlines", "UAL", "UA850", "Boeing 787-9 Dreamliner"),
+    ("KLAX", "United States", "US", "Los Angeles", "Delta Air Lines", "DAL", "DL120", "Airbus A350-900"),
+    ("KORD", "United States", "US", "Chicago", "United Airlines", "UAL", "UA881", "Boeing 777-200ER"),
+    ("KMIA", "United States", "US", "Miami", "American Airlines", "AAL", "AA904", "Boeing 787-8"),
+    ("CYYZ", "Canada", "CA", "Toronto", "Air Canada", "ACA", "AC85", "Boeing 787-9 Dreamliner"),
+    ("CYVR", "Canada", "CA", "Vancouver", "Air Canada", "ACA", "AC003", "Boeing 777-300ER"),
+    ("MMMX", "Mexico", "MX", "Mexico City", "Aeroméxico", "AMX", "AM058", "Boeing 787-9 Dreamliner"),
+    ("EGLL", "United Kingdom", "GB", "London", "British Airways", "BAW", "BA45", "Airbus A350-1000"),
+    ("EGKK", "United Kingdom", "GB", "London", "Virgin Atlantic", "VIR", "VS206", "Boeing 787-9 Dreamliner"),
+    ("LFPG", "France", "FR", "Paris", "Air France", "AFR", "AF180", "Boeing 777-300ER"),
+    ("EDDF", "Germany", "DE", "Frankfurt", "Lufthansa", "DLH", "LH500", "Boeing 747-8 Intercontinental"),
+    ("EDDM", "Germany", "DE", "Munich", "Lufthansa", "DLH", "LH714", "Airbus A350-900"),
+    ("EHAM", "Netherlands", "NL", "Amsterdam", "KLM", "KLM", "KL861", "Boeing 787-10 Dreamliner"),
+    ("LSZH", "Switzerland", "CH", "Zurich", "SWISS", "SWR", "LX160", "Boeing 777-300ER"),
+    ("LIRF", "Italy", "IT", "Rome", "ITA Airways", "ITY", "AZ790", "Airbus A350-900"),
+    ("LEMD", "Spain", "ES", "Madrid", "Iberia", "IBE", "IB6800", "Airbus A350-900"),
+    ("LTFM", "Turkey", "TR", "Istanbul", "Turkish Airlines", "THY", "TK050", "Boeing 787-9 Dreamliner"),
+    ("OMDB", "United Arab Emirates", "AE", "Dubai", "Emirates", "UAE", "EK404", "Airbus A380-800"),
+    ("OMAA", "United Arab Emirates", "AE", "Abu Dhabi", "Etihad Airways", "ETD", "EY878", "Boeing 787-9 Dreamliner"),
+    ("OTHH", "Qatar", "QA", "Doha", "Qatar Airways", "QTR", "QR812", "Airbus A350-1000"),
+    ("OERK", "Saudi Arabia", "SA", "Riyadh", "Saudia", "SVA", "SV182", "Boeing 787-10 Dreamliner"),
+    ("VIDP", "India", "IN", "Delhi", "Air India", "AIC", "AI306", "Boeing 787-8 Dreamliner"),
+    ("VABB", "India", "IN", "Mumbai", "Air India", "AIC", "AI101", "Boeing 777-300ER"),
+    ("VOBL", "India", "IN", "Bengaluru", "Virgin Atlantic", "VIR", "VS316", "Boeing 787-9 Dreamliner"),
+    ("WSSS", "Singapore", "SG", "Singapore", "Singapore Airlines", "SIA", "SQ220", "Airbus A350-900"),
+    ("VTBS", "Thailand", "TH", "Bangkok", "Thai Airways", "THA", "TG640", "Airbus A350-900"),
+    ("WMKK", "Malaysia", "MY", "Kuala Lumpur", "Malaysia Airlines", "MAS", "MH070", "Airbus A350-900"),
+    ("RJTT", "Japan", "JP", "Tokyo", "All Nippon Airways", "ANA", "NH11", "Boeing 787-9 Dreamliner"),
+    ("RJAA", "Japan", "JP", "Tokyo", "Japan Airlines", "JAL", "JL006", "Airbus A350-1000"),
+    ("RKSI", "South Korea", "KR", "Seoul", "Korean Air", "KAL", "KE901", "Airbus A330-300"),
+    ("VHHH", "Hong Kong", "HK", "Hong Kong", "Cathay Pacific", "CPA", "CX504", "Airbus A350-1000"),
+    ("ZBAA", "China", "CN", "Beijing", "Air China", "CCA", "CA925", "Boeing 777-300ER"),
+    ("ZSPD", "China", "CN", "Shanghai", "China Eastern", "CES", "MU523", "Boeing 777-300ER"),
+    ("YSSY", "Australia", "AU", "Sydney", "Qantas", "QFA", "QF61", "Boeing 787-9 Dreamliner"),
+    ("YMML", "Australia", "AU", "Melbourne", "Qantas", "QFA", "QF79", "Airbus A330-300"),
+    ("NZAA", "New Zealand", "NZ", "Auckland", "Air New Zealand", "ANZ", "NZ099", "Boeing 787-9 Dreamliner"),
+    ("FAOR", "South Africa", "ZA", "Johannesburg", "South African Airways", "SAA", "SA280", "Airbus A330-300"),
+    ("HECA", "Egypt", "EG", "Cairo", "EgyptAir", "MSR", "MS985", "Boeing 787-9 Dreamliner"),
+    ("SBGR", "Brazil", "BR", "São Paulo", "LATAM Airlines", "TAM", "LA8070", "Boeing 777-300ER"),
+    ("SAEZ", "Argentina", "AR", "Buenos Aires", "Aerolíneas Argentinas", "ARG", "AR1302", "Airbus A330-200"),
+]
+
+
+def _generate_custom_corridor_flights(
+    orig_apt: Airport, dest_apt: Airport
+) -> list[InboundFlightPlan]:
+    """Generate realistic flight plan options for a user-specified Origin -> Destination corridor."""
+    dist_km = haversine_distance_km(
+        orig_apt.latitude, orig_apt.longitude, dest_apt.latitude, dest_apt.longitude
+    )
+
+    # Base cruising speed ~880 km/h + 30 min climb/approach
+    direct_hours = round(max(0.8, (dist_km / 880.0) + 0.5), 1)
+    dh = int(direct_hours)
+    dm = int(round((direct_hours - dh) * 60))
+    direct_dur_str = f"{dh}h {dm}m"
+
+    waypoints_3d = _interpolate_geodesic_3d(
+        orig_apt.longitude, orig_apt.latitude, dest_apt.longitude, dest_apt.latitude, steps=30
+    )
+
+    # Origin carrier lookup
+    orig_carrier_info = COUNTRY_CARRIERS.get(
+        orig_apt.country, ("Global Airways", "GLO", "GL", "Boeing 787-9 Dreamliner")
+    )
+    # Destination carrier lookup
+    dest_carrier_info = COUNTRY_CARRIERS.get(
+        dest_apt.country, ("World Express", "WLD", "WE", "Airbus A350-900")
+    )
+
+    plans: list[InboundFlightPlan] = []
+
+    # 1. Origin Flag Carrier (Direct)
+    flt_num_1 = f"{orig_carrier_info[2]}{abs(hash(orig_apt.iata + dest_apt.iata)) % 800 + 101}"
+    plans.append(
+        InboundFlightPlan(
+            flight_id=f"{flt_num_1}-{orig_apt.iata}-{dest_apt.iata}",
+            airline=orig_carrier_info[0],
+            airline_code=orig_carrier_info[1],
+            flight_number=flt_num_1,
+            origin_country=orig_apt.country,
+            origin_country_code=orig_apt.country[:2].upper(),
+            origin_city=orig_apt.city,
+            origin_airport=AirportSummary(
+                icao=orig_apt.icao,
+                iata=orig_apt.iata,
+                name=orig_apt.name,
+                city=orig_apt.city,
+                country=orig_apt.country,
+                latitude=orig_apt.latitude,
+                longitude=orig_apt.longitude,
+            ),
+            destination_city=dest_apt.city,
+            destination_airport=AirportSummary(
+                icao=dest_apt.icao,
+                iata=dest_apt.iata,
+                name=dest_apt.name,
+                city=dest_apt.city,
+                country=dest_apt.country,
+                latitude=dest_apt.latitude,
+                longitude=dest_apt.longitude,
+            ),
+            aircraft_type=orig_carrier_info[3],
+            departure_time_schedule="Daily 20:30 Local -> Next Day Arrival",
+            duration_hours=direct_hours,
+            duration_formatted=direct_dur_str,
+            distance_km=round(dist_km, 1),
+            frequency="Daily Direct Flagship",
+            is_direct=True,
+            waypoints_3d=waypoints_3d,
+        )
+    )
+
+    # 2. Destination Flag Carrier (Direct if distinct, or secondary flight)
+    if dest_carrier_info[1] != orig_carrier_info[1]:
+        dest_airline, dest_icao, dest_pfx, dest_ac = dest_carrier_info
+    else:
+        dest_airline, dest_icao, dest_pfx, dest_ac = ("Star Alliance Partner", "STAR", "SK", "Boeing 777-300ER")
+
+    flt_num_2 = f"{dest_pfx}{abs(hash(dest_apt.iata + orig_apt.iata)) % 800 + 102}"
+    plans.append(
+        InboundFlightPlan(
+            flight_id=f"{flt_num_2}-{orig_apt.iata}-{dest_apt.iata}",
+            airline=dest_airline,
+            airline_code=dest_icao,
+            flight_number=flt_num_2,
+            origin_country=orig_apt.country,
+            origin_country_code=orig_apt.country[:2].upper(),
+            origin_city=orig_apt.city,
+            origin_airport=AirportSummary(
+                icao=orig_apt.icao,
+                iata=orig_apt.iata,
+                name=orig_apt.name,
+                city=orig_apt.city,
+                country=orig_apt.country,
+                latitude=orig_apt.latitude,
+                longitude=orig_apt.longitude,
+            ),
+            destination_city=dest_apt.city,
+            destination_airport=AirportSummary(
+                icao=dest_apt.icao,
+                iata=dest_apt.iata,
+                name=dest_apt.name,
+                city=dest_apt.city,
+                country=dest_apt.country,
+                latitude=dest_apt.latitude,
+                longitude=dest_apt.longitude,
+            ),
+            aircraft_type=dest_ac,
+            departure_time_schedule="Daily 10:45 Local -> Same Day / Next Day Arrival",
+            duration_hours=direct_hours,
+            duration_formatted=direct_dur_str,
+            distance_km=round(dist_km, 1),
+            frequency="Daily Direct Scheduled",
+            is_direct=True,
+            waypoints_3d=waypoints_3d,
+        )
+    )
+
+    # 3. Premier Global Super-Connector: Emirates (via DXB)
+    conn_hours_1 = round(direct_hours + 2.4, 1)
+    ch1 = int(conn_hours_1)
+    cm1 = int(round((conn_hours_1 - ch1) * 60))
+    flt_num_3 = f"EK{abs(hash(orig_apt.city + 'EK')) % 500 + 201}"
+    plans.append(
+        InboundFlightPlan(
+            flight_id=f"{flt_num_3}-{orig_apt.iata}-{dest_apt.iata}",
+            airline="Emirates",
+            airline_code="UAE",
+            flight_number=flt_num_3,
+            origin_country=orig_apt.country,
+            origin_country_code=orig_apt.country[:2].upper(),
+            origin_city=orig_apt.city,
+            origin_airport=AirportSummary(
+                icao=orig_apt.icao,
+                iata=orig_apt.iata,
+                name=orig_apt.name,
+                city=orig_apt.city,
+                country=orig_apt.country,
+                latitude=orig_apt.latitude,
+                longitude=orig_apt.longitude,
+            ),
+            destination_city=dest_apt.city,
+            destination_airport=AirportSummary(
+                icao=dest_apt.icao,
+                iata=dest_apt.iata,
+                name=dest_apt.name,
+                city=dest_apt.city,
+                country=dest_apt.country,
+                latitude=dest_apt.latitude,
+                longitude=dest_apt.longitude,
+            ),
+            aircraft_type="Airbus A380-800",
+            departure_time_schedule="Daily 04:15 Local -> 1-Stop via Dubai (DXB)",
+            duration_hours=conn_hours_1,
+            duration_formatted=f"{ch1}h {cm1}m",
+            distance_km=round(dist_km * 1.08, 1),
+            frequency="Daily Service (1-Stop via DXB)",
+            is_direct=False,
+            waypoints_3d=waypoints_3d,
+        )
+    )
+
+    # 4. Premier Connector: Qatar Airways or Singapore Airlines
+    if "singapore" in orig_apt.city.lower() or "singapore" in dest_apt.city.lower():
+        alt_airline, alt_icao, alt_flt, alt_hub, alt_ac = ("Qatar Airways", "QTR", "QR812", "Doha (DOH)", "Airbus A350-1000")
+    else:
+        alt_airline, alt_icao, alt_flt, alt_hub, alt_ac = ("Singapore Airlines", "SIA", "SQ638", "Singapore (SIN)", "Boeing 787-10 Dreamliner")
+
+    conn_hours_2 = round(direct_hours + 2.8, 1)
+    ch2 = int(conn_hours_2)
+    cm2 = int(round((conn_hours_2 - ch2) * 60))
+    plans.append(
+        InboundFlightPlan(
+            flight_id=f"{alt_flt}-{orig_apt.iata}-{dest_apt.iata}",
+            airline=alt_airline,
+            airline_code=alt_icao,
+            flight_number=alt_flt,
+            origin_country=orig_apt.country,
+            origin_country_code=orig_apt.country[:2].upper(),
+            origin_city=orig_apt.city,
+            origin_airport=AirportSummary(
+                icao=orig_apt.icao,
+                iata=orig_apt.iata,
+                name=orig_apt.name,
+                city=orig_apt.city,
+                country=orig_apt.country,
+                latitude=orig_apt.latitude,
+                longitude=orig_apt.longitude,
+            ),
+            destination_city=dest_apt.city,
+            destination_airport=AirportSummary(
+                icao=dest_apt.icao,
+                iata=dest_apt.iata,
+                name=dest_apt.name,
+                city=dest_apt.city,
+                country=dest_apt.country,
+                latitude=dest_apt.latitude,
+                longitude=dest_apt.longitude,
+            ),
+            aircraft_type=alt_ac,
+            departure_time_schedule=f"Daily 23:45 Local -> 1-Stop via {alt_hub}",
+            duration_hours=conn_hours_2,
+            duration_formatted=f"{ch2}h {cm2}m",
+            distance_km=round(dist_km * 1.12, 1),
+            frequency=f"Daily Service (1-Stop via {alt_hub.split()[0]})",
+            is_direct=False,
+            waypoints_3d=waypoints_3d,
+        )
+    )
+
+    # 5. International Alliance / Alternate Direct Option
+    partner_airline, partner_icao, partner_pfx, partner_ac = (
+        ("United Airlines", "UAL", "UA", "Boeing 787-9 Dreamliner")
+        if orig_carrier_info[1] != "UAL" and dest_carrier_info[1] != "UAL"
+        else ("British Airways", "BAW", "BA", "Airbus A350-1000")
+    )
+    flt_num_5 = f"{partner_pfx}{abs(hash(orig_apt.name + 'PARTNER')) % 700 + 105}"
+    plans.append(
+        InboundFlightPlan(
+            flight_id=f"{flt_num_5}-{orig_apt.iata}-{dest_apt.iata}",
+            airline=partner_airline,
+            airline_code=partner_icao,
+            flight_number=flt_num_5,
+            origin_country=orig_apt.country,
+            origin_country_code=orig_apt.country[:2].upper(),
+            origin_city=orig_apt.city,
+            origin_airport=AirportSummary(
+                icao=orig_apt.icao,
+                iata=orig_apt.iata,
+                name=orig_apt.name,
+                city=orig_apt.city,
+                country=orig_apt.country,
+                latitude=orig_apt.latitude,
+                longitude=orig_apt.longitude,
+            ),
+            destination_city=dest_apt.city,
+            destination_airport=AirportSummary(
+                icao=dest_apt.icao,
+                iata=dest_apt.iata,
+                name=dest_apt.name,
+                city=dest_apt.city,
+                country=dest_apt.country,
+                latitude=dest_apt.latitude,
+                longitude=dest_apt.longitude,
+            ),
+            aircraft_type=partner_ac,
+            departure_time_schedule="Daily 14:00 Local -> Direct Service",
+            duration_hours=direct_hours,
+            duration_formatted=direct_dur_str,
+            distance_km=round(dist_km, 1),
+            frequency="Daily Direct Service",
+            is_direct=True,
+            waypoints_3d=waypoints_3d,
+        )
+    )
+
+    return plans
+
+
 def get_inbound_flight_plans(
-    destination: str, origin_country_filter: str | None = None
+    destination: str,
+    origin: str | None = None,
+    origin_country_filter: str | None = None,
 ) -> FlightPlansResponse:
     """Generate or retrieve inbound international flight plans for any destination worldwide.
 
-    Groups flights by origin country and calculates full 3D geodesic flight paths.
+    Supports:
+    1. Custom Origin -> Destination user selection (e.g. DEL to HND, JFK to LHR).
+    2. Global inbound routes from 35+ major world hubs across all continents.
+    3. Country filtering and full 3D geodesic flight corridors for Cesium globe visualization.
     """
-    dest_apt = resolve_destination_airport(destination)
+    dest_apt = resolve_airport(destination) or resolve_destination_airport(destination)
+
+    # Check if user specified a distinct custom origin airport
+    has_custom_origin = False
+    if origin and isinstance(origin, str):
+        clean_orig = origin.strip()
+        if clean_orig and clean_orig.upper() not in ("ALL", "ANY", "WORLDWIDE"):
+            orig_apt = resolve_airport(clean_orig)
+            if orig_apt and orig_apt.icao != dest_apt.icao:
+                has_custom_origin = True
+                custom_flights = _generate_custom_corridor_flights(orig_apt, dest_apt)
+                return FlightPlansResponse(
+                    destination=f"{orig_apt.iata} to {dest_apt.iata}",
+                    destination_city=dest_apt.city,
+                    destination_airport=AirportSummary(
+                        icao=dest_apt.icao,
+                        iata=dest_apt.iata,
+                        name=dest_apt.name,
+                        city=dest_apt.city,
+                        country=dest_apt.country,
+                        latitude=dest_apt.latitude,
+                        longitude=dest_apt.longitude,
+                    ),
+                    total_inbound_flights=len(custom_flights),
+                    origin_countries=[orig_apt.country],
+                    flights=custom_flights,
+                )
+
+    # Inbound View: Dynamic synthesis from 40+ major world hubs across all continents
+    raw_flights: list[dict[str, Any]] = []
     clean_dest_name = dest_apt.city
 
-    # Check if curated entries exist for this city
+    # Check curated entries first
     city_key = ""
     for k in CURATED_INBOUND_FLIGHTS:
         if k in destination.lower() or k in clean_dest_name.lower():
             city_key = k
             break
 
-    raw_flights: list[dict[str, Any]] = []
     if city_key and city_key in CURATED_INBOUND_FLIGHTS:
-        raw_flights = CURATED_INBOUND_FLIGHTS[city_key]
-    else:
-        # Dynamically synthesize realistic international inbound flights from major world hubs
-        top_hubs = [
-            ("KJFK", "United States", "US", "New York", "American Airlines", "AAL", "AA101", "Boeing 777-300ER"),
-            ("KSFO", "United States", "US", "San Francisco", "United Airlines", "UAL", "UA850", "Boeing 787-9 Dreamliner"),
-            ("EGLL", "United Kingdom", "GB", "London", "British Airways", "BAW", "BA45", "Airbus A350-1000"),
-            ("LFPG", "France", "FR", "Paris", "Air France", "AFR", "AF180", "Boeing 777-300ER"),
-            ("EDDF", "Germany", "DE", "Frankfurt", "Lufthansa", "DLH", "LH500", "Boeing 747-8"),
-            ("OMDB", "United Arab Emirates", "AE", "Dubai", "Emirates", "UAE", "EK404", "Airbus A380-800"),
-            ("WSSS", "Singapore", "SG", "Singapore", "Singapore Airlines", "SIA", "SQ220", "Airbus A350-900"),
-            ("YSSY", "Australia", "AU", "Sydney", "Qantas", "QFA", "QF61", "Boeing 787-9 Dreamliner"),
-            ("VIDP", "India", "IN", "Delhi", "Air India", "AIC", "AI202", "Boeing 787-8 Dreamliner"),
-            ("RJTT", "Japan", "JP", "Tokyo", "All Nippon Airways", "ANA", "NH11", "Boeing 787-9 Dreamliner"),
-            ("RKSI", "South Korea", "KR", "Seoul", "Korean Air", "KAL", "KE901", "Airbus A330-300"),
-            ("CYYZ", "Canada", "CA", "Toronto", "Air Canada", "ACA", "AC85", "Boeing 787-9 Dreamliner"),
-        ]
+        raw_flights.extend(CURATED_INBOUND_FLIGHTS[city_key])
 
-        for orig_icao, c_name, c_code, c_city, airline, a_code, flt_num, ac in top_hubs:
-            if orig_icao == dest_apt.icao:
-                continue
-            raw_flights.append({
-                "flight_number": flt_num,
-                "airline": airline,
-                "airline_code": a_code,
-                "origin_country": c_name,
-                "origin_country_code": c_code,
-                "origin_city": c_city,
-                "origin_icao": orig_icao,
-                "dest_icao": dest_apt.icao,
-                "aircraft": ac,
-                "schedule": "Daily Direct Scheduled Service",
-                "frequency": "Daily Direct",
-            })
+    # Supplement with expanded world hubs to ensure 35+ global inbound routes
+    seen_curated_icaos = {f["origin_icao"] for f in raw_flights}
+    for orig_icao, c_name, c_code, c_city, airline, a_code, flt_num, ac in EXPANDED_WORLD_HUBS:
+        if orig_icao == dest_apt.icao or orig_icao in seen_curated_icaos:
+            continue
+        raw_flights.append({
+            "flight_number": flt_num,
+            "airline": airline,
+            "airline_code": a_code,
+            "origin_country": c_name,
+            "origin_country_code": c_code,
+            "origin_city": c_city,
+            "origin_icao": orig_icao,
+            "dest_icao": dest_apt.icao,
+            "aircraft": ac,
+            "schedule": "Daily Direct Scheduled Service",
+            "frequency": "Daily Direct",
+        })
 
     # Process and build final InboundFlightPlan objects
     flight_items: list[InboundFlightPlan] = []
@@ -909,8 +1370,7 @@ def get_inbound_flight_plans(
         dist_km = haversine_distance_km(
             orig_apt.latitude, orig_apt.longitude, dest_apt.latitude, dest_apt.longitude
         )
-        # Average cruising speed 880 km/h + 30 mins climb/descent
-        est_hours = round((dist_km / 880.0) + 0.5, 1)
+        est_hours = round(max(0.8, (dist_km / 880.0) + 0.5), 1)
         h = int(est_hours)
         m = int(round((est_hours - h) * 60))
         dur_str = f"{h}h {m}m"

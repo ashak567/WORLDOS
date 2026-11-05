@@ -6,10 +6,16 @@ import unittest
 from backend.app.navigation import (
     calculate_road_route,
     get_inbound_flight_plans,
+    list_airports,
+    resolve_airport,
     resolve_destination_airport,
     _fallback_road_route,
 )
-from backend.app.main import get_flight_plans_endpoint, get_road_route_endpoint
+from backend.app.main import (
+    get_flight_plans_endpoint,
+    get_road_route_endpoint,
+    list_airports_endpoint,
+)
 
 
 class NavigationTests(unittest.TestCase):
@@ -74,11 +80,70 @@ class NavigationTests(unittest.TestCase):
         self.assertGreater(len(route.polyline), 20)
         self.assertTrue(route.steps[0].instruction)
 
+    def test_list_and_resolve_airports(self) -> None:
+        # Default top airports
+        top_apts = list_airports("", limit=10)
+        self.assertGreaterEqual(len(top_apts), 5)
+        top_iatas = [a.iata for a in top_apts]
+        self.assertIn("HND", top_iatas)
+        self.assertIn("JFK", top_iatas)
+
+        # Search by code or city
+        del_apts = list_airports("Delhi")
+        self.assertGreaterEqual(len(del_apts), 1)
+        self.assertEqual(del_apts[0].iata, "DEL")
+
+        # Resolve airport
+        del_apt = resolve_airport("DEL")
+        self.assertIsNotNone(del_apt)
+        self.assertEqual(del_apt.icao, "VIDP")
+
+        hnd_apt = resolve_airport("Tokyo")
+        self.assertIsNotNone(hnd_apt)
+        self.assertEqual(hnd_apt.iata, "HND")
+
+    def test_custom_corridor_flight_plans(self) -> None:
+        # Custom pair: DEL to HND
+        resp = get_inbound_flight_plans(destination="HND", origin="DEL")
+        self.assertGreaterEqual(resp.total_inbound_flights, 4)
+        airlines = [f.airline for f in resp.flights]
+        self.assertIn("Air India", airlines)
+        self.assertIn("Emirates", airlines)
+
+        for f in resp.flights:
+            self.assertEqual(f.origin_airport.iata, "DEL")
+            self.assertEqual(f.destination_airport.iata, "HND")
+            self.assertGreater(f.distance_km, 5000.0)
+            self.assertGreater(len(f.waypoints_3d), 10)
+
+        # Custom pair: JFK to LHR
+        jfk_lhr = get_inbound_flight_plans(destination="LHR", origin="JFK")
+        self.assertGreaterEqual(jfk_lhr.total_inbound_flights, 4)
+        for f in jfk_lhr.flights:
+            self.assertEqual(f.origin_airport.iata, "JFK")
+            self.assertEqual(f.destination_airport.iata, "LHR")
+
+    def test_expanded_inbound_flights(self) -> None:
+        # Inbound flights to Tokyo should now be >= 30 across 20+ countries
+        resp = get_inbound_flight_plans("Tokyo")
+        self.assertGreaterEqual(resp.total_inbound_flights, 30)
+        self.assertGreaterEqual(len(resp.origin_countries), 15)
+
     def test_main_endpoints(self) -> None:
-        # Test get_flight_plans_endpoint
+        # Test list_airports_endpoint
+        apts = list_airports_endpoint(query="Dubai")
+        self.assertGreaterEqual(len(apts), 1)
+        self.assertEqual(apts[0].iata, "DXB")
+
+        # Test get_flight_plans_endpoint with custom origin
+        custom_fp = get_flight_plans_endpoint(destination="HND", origin="DEL")
+        self.assertGreaterEqual(custom_fp.total_inbound_flights, 4)
+        self.assertEqual(custom_fp.flights[0].origin_airport.iata, "DEL")
+
+        # Test get_flight_plans_endpoint worldwide inbound
         fp_resp = get_flight_plans_endpoint(destination="Tokyo")
         self.assertEqual(fp_resp.destination_city, "Tokyo")
-        self.assertGreaterEqual(fp_resp.total_inbound_flights, 1)
+        self.assertGreaterEqual(fp_resp.total_inbound_flights, 30)
 
         # Test get_road_route_endpoint
         rr_resp = get_road_route_endpoint(

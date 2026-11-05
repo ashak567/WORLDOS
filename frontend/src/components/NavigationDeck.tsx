@@ -55,6 +55,28 @@ const DESTINATION_PRESETS = [
   { name: 'Kyoto', lat: 35.0116, lon: 135.7681, airport: 'Kansai Airport (KIX)', aptCoords: [135.2442, 34.4347] as [number, number], sight: 'Fushimi Inari Taisha', sightCoords: [135.7727, 34.9671] as [number, number] },
 ];
 
+const ORIGIN_PRESETS = [
+  { code: 'ALL', label: 'Any Origin' },
+  { code: 'DEL', label: 'DEL (Delhi)' },
+  { code: 'JFK', label: 'JFK (New York)' },
+  { code: 'LHR', label: 'LHR (London)' },
+  { code: 'DXB', label: 'DXB (Dubai)' },
+  { code: 'SIN', label: 'SIN (Singapore)' },
+  { code: 'SYD', label: 'SYD (Sydney)' },
+  { code: 'BOM', label: 'BOM (Mumbai)' },
+  { code: 'SFO', label: 'SFO (San Francisco)' },
+];
+
+const DESTINATION_AIRPORT_PRESETS = [
+  { code: 'HND', label: 'HND (Tokyo)' },
+  { code: 'CDG', label: 'CDG (Paris)' },
+  { code: 'FCO', label: 'FCO (Rome)' },
+  { code: 'JFK', label: 'JFK (New York)' },
+  { code: 'LHR', label: 'LHR (London)' },
+  { code: 'DXB', label: 'DXB (Dubai)' },
+  { code: 'SYD', label: 'SYD (Sydney)' },
+];
+
 export const NavigationDeck: React.FC<NavigationDeckProps> = ({
   isOpen,
   onClose,
@@ -69,6 +91,7 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
   const [activeTab, setActiveTab] = useState<'flights' | 'road'>('flights');
 
   // Flight Plan state
+  const [flightOrigin, setFlightOrigin] = useState<string>('ALL');
   const [flightDestination, setFlightDestination] = useState<string>(initialDestination);
   const [flightPlansResponse, setFlightPlansResponse] = useState<FlightPlansResponse | null>(null);
   const [selectedCountryFilter, setSelectedCountryFilter] = useState<string>('ALL');
@@ -104,15 +127,16 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
   // Load flight plans on mount or when destination changes
   useEffect(() => {
     if (isOpen && flightDestination) {
-      handleLoadFlightPlans(flightDestination);
+      handleLoadFlightPlans(flightDestination, flightOrigin);
     }
   }, [isOpen, flightDestination]);
 
-  const handleLoadFlightPlans = async (targetDest: string) => {
+  const handleLoadFlightPlans = async (targetDest: string, targetOrig?: string) => {
     setIsFlightLoading(true);
     setFlightError(null);
+    const origVal = targetOrig !== undefined ? targetOrig : flightOrigin;
     try {
-      const resp = await fetchInboundFlightPlans(targetDest);
+      const resp = await fetchInboundFlightPlans(targetDest, origVal);
       setFlightPlansResponse(resp);
       setSelectedCountryFilter('ALL');
     } catch (err: any) {
@@ -120,6 +144,24 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
     } finally {
       setIsFlightLoading(false);
     }
+  };
+
+  const handleSwapAirports = () => {
+    const curOrigin = flightOrigin && flightOrigin !== 'ALL' ? flightOrigin : 'DEL';
+    const curDest = flightDestination;
+    setFlightOrigin(curDest);
+    setFlightDestination(curOrigin);
+    handleLoadFlightPlans(curOrigin, curDest);
+  };
+
+  const handleSelectOriginPreset = (code: string) => {
+    setFlightOrigin(code);
+    handleLoadFlightPlans(flightDestination, code);
+  };
+
+  const handleSelectDestPreset = (code: string) => {
+    setFlightDestination(code);
+    handleLoadFlightPlans(code, flightOrigin);
   };
 
   const handleCalculateRoadRoute = async () => {
@@ -152,7 +194,7 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
     setOriginCoords(city.aptCoords);
     setDestName(city.sight);
     setDestCoords(city.sightCoords);
-    handleLoadFlightPlans(city.name);
+    handleLoadFlightPlans(city.name, flightOrigin);
   };
 
   const handleSwapRoadEndpoints = () => {
@@ -272,53 +314,140 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
       {/* TAB 1: INBOUND FLIGHT PLANS */}
       {activeTab === 'flights' && (
         <div className="navigation-tab-content">
-          {/* Destination & Country Filters */}
+          {/* Dual Origin & Destiny Selector */}
           <div className="nav-filter-section">
-            <div className="nav-input-row">
-              <div className="nav-input-wrap flex-1">
-                <Search size={14} className="nav-input-icon" />
-                <input
-                  type="text"
-                  placeholder="Enter destination city (e.g. Tokyo, Paris, Rome)..."
-                  value={flightDestination}
-                  onChange={(e) => setFlightDestination(e.target.value)}
-                  onKeyDown={(e) => e.key === 'Enter' && handleLoadFlightPlans(flightDestination)}
-                  className="nav-input"
-                />
-              </div>
-              <button
-                className="nav-action-btn primary"
-                onClick={() => handleLoadFlightPlans(flightDestination)}
-                disabled={isFlightLoading}
-              >
-                {isFlightLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
-                <span>Lookup</span>
-              </button>
-            </div>
-
-            {/* Country Filter Pills */}
-            {flightPlansResponse && flightPlansResponse.origin_countries.length > 0 && (
-              <div className="origin-country-filter-wrap">
-                <span className="filter-label">FROM COUNTRY:</span>
-                <div className="country-pills-row">
-                  <button
-                    className={`country-pill ${selectedCountryFilter === 'ALL' ? 'active' : ''}`}
-                    onClick={() => setSelectedCountryFilter('ALL')}
-                  >
-                    All Countries ({flightPlansResponse.flights.length})
-                  </button>
-                  {flightPlansResponse.origin_countries.map((c) => (
+            <div className="nav-dual-inputs-wrap">
+              {/* Departure (Origin) Input */}
+              <div className="nav-endpoint-block">
+                <div className="nav-endpoint-header">
+                  <span className="nav-field-label">1. DEPARTURE AIRPORT (ORIGIN)</span>
+                  <span className="text-[10px] text-gray-400">Select Hub or "Any Origin"</span>
+                </div>
+                <div className="nav-input-row">
+                  <div className="nav-input-wrap flex-1">
+                    <Search size={14} className="nav-input-icon" />
+                    <input
+                      type="text"
+                      placeholder="Origin code or city (e.g. DEL, JFK, LHR, or ALL)..."
+                      value={flightOrigin === 'ALL' ? '' : flightOrigin}
+                      onChange={(e) => setFlightOrigin(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleLoadFlightPlans(flightDestination, flightOrigin)}
+                      className="nav-input"
+                    />
+                  </div>
+                </div>
+                <div className="nav-quick-pills-row">
+                  {ORIGIN_PRESETS.map((p) => (
                     <button
-                      key={c}
-                      className={`country-pill ${selectedCountryFilter === c ? 'active' : ''}`}
-                      onClick={() => setSelectedCountryFilter(c)}
+                      key={p.code}
+                      className={`nav-quick-pill ${
+                        flightOrigin === p.code || (p.code === 'ALL' && (!flightOrigin || flightOrigin === 'ALL'))
+                          ? 'active'
+                          : ''
+                      }`}
+                      onClick={() => handleSelectOriginPreset(p.code)}
                     >
-                      {c}
+                      {p.label}
                     </button>
                   ))}
                 </div>
               </div>
+
+              {/* Swap Origin & Destiny Button */}
+              <div className="nav-swap-divider">
+                <button
+                  className="nav-swap-btn"
+                  onClick={handleSwapAirports}
+                  title="Swap Origin and Destiny Airports"
+                >
+                  <ArrowLeftRight size={12} />
+                  <span>⇄ Swap Origin &amp; Destiny</span>
+                </button>
+              </div>
+
+              {/* Arrival (Destiny) Input */}
+              <div className="nav-endpoint-block">
+                <div className="nav-endpoint-header">
+                  <span className="nav-field-label">2. DESTINY AIRPORT (DESTINATION)</span>
+                  <span className="text-[10px] text-emerald-400">Target Hub</span>
+                </div>
+                <div className="nav-input-row">
+                  <div className="nav-input-wrap flex-1">
+                    <Search size={14} className="nav-input-icon" />
+                    <input
+                      type="text"
+                      placeholder="Destiny city or hub (e.g. Tokyo, HND, Paris, CDG)..."
+                      value={flightDestination}
+                      onChange={(e) => setFlightDestination(e.target.value)}
+                      onKeyDown={(e) => e.key === 'Enter' && handleLoadFlightPlans(flightDestination, flightOrigin)}
+                      className="nav-input"
+                    />
+                  </div>
+                  <button
+                    className="nav-action-btn primary"
+                    onClick={() => handleLoadFlightPlans(flightDestination, flightOrigin)}
+                    disabled={isFlightLoading}
+                  >
+                    {isFlightLoading ? <Loader2 size={14} className="animate-spin" /> : <Search size={14} />}
+                    <span>Find Flights</span>
+                  </button>
+                </div>
+                <div className="nav-quick-pills-row">
+                  {DESTINATION_AIRPORT_PRESETS.map((p) => (
+                    <button
+                      key={p.code}
+                      className={`nav-quick-pill ${
+                        flightDestination.toLowerCase() === p.code.toLowerCase() ? 'active' : ''
+                      }`}
+                      onClick={() => handleSelectDestPreset(p.code)}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Corridor or Inbound Summary */}
+            {flightPlansResponse && (
+              <div className="corridor-summary-banner">
+                <span className="corridor-summary-title">
+                  {flightOrigin && flightOrigin !== 'ALL'
+                    ? `FLIGHT CORRIDOR: ${flightPlansResponse.destination}`
+                    : `INBOUND TO ${flightPlansResponse.destination_airport.iata} (${flightPlansResponse.destination_airport.city})`}
+                </span>
+                <span className="text-cyan-400 font-semibold">
+                  {flightPlansResponse.total_inbound_flights}{' '}
+                  {flightOrigin && flightOrigin !== 'ALL' ? 'Options' : 'Global Inbound Routes'}
+                </span>
+              </div>
             )}
+
+            {/* Country Filter Pills (shown when viewing All Origins) */}
+            {(!flightOrigin || flightOrigin === 'ALL') &&
+              flightPlansResponse &&
+              flightPlansResponse.origin_countries.length > 1 && (
+                <div className="origin-country-filter-wrap">
+                  <span className="filter-label">FROM COUNTRY:</span>
+                  <div className="country-pills-row">
+                    <button
+                      className={`country-pill ${selectedCountryFilter === 'ALL' ? 'active' : ''}`}
+                      onClick={() => setSelectedCountryFilter('ALL')}
+                    >
+                      All Countries ({flightPlansResponse.flights.length})
+                    </button>
+                    {flightPlansResponse.origin_countries.map((c) => (
+                      <button
+                        key={c}
+                        className={`country-pill ${selectedCountryFilter === c ? 'active' : ''}`}
+                        onClick={() => setSelectedCountryFilter(c)}
+                      >
+                        {c}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
           </div>
 
           {/* Active Flight Plan Banner */}
@@ -371,7 +500,12 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
                           <span className="flight-airline-name">{flight.airline}</span>
                         </div>
                       </div>
-                      <span className="flight-frequency-badge">{flight.frequency}</span>
+                      <div className="flex items-center gap-1.5">
+                        <span className={flight.is_direct ? 'flight-direct-badge' : 'flight-connecting-badge'}>
+                          {flight.is_direct ? 'DIRECT' : '1-STOP'}
+                        </span>
+                        <span className="flight-frequency-badge">{flight.frequency}</span>
+                      </div>
                     </div>
 
                     {/* Origin to Destination Flow */}

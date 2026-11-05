@@ -179,6 +179,8 @@ from .travel_intelligence import (
 from .navigation import (
     calculate_road_route,
     get_inbound_flight_plans,
+    list_airports,
+    AirportSummary,
     FlightPlansResponse,
     RoadRouteResponse,
 )
@@ -536,14 +538,27 @@ def get_assistant_travel_plan_endpoint(
     return generate_travel_plan(destination=destination, days=days, pace=pace, interest=interest)
 
 
+@app.get("/navigation/airports", response_model=list[AirportSummary])
+def list_airports_endpoint(
+    query: str = Query(default="", description="Search query for airport code, city, or name"),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> list[AirportSummary]:
+    """Search world international airports by IATA, ICAO, city, or country."""
+    q_str = query if isinstance(query, str) else ""
+    l_int = limit if isinstance(limit, int) else 30
+    return list_airports(query=q_str, limit=l_int)
+
+
 @app.get("/navigation/flight-plans", response_model=FlightPlansResponse)
 def get_flight_plans_endpoint(
-    destination: str = Query(..., min_length=2, description="Target destination city or hub"),
+    destination: str = Query(..., min_length=2, description="Target destination city, airport code, or hub"),
+    origin: str | None = Query(default=None, description="Optional origin airport code, city, or hub"),
     origin_country: str | None = Query(default=None, description="Optional filter by origin country"),
 ) -> FlightPlansResponse:
-    """Retrieve inbound international flight plans from different countries to destination, including 3D flight arcs."""
+    """Retrieve international flight plans between specific airport pairs or inbound to destination."""
     filter_val = origin_country if isinstance(origin_country, str) else None
-    return get_inbound_flight_plans(destination=destination, origin_country_filter=filter_val)
+    origin_val = origin if isinstance(origin, str) and origin.strip() else None
+    return get_inbound_flight_plans(destination=destination, origin=origin_val, origin_country_filter=filter_val)
 
 
 @app.get("/navigation/road-route", response_model=RoadRouteResponse)

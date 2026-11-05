@@ -814,12 +814,25 @@ export interface FlightPlansResponse {
   flights: InboundFlightPlan[];
 }
 
+export async function fetchAirports(query: string = '', limit: number = 30): Promise<AirportSummary[]> {
+  const params = new URLSearchParams();
+  if (query) params.append('query', query);
+  if (limit) params.append('limit', String(limit));
+  const response = await fetch(`${apiBase}/navigation/airports?${params.toString()}`);
+  if (!response.ok) throw new Error(`API error ${response.status} fetching airports`);
+  return response.json();
+}
+
 export async function fetchInboundFlightPlans(
   destination: string,
+  origin?: string,
   originCountry?: string
 ): Promise<FlightPlansResponse> {
   const params = new URLSearchParams({ destination });
-  if (originCountry) {
+  if (origin && origin.trim() && origin.trim().toUpperCase() !== 'ALL') {
+    params.append('origin', origin.trim());
+  }
+  if (originCountry && originCountry !== 'ALL') {
     params.append('origin_country', originCountry);
   }
   const response = await fetch(`${apiBase}/navigation/flight-plans?${params.toString()}`);
