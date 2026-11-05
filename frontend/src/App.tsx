@@ -32,6 +32,8 @@ import {
   populationObservations,
   AssistantAction,
   PlaceItem,
+  RoadRouteResponse,
+  InboundFlightPlan,
 } from './api';
 import { BasemapMode, INITIAL_LAYERS, LayerDefinition, LayerId } from './types/layers';
 import { SelectedItemPayload } from './types/layers';
@@ -44,6 +46,7 @@ import { SourceHealthModal } from './components/SourceHealthModal';
 import { RoutePlannerModal } from './components/RoutePlannerModal';
 import { AssistantPanel } from './components/AssistantPanel';
 import { PlaceDiscoveryDeck } from './components/PlaceDiscoveryDeck';
+import { NavigationDeck } from './components/NavigationDeck';
 import './styles.css';
 
 function withLiveFeedHealth(layers: LayerDefinition[], sources: LiveEventsResponse['sources']): LayerDefinition[] {
@@ -137,6 +140,10 @@ export default function App() {
   const [isDockCollapsed, setIsDockCollapsed] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isPlacesDeckOpen, setIsPlacesDeckOpen] = useState(false);
+  const [isNavigationOpen, setIsNavigationOpen] = useState(false);
+  const [activeRoadRoute, setActiveRoadRoute] = useState<RoadRouteResponse | null>(null);
+  const [activeFlightPlan, setActiveFlightPlan] = useState<InboundFlightPlan | null>(null);
+  const [navigationDestination, setNavigationDestination] = useState<string>('Tokyo');
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
   const [discoveredPlaces, setDiscoveredPlaces] = useState<PlaceItem[]>([]);
 
@@ -565,6 +572,9 @@ export default function App() {
         isAssistantOpen={isAssistantOpen}
         onTogglePlacesDeck={() => setIsPlacesDeckOpen((prev) => !prev)}
         isPlacesDeckOpen={isPlacesDeckOpen}
+        onToggleNavigation={() => setIsNavigationOpen((prev) => !prev)}
+        isNavigationOpen={isNavigationOpen}
+        isNavActive={activeRoadRoute !== null || activeFlightPlan !== null}
         isRouteActive={activeRoute !== null}
         isDockCollapsed={isDockCollapsed}
         onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
@@ -596,6 +606,8 @@ export default function App() {
           infrastructure={infrastructure}
           selectedTrack={selectedTrack}
           activeRoute={activeRoute}
+          activeRoadRoute={activeRoadRoute}
+          activeFlightPlan={activeFlightPlan}
           discoveredPlaces={discoveredPlaces}
           selectedPlace={selectedPlace}
           onSelectPlace={(place) => {
@@ -627,6 +639,10 @@ export default function App() {
         }}
         onClose={() => setIsAssistantOpen(false)}
         onAction={handleAssistantAction}
+        onOpenNavigation={(dest) => {
+          if (dest) setNavigationDestination(dest);
+          setIsNavigationOpen(true);
+        }}
       />
 
       {/* Multimodal Places & Stays Discovery Deck (Google Places, Aerial View, YouTube) */}
@@ -691,6 +707,23 @@ export default function App() {
       <SourceHealthModal
         isOpen={isSourceHealthOpen}
         onClose={() => setIsSourceHealthOpen(false)}
+      />
+
+      {/* World Navigation & Transit Deck (Inbound Flights & Turn-by-Turn Road Route) */}
+      <NavigationDeck
+        isOpen={isNavigationOpen}
+        onClose={() => setIsNavigationOpen(false)}
+        activeRoadRoute={activeRoadRoute}
+        onSelectRoadRoute={setActiveRoadRoute}
+        activeFlightPlan={activeFlightPlan}
+        onSelectFlightPlan={setActiveFlightPlan}
+        onFlyToCoordinates={(coords, zoom) => setTargetLocation({ center: coords, zoom: zoom || 13 })}
+        initialDestination={navigationDestination}
+        currentCenter={
+          viewportBbox
+            ? [(viewportBbox.min_lon + viewportBbox.max_lon) / 2, (viewportBbox.min_lat + viewportBbox.max_lat) / 2]
+            : undefined
+        }
       />
 
       {/* Strategic Multi-Modal Route Planner (Phase 1) */}

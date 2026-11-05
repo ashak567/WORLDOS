@@ -70,6 +70,8 @@ import {
   AircraftTrackPoint,
   RoutePlanResponse,
   PlaceItem,
+  RoadRouteResponse,
+  InboundFlightPlan,
   splitTrackAtAntimeridian,
 } from '../api';
 import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
@@ -159,6 +161,8 @@ interface GlobeEngine3DProps {
   infrastructure?: InfrastructureNode[];
   selectedTrack?: AircraftTrackPoint[] | null;
   activeRoute?: RoutePlanResponse | null;
+  activeRoadRoute?: RoadRouteResponse | null;
+  activeFlightPlan?: InboundFlightPlan | null;
   discoveredPlaces?: PlaceItem[];
   selectedPlace?: PlaceItem | null;
   onSelectPlace?: (place: PlaceItem) => void;
@@ -184,6 +188,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   infrastructure = [],
   selectedTrack = null,
   activeRoute = null,
+  activeRoadRoute = null,
+  activeFlightPlan = null,
   discoveredPlaces = [],
   selectedPlace = null,
   onSelectPlace,
@@ -992,6 +998,141 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         },
       });
     }
+
+    // 10. Turn-by-Turn Road Route on 3D Surface
+    if (activeRoadRoute && activeRoadRoute.polyline.length > 1) {
+      const roadPositions = activeRoadRoute.polyline.map((p) =>
+        Cartesian3.fromDegrees(p[0], p[1], 15)
+      );
+
+      viewer.entities.add({
+        name: `Road Route: ${activeRoadRoute.origin_name} -> ${activeRoadRoute.destination_name}`,
+        polyline: {
+          positions: roadPositions,
+          width: 6,
+          clampToGround: true,
+          material: new PolylineGlowMaterialProperty({
+            glowPower: 0.45,
+            color: Color.fromCssColorString('#00f0ff'), // Vibrant Neon Cyan
+          }),
+        },
+      });
+
+      // Road Origin Pin (Emerald)
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(
+          activeRoadRoute.origin_coords[0],
+          activeRoadRoute.origin_coords[1],
+          20
+        ),
+        point: {
+          pixelSize: 14,
+          color: Color.fromCssColorString('#10b981'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: `START: ${activeRoadRoute.origin_name}`,
+          font: 'bold 12px monospace',
+          fillColor: Color.fromCssColorString('#10b981'),
+          outlineColor: Color.BLACK,
+          outlineWidth: 2,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cartesian2(0, -18),
+        },
+      });
+
+      // Road Destination Pin (Rose)
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(
+          activeRoadRoute.destination_coords[0],
+          activeRoadRoute.destination_coords[1],
+          20
+        ),
+        point: {
+          pixelSize: 14,
+          color: Color.fromCssColorString('#f43f5e'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: `DEST: ${activeRoadRoute.destination_name}`,
+          font: 'bold 12px monospace',
+          fillColor: Color.fromCssColorString('#f43f5e'),
+          outlineColor: Color.BLACK,
+          outlineWidth: 2,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cartesian2(0, -18),
+        },
+      });
+    }
+
+    // 11. Inbound International Flight Plan Corridor in 3D Geodesic Space
+    if (activeFlightPlan && activeFlightPlan.waypoints_3d.length > 1) {
+      const flightPositions = activeFlightPlan.waypoints_3d.map((w) =>
+        Cartesian3.fromDegrees(w[0], w[1], Math.max(100, w[2]))
+      );
+
+      viewer.entities.add({
+        name: `Flight ${activeFlightPlan.flight_number}: ${activeFlightPlan.origin_airport.iata} -> ${activeFlightPlan.destination_airport.iata}`,
+        polyline: {
+          positions: flightPositions,
+          width: 5,
+          material: new PolylineGlowMaterialProperty({
+            glowPower: 0.45,
+            color: Color.fromCssColorString('#38bdf8'), // Sky Blue
+          }),
+        },
+      });
+
+      // Flight Origin Airport Pin
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(
+          activeFlightPlan.origin_airport.longitude,
+          activeFlightPlan.origin_airport.latitude,
+          500
+        ),
+        point: {
+          pixelSize: 13,
+          color: Color.fromCssColorString('#38bdf8'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: `🛫 ${activeFlightPlan.origin_airport.iata} (${activeFlightPlan.origin_city})`,
+          font: 'bold 12px monospace',
+          fillColor: Color.fromCssColorString('#38bdf8'),
+          outlineColor: Color.BLACK,
+          outlineWidth: 2,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cartesian2(0, -16),
+        },
+      });
+
+      // Flight Destination Airport Pin
+      viewer.entities.add({
+        position: Cartesian3.fromDegrees(
+          activeFlightPlan.destination_airport.longitude,
+          activeFlightPlan.destination_airport.latitude,
+          500
+        ),
+        point: {
+          pixelSize: 13,
+          color: Color.fromCssColorString('#10b981'),
+          outlineColor: Color.WHITE,
+          outlineWidth: 2,
+        },
+        label: {
+          text: `🛬 ${activeFlightPlan.destination_airport.iata} (${activeFlightPlan.destination_city})`,
+          font: 'bold 12px monospace',
+          fillColor: Color.fromCssColorString('#10b981'),
+          outlineColor: Color.BLACK,
+          outlineWidth: 2,
+          style: LabelStyle.FILL_AND_OUTLINE,
+          pixelOffset: new Cartesian2(0, -16),
+        },
+      });
+    }
     viewer.scene.requestRender();
   }, [
     layers,
@@ -1006,6 +1147,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     alerts,
     infrastructure,
     activeRoute,
+    activeRoadRoute,
+    activeFlightPlan,
     discoveredPlaces,
     selectedPlace,
   ]);

@@ -176,6 +176,12 @@ from .travel_intelligence import (
     generate_travel_plan,
     resolve_destination_from_coords,
 )
+from .navigation import (
+    calculate_road_route,
+    get_inbound_flight_plans,
+    FlightPlansResponse,
+    RoadRouteResponse,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -528,6 +534,38 @@ def get_assistant_travel_plan_endpoint(
 ) -> dict[str, Any]:
     """Search the live internet (Google Places New, Wikipedia) to formulate rich travel plans, famous sights, and local food."""
     return generate_travel_plan(destination=destination, days=days, pace=pace, interest=interest)
+
+
+@app.get("/navigation/flight-plans", response_model=FlightPlansResponse)
+def get_flight_plans_endpoint(
+    destination: str = Query(..., min_length=2, description="Target destination city or hub"),
+    origin_country: str | None = Query(default=None, description="Optional filter by origin country"),
+) -> FlightPlansResponse:
+    """Retrieve inbound international flight plans from different countries to destination, including 3D flight arcs."""
+    filter_val = origin_country if isinstance(origin_country, str) else None
+    return get_inbound_flight_plans(destination=destination, origin_country_filter=filter_val)
+
+
+@app.get("/navigation/road-route", response_model=RoadRouteResponse)
+def get_road_route_endpoint(
+    origin_lat: float = Query(...),
+    origin_lon: float = Query(...),
+    dest_lat: float = Query(...),
+    dest_lon: float = Query(...),
+    origin_name: str = Query(default=""),
+    dest_name: str = Query(default=""),
+) -> RoadRouteResponse:
+    """Calculate driving road route with turn-by-turn navigation maneuvers and full road geometry."""
+    o_name = origin_name if isinstance(origin_name, str) else ""
+    d_name = dest_name if isinstance(dest_name, str) else ""
+    return calculate_road_route(
+        origin_lat=origin_lat,
+        origin_lon=origin_lon,
+        dest_lat=dest_lat,
+        dest_lon=dest_lon,
+        origin_name=o_name,
+        dest_name=d_name,
+    )
 
 
 

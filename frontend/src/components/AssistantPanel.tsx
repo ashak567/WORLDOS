@@ -14,6 +14,7 @@ import {
   Compass,
   Star,
   Sparkles,
+  Navigation,
 } from 'lucide-react';
 import {
   AssistantAction,
@@ -29,6 +30,7 @@ interface AssistantPanelProps {
   context: AssistantContext;
   onClose: () => void;
   onAction: (action: AssistantAction) => void;
+  onOpenNavigation?: (destination?: string) => void;
 }
 
 type TravelPreferences = NonNullable<AssistantContext['travel_preferences']>;
@@ -156,7 +158,7 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = (props) => (
   </ConversationProvider>
 );
 
-const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context, onClose, onAction }) => {
+const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context, onClose, onAction, onOpenNavigation }) => {
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [evidence, setEvidence] = useState<NonNullable<Awaited<ReturnType<typeof fetchAssistantMapContext>>['evidence']>>([]);
@@ -654,14 +656,29 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
               </div>
             )}
 
-            {/* Explore Stays & Places Button */}
-            <button
-              type="button"
-              className="assistant-plan-explore-btn"
-              onClick={() => onActionRef.current({ type: 'discover_places', category: 'stays', center: activeTravelPlan.center })}
-            >
-              <Compass size={12} /> Explore Stays & Sights in 3D
-            </button>
+            {/* Explore Buttons */}
+            <div style={{ display: 'flex', gap: '6px', marginTop: '6px' }}>
+              <button
+                type="button"
+                className="assistant-plan-explore-btn"
+                style={{ flex: 1 }}
+                onClick={() => onActionRef.current({ type: 'discover_places', category: 'stays', center: activeTravelPlan.center })}
+              >
+                <Compass size={12} /> Stays &amp; Sights
+              </button>
+              <button
+                type="button"
+                className="assistant-plan-explore-btn"
+                style={{ flex: 1, borderColor: 'var(--cy)', color: 'var(--cy)' }}
+                onClick={() => {
+                  if (onOpenNavigation) {
+                    onOpenNavigation(activeTravelPlan.destination);
+                  }
+                }}
+              >
+                <Navigation size={12} /> Routes &amp; Flights
+              </button>
+            </div>
           </div>
         )}
 

@@ -742,6 +742,112 @@ export async function fetchTravelPlan(
   return response.json();
 }
 
+// ----------------------------------------------------------------------------
+// Navigation & Flight Plans API
+// ----------------------------------------------------------------------------
+
+export interface RoadRouteStep {
+  step_number: number;
+  instruction: string;
+  maneuver_type: string;
+  street_name: string;
+  distance_m: number;
+  distance_formatted: string;
+  duration_s: number;
+  duration_formatted: string;
+  coordinates: [number, number]; // [lon, lat]
+}
+
+export interface RoadRouteResponse {
+  route_id: string;
+  origin_name: string;
+  origin_coords: [number, number];
+  destination_name: string;
+  destination_coords: [number, number];
+  total_distance_km: number;
+  total_distance_formatted: string;
+  total_duration_min: number;
+  total_duration_formatted: string;
+  primary_roads: string[];
+  summary: string;
+  steps: RoadRouteStep[];
+  polyline: [number, number][]; // [[lon, lat], ...]
+}
+
+export interface AirportSummary {
+  icao: string;
+  iata: string;
+  name: string;
+  city: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+}
+
+export interface InboundFlightPlan {
+  flight_id: string;
+  airline: string;
+  airline_code: string;
+  flight_number: string;
+  origin_country: string;
+  origin_country_code: string;
+  origin_city: string;
+  origin_airport: AirportSummary;
+  destination_city: string;
+  destination_airport: AirportSummary;
+  aircraft_type: string;
+  departure_time_schedule: string;
+  duration_hours: number;
+  duration_formatted: string;
+  distance_km: number;
+  frequency: string;
+  is_direct: boolean;
+  waypoints_3d: [number, number, number][]; // [lon, lat, alt_m]
+}
+
+export interface FlightPlansResponse {
+  destination: string;
+  destination_city: string;
+  destination_airport: AirportSummary;
+  total_inbound_flights: number;
+  origin_countries: string[];
+  flights: InboundFlightPlan[];
+}
+
+export async function fetchInboundFlightPlans(
+  destination: string,
+  originCountry?: string
+): Promise<FlightPlansResponse> {
+  const params = new URLSearchParams({ destination });
+  if (originCountry) {
+    params.append('origin_country', originCountry);
+  }
+  const response = await fetch(`${apiBase}/navigation/flight-plans?${params.toString()}`);
+  if (!response.ok) throw new Error(`API error ${response.status} fetching flight plans`);
+  return response.json();
+}
+
+export async function fetchRoadRoute(
+  originLat: number,
+  originLon: number,
+  destLat: number,
+  destLon: number,
+  originName: string = '',
+  destName: string = ''
+): Promise<RoadRouteResponse> {
+  const params = new URLSearchParams({
+    origin_lat: String(originLat),
+    origin_lon: String(originLon),
+    dest_lat: String(destLat),
+    dest_lon: String(destLon),
+    origin_name: originName,
+    dest_name: destName,
+  });
+  const response = await fetch(`${apiBase}/navigation/road-route?${params.toString()}`);
+  if (!response.ok) throw new Error(`API error ${response.status} calculating road route`);
+  return response.json();
+}
+
 export async function fetchEntityContext(entityId: string): Promise<WorldContext> {
   const response = await fetch(`${apiBase}/entities/${encodeURIComponent(entityId)}/context`);
   if (!response.ok) throw new Error(`API error ${response.status} fetching entity context`);

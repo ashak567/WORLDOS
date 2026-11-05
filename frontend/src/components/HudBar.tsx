@@ -35,6 +35,9 @@ interface HudBarProps {
   isAssistantOpen: boolean;
   onTogglePlacesDeck?: () => void;
   isPlacesDeckOpen?: boolean;
+  onToggleNavigation?: () => void;
+  isNavigationOpen?: boolean;
+  isNavActive?: boolean;
   isRouteActive?: boolean;
   isDockCollapsed: boolean;
   onToggleDock: () => void;
@@ -62,6 +65,9 @@ export const HudBar: React.FC<HudBarProps> = ({
   isAssistantOpen,
   onTogglePlacesDeck,
   isPlacesDeckOpen,
+  onToggleNavigation,
+  isNavigationOpen = false,
+  isNavActive = false,
   isRouteActive = false,
   isDockCollapsed,
   onToggleDock,
@@ -358,6 +364,19 @@ export const HudBar: React.FC<HudBarProps> = ({
           <span>STAYS & PLACES</span>
         </button>
 
+        {/* Navigation & Flight Plans Deck Button */}
+        <button
+          className={`hud-btn ${isNavigationOpen ? 'active' : ''}`}
+          onClick={onToggleNavigation}
+          title="Inbound International Flight Plans & Short Road Route Navigation"
+          style={isNavActive ? { borderColor: 'var(--cy)', background: 'rgba(6, 182, 212, 0.25)', color: 'var(--cy)' } : {}}
+          aria-expanded={isNavigationOpen}
+        >
+          <Navigation size={13} color="var(--cy)" />
+          <span>NAVIGATION</span>
+          {isNavActive && <span className="street-cam-badge" style={{ background: 'var(--cy)', color: '#000' }}>ON</span>}
+        </button>
+
         {/* AI Mission Assistant Roger Button */}
         <button
           className={`hud-btn ${isAssistantOpen ? 'active' : ''}`}
@@ -386,6 +405,20 @@ export const HudBar: React.FC<HudBarProps> = ({
           {isToolsMenuOpen && (
             <div className="hud-custom-dropdown-menu align-right">
               <div className="hud-dropdown-menu-header">MISSION OPERATIONS &amp; TOOLS</div>
+              <button
+                className="hud-dropdown-menu-item"
+                onClick={() => {
+                  if (onToggleNavigation) onToggleNavigation();
+                  setIsToolsMenuOpen(false);
+                }}
+              >
+                <Navigation size={13} color="var(--cy)" />
+                <div className="hud-dropdown-item-desc">
+                  <strong>World Navigation &amp; Transit</strong>
+                  <span>Inbound flight plans &amp; turn-by-turn road route navigation</span>
+                </div>
+              </button>
+
               <button
                 className="hud-dropdown-menu-item"
                 onClick={() => {
