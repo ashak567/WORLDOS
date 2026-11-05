@@ -48,6 +48,11 @@
   padding: 0;
 }
 
+button, a, input, select {
+  touch-action: manipulation;
+  -webkit-tap-highlight-color: transparent;
+}
+
 html, body, #root {
   width: 100%;
   height: 100%;
@@ -1627,119 +1632,480 @@ html, body, #root {
 .assistant-plan-explore-btn:hover {
   background: linear-gradient(135deg, rgba(0, 229, 255, 0.45), rgba(16, 185, 129, 0.45));
 }
-@media (max-width: 720px) { .assistant-panel { top: 66px; right: 8px; bottom: 8px; width: calc(100vw - 16px); } }
+/* ============================================================================
+   RESPONSIVE DESIGN SYSTEM: TABLET & MOBILE DEVICES
+   ============================================================================ */
 
-/* Tablet and mobile layouts */
+/* 1. TABLET SCREENS (<= 1024px) */
 @media (max-width: 1024px) {
   .hud-topbar {
     height: auto;
-    min-height: 52px;
-    flex-wrap: wrap;
-    gap: 6px 12px;
-    padding: 6px 10px;
-  }
-
-  .hud-center-group {
-    order: 3;
-    flex: 1 0 100%;
-    min-width: 0;
+    min-height: 50px;
+    padding: 6px 12px;
     gap: 8px;
-    overflow-x: auto;
-    scrollbar-width: none;
   }
 
-  .hud-center-group::-webkit-scrollbar,
-  .hud-actions::-webkit-scrollbar { display: none; }
+  .hud-telemetry {
+    display: none !important;
+  }
 
-  .hud-actions { flex: 0 1 auto; min-width: 0; margin-left: auto; gap: 6px; }
-  .hud-telemetry { display: none; }
-  .layer-dock { width: min(300px, calc(100vw - 24px)); max-height: calc(100dvh - 112px); }
-  .layer-list { min-height: 0; max-height: none; }
-  .details-drawer { max-height: calc(100dvh - 112px); }
-  .street-cam-dropdown-menu { width: min(320px, calc(100vw - 24px)); }
+  .hud-actions {
+    gap: 5px;
+  }
+
+  .hud-btn {
+    padding: 5px 8px;
+    font-size: 11px;
+  }
+
+  /* Right-Dock Drawers on Tablets */
+  .places-deck,
+  .navigation-deck,
+  .assistant-panel,
+  .details-drawer,
+  .street-view-panel {
+    top: 60px;
+    right: 12px;
+    bottom: 12px;
+    width: min(390px, 46vw);
+    max-width: 420px;
+    max-height: calc(100dvh - 72px);
+    border-radius: 10px;
+    z-index: 100;
+  }
+
+  /* Left Layer Dock on Tablets */
+  .layer-dock {
+    top: 60px;
+    left: 12px;
+    bottom: 12px;
+    width: min(290px, 36vw);
+    max-height: calc(100dvh - 72px);
+  }
+
+  /* Live Navigation HUD on Tablets */
+  .nav-hud-top-card {
+    top: 64px;
+    width: min(520px, calc(100vw - 24px));
+    padding: 10px 14px;
+  }
+
+  .nav-hud-bottom-bar {
+    bottom: 16px;
+    width: min(640px, calc(100vw - 24px));
+    padding: 10px 14px;
+  }
 }
 
-@media (max-width: 720px) {
-  .worldos-app { height: 100vh; height: 100dvh; }
+/* 2. MOBILE PHONES & PORTRAIT TABLETS (<= 768px) */
+@media (max-width: 768px) {
+  .worldos-app {
+    height: 100vh;
+    height: 100dvh;
+    overflow: hidden;
+  }
 
+  /* Top Navigation Bar: Clean 2-Tier Mobile Header */
   .hud-topbar {
     display: grid;
     grid-template-columns: minmax(0, 1fr) auto;
-    grid-template-areas: "brand actions" "controls controls";
-    gap: 5px 8px;
-    padding: max(6px, env(safe-area-inset-top)) 8px 6px;
+    grid-template-areas:
+      "brand actions"
+      "controls controls";
+    gap: 6px 8px;
+    padding: max(6px, env(safe-area-inset-top)) 10px 6px;
+    background: rgba(8, 14, 24, 0.95);
+    backdrop-filter: blur(16px);
   }
 
-  .hud-brand { grid-area: brand; min-width: 0; gap: 6px; }
-  .hud-brand-title { font-size: 12px; letter-spacing: 0.08em; }
-  .hud-brand-tag { display: none; }
-  .hud-center-group { grid-area: controls; width: 100%; gap: 6px; }
-  .hud-center-group > * { flex: 0 0 auto; }
-  .mode-btn { padding: 6px 8px; font-size: 9px; white-space: nowrap; }
-  .street-cam-trigger-btn { padding: 6px 8px; font-size: 9px; white-space: nowrap; }
-  .hud-actions { grid-area: actions; max-width: calc(100vw - 130px); overflow-x: auto; gap: 4px; scrollbar-width: none; }
-  .hud-actions .hud-btn { flex: 0 0 34px; width: 34px; height: 34px; justify-content: center; padding: 5px; }
-  .hud-actions .hud-btn > span,
-  .hud-actions .hud-btn > kbd { display: none; }
+  .hud-brand {
+    grid-area: brand;
+    min-width: 0;
+    gap: 6px;
+    align-items: center;
+  }
+
+  .hud-brand-title {
+    font-size: 13px;
+    font-weight: 800;
+    letter-spacing: 0.08em;
+  }
+
+  .hud-brand-tag {
+    display: none;
+  }
+
+  .hud-center-group {
+    grid-area: controls;
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+    padding-bottom: 2px;
+  }
+
+  .hud-center-group::-webkit-scrollbar {
+    display: none;
+  }
+
+  .hud-center-group > * {
+    flex: 0 0 auto;
+  }
+
+  .hud-actions {
+    grid-area: actions;
+    display: flex;
+    align-items: center;
+    gap: 4px;
+    max-width: calc(100vw - 120px);
+    overflow-x: auto;
+    scrollbar-width: none;
+    -webkit-overflow-scrolling: touch;
+  }
+
+  .hud-actions::-webkit-scrollbar {
+    display: none;
+  }
+
+  .hud-actions .hud-btn {
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    padding: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    touch-action: manipulation;
+  }
+
+  .hud-actions .hud-btn > span:not(.street-cam-badge) {
+    display: none !important;
+  }
+
+  .hud-actions .hud-btn > kbd {
+    display: none !important;
+  }
+
+  .street-cam-dropdown-menu,
+  .hud-custom-dropdown-menu {
+    width: min(320px, calc(100vw - 20px));
+    max-height: min(52dvh, 400px);
+    -webkit-overflow-scrolling: touch;
+  }
+
+  /* All Drawers & Decks Become Native Mobile Bottom Sheets */
+  .places-deck,
+  .navigation-deck,
+  .assistant-panel,
+  .details-drawer,
+  .street-view-panel {
+    position: fixed !important;
+    top: auto !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-width: 100% !important;
+    height: min(80dvh, 640px) !important;
+    max-height: calc(100dvh - 54px) !important;
+    border-radius: 16px 16px 0 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    border-top: 1.5px solid rgba(0, 240, 255, 0.35) !important;
+    box-shadow: 0 -12px 48px rgba(0, 0, 0, 0.9) !important;
+    z-index: 1020 !important;
+    animation: mobileSheetSlideUp 0.24s cubic-bezier(0.16, 1, 0.3, 1) !important;
+    -webkit-overflow-scrolling: touch;
+    overscroll-behavior: contain;
+  }
+
+  @keyframes mobileSheetSlideUp {
+    from {
+      opacity: 0;
+      transform: translateY(100%);
+    }
+    to {
+      opacity: 1;
+      transform: translateY(0);
+    }
+  }
+
+  /* Mobile Sheet Drag Handle Indicator */
+  .places-deck::before,
+  .navigation-deck::before,
+  .assistant-panel::before,
+  .details-drawer::before {
+    content: '';
+    display: block;
+    width: 36px;
+    height: 4px;
+    border-radius: 2px;
+    background: rgba(255, 255, 255, 0.28);
+    margin: 6px auto 2px;
+    flex-shrink: 0;
+  }
+
+  /* Header Touch Targets */
+  .places-deck-header,
+  .navigation-deck-header,
+  .assistant-header,
+  .details-header {
+    padding: 8px 14px 10px;
+    touch-action: manipulation;
+  }
+
+  .places-deck-close-btn,
+  .navigation-deck-close-btn,
+  .assistant-close-btn,
+  .details-close-btn {
+    width: 36px;
+    height: 36px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 6px;
+    background: rgba(255, 255, 255, 0.06);
+    color: var(--text-primary);
+  }
+
+  /* Floating Layer Dock on Mobile */
+  .layer-dock {
+    position: fixed !important;
+    top: auto !important;
+    right: 0 !important;
+    bottom: 0 !important;
+    left: 0 !important;
+    width: 100% !important;
+    max-height: min(65dvh, 520px) !important;
+    border-radius: 16px 16px 0 0 !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-bottom: none !important;
+    z-index: 1015 !important;
+    animation: mobileSheetSlideUp 0.22s cubic-bezier(0.16, 1, 0.3, 1) !important;
+  }
+
+  .layer-dock.collapsed {
+    display: none !important;
+  }
+
+  .layer-dock-floating-btn {
+    position: fixed !important;
+    top: auto !important;
+    bottom: max(16px, env(safe-area-inset-bottom)) !important;
+    left: 14px !important;
+    z-index: 90 !important;
+    background: rgba(10, 16, 26, 0.92) !important;
+    border: 1px solid var(--border-strong) !important;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.7) !important;
+    border-radius: 30px !important;
+    padding: 8px 14px !important;
+  }
+
+  /* Mobile Live Navigation HUD */
+  .nav-hud-top-card {
+    top: max(56px, calc(env(safe-area-inset-top) + 52px)) !important;
+    width: calc(100vw - 16px) !important;
+    padding: 10px 12px !important;
+    border-radius: 12px !important;
+  }
+
+  .nav-hud-maneuver-content {
+    gap: 10px !important;
+  }
+
+  .nav-hud-icon-box {
+    width: 44px !important;
+    height: 44px !important;
+    border-radius: 8px !important;
+  }
+
+  .countdown-distance {
+    font-size: 20px !important;
+  }
+
+  .nav-hud-street-name {
+    font-size: 12.5px !important;
+  }
+
+  .nav-hud-next-step-preview {
+    padding: 3px 6px !important;
+  }
+
+  /* Bottom Telemetry Bar 2-Tier Stack on Mobile */
+  .nav-hud-bottom-bar {
+    bottom: max(10px, env(safe-area-inset-bottom)) !important;
+    width: calc(100vw - 16px) !important;
+    padding: 10px 12px !important;
+    border-radius: 14px !important;
+    flex-direction: column !important;
+    align-items: stretch !important;
+    gap: 8px !important;
+  }
+
+  .nav-hud-telemetry-cluster {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+  }
+
+  .eta-main-time {
+    font-size: 19px !important;
+  }
+
+  .nav-hud-speedometer-box {
+    width: 44px !important;
+    height: 44px !important;
+  }
+
+  .speed-val {
+    font-size: 14px !important;
+  }
+
+  .speed-unit {
+    font-size: 7px !important;
+  }
+
+  .nav-hud-controls-group {
+    display: flex !important;
+    align-items: center !important;
+    justify-content: space-between !important;
+    width: 100% !important;
+    gap: 6px !important;
+    flex-wrap: wrap !important;
+  }
+
+  .nav-hud-recenter-btn {
+    bottom: 145px !important;
+    font-size: 11px !important;
+    padding: 6px 14px !important;
+  }
+
+  /* Form Inputs on Mobile: 16px Font Prevents iOS Auto-Zoom */
+  .road-text-input,
+  .places-search-input,
+  .command-input,
+  input[type="text"],
+  input[type="search"] {
+    font-size: 16px !important;
+  }
+
+  /* Drive Action Buttons Stacking on Mobile */
+  .nav-drive-mode-actions {
+    grid-template-columns: 1fr !important;
+    gap: 6px !important;
+  }
+
+  .nav-start-drive-btn {
+    padding: 10px 14px !important;
+    font-size: 12px !important;
+  }
+
+  /* Modals Full Screen on Mobile */
+  .modal-backdrop,
+  .command-backdrop,
+  .route-planner-overlay {
+    align-items: flex-end !important;
+    padding: 0 !important;
+  }
+
+  .modal-dialog,
+  .command-dialog,
+  .route-planner-modal {
+    width: 100% !important;
+    max-width: 100% !important;
+    max-height: calc(100dvh - 32px) !important;
+    border-radius: 16px 16px 0 0 !important;
+    border-bottom: none !important;
+  }
+}
+
+/* 3. EXTRA COMPACT PHONES (<= 480px) */
+@media (max-width: 480px) {
+  .hud-brand-title {
+    font-size: 11px !important;
+    letter-spacing: 0.05em !important;
+  }
+
+  .hud-brand .hud-btn {
+    width: 32px !important;
+    height: 32px !important;
+  }
+
+  .hud-actions {
+    max-width: calc(100vw - 105px) !important;
+  }
+
+  .places-deck-categories {
+    grid-template-columns: 1fr 1fr !important;
+    gap: 4px !important;
+    padding: 6px 8px !important;
+  }
+
+  .places-cat-btn {
+    padding: 6px 8px !important;
+    font-size: 10.5px !important;
+  }
+
+  .flight-route-flow {
+    gap: 6px !important;
+  }
+
+  .flow-iata {
+    font-size: 16px !important;
+  }
+
+  .flow-city {
+    font-size: 10px !important;
+  }
+}
+
+/* 4. MOBILE LANDSCAPE (height <= 520px) */
+@media (max-height: 520px) and (orientation: landscape) {
+  .hud-topbar {
+    min-height: 44px !important;
+    padding: 4px 10px !important;
+  }
+
+  .places-deck,
+  .navigation-deck,
+  .assistant-panel,
+  .details-drawer,
+  .street-view-panel {
+    top: 48px !important;
+    right: 8px !important;
+    bottom: 8px !important;
+    left: auto !important;
+    width: min(380px, 50vw) !important;
+    height: auto !important;
+    max-height: calc(100dvh - 56px) !important;
+    border-radius: 8px !important;
+  }
 
   .layer-dock {
-    top: auto;
-    right: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
-    left: 8px;
-    width: auto;
-    max-height: min(52dvh, 460px);
+    top: 48px !important;
+    left: 8px !important;
+    bottom: 8px !important;
+    width: min(260px, 40vw) !important;
+    max-height: calc(100dvh - 56px) !important;
   }
 
-  .layer-dock.collapsed { transform: translateY(calc(100% - 44px)); }
-  .layer-dock-floating-btn { top: auto; bottom: max(12px, env(safe-area-inset-bottom)); left: 8px; }
-  .details-drawer { top: auto; right: 8px; bottom: 8px; left: 8px; width: auto; max-width: none; max-height: min(58dvh, 520px); }
-  .details-prop-grid { grid-template-columns: minmax(78px, 30%) minmax(0, 1fr); }
-
-  .street-view-panel,
-  .assistant-panel {
-    top: auto;
-    right: 8px;
-    bottom: max(8px, env(safe-area-inset-bottom));
-    left: 8px;
-    width: auto;
-    max-height: calc(100dvh - 112px);
-    border-radius: 8px;
+  .nav-hud-top-card {
+    top: 48px !important;
+    padding: 6px 10px !important;
   }
 
-  .street-view-panel { height: min(62dvh, 520px); }
-  .assistant-panel { height: min(68dvh, 580px); }
-  .street-cam-dropdown-menu { max-height: min(52dvh, 380px); }
-
-  .modal-backdrop { align-items: flex-end; padding: 8px; }
-  .modal-dialog { width: 100%; max-width: none; max-height: calc(100dvh - 16px); border-radius: 10px; }
-  .modal-body { min-height: 0; overflow: auto; }
-  .command-backdrop { align-items: flex-start; padding: max(12vh, 72px) 8px 8px; }
-  .command-dialog { width: 100%; max-width: none; max-height: calc(100dvh - 88px); }
-  .route-planner-overlay { align-items: flex-end; padding: 8px; }
-  .route-planner-modal { max-height: calc(100dvh - 16px); border-radius: 10px; }
-  .route-planner-title { min-width: 0; font-size: 10px; letter-spacing: 0.03em; }
-  .route-planner-body { min-height: 0; padding: 12px; }
-}
-
-@media (max-width: 390px) {
-  .hud-brand-title { font-size: 10px; }
-  .hud-brand .hud-btn { width: 32px; height: 32px; }
-  .hud-actions { max-width: calc(100vw - 112px); }
-  .mode-btn { padding: 6px; letter-spacing: 0.02em; }
-  .street-cam-trigger-btn span:not(.street-cam-badge) { display: none; }
-  .route-planner-header { padding: 10px; }
-  .route-planner-body { gap: 10px; padding: 10px; }
-}
-
-@media (max-height: 520px) and (orientation: landscape) {
-  .layer-dock { top: 98px; right: auto; bottom: 8px; left: 8px; width: min(270px, 45vw); max-height: calc(100dvh - 106px); }
-  .layer-dock.collapsed { transform: translateX(calc(-100% + 40px)); }
-  .layer-dock-floating-btn { top: 98px; bottom: auto; left: 8px; }
-  .details-drawer { top: 98px; right: 8px; bottom: 8px; left: auto; width: min(360px, 48vw); max-height: calc(100dvh - 106px); }
-  .street-view-panel,
-  .assistant-panel { top: 98px; right: 8px; bottom: 8px; left: auto; width: min(440px, 52vw); height: auto; max-height: calc(100dvh - 106px); }
-  .hud-center-group { order: initial; flex: 0 1 auto; width: auto; }
+  .nav-hud-bottom-bar {
+    bottom: 8px !important;
+    padding: 6px 12px !important;
+    flex-direction: row !important;
+  }
 }
 
 .telemetry-badge {

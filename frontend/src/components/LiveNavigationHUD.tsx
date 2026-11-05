@@ -155,24 +155,26 @@ export const LiveNavigationHUD: React.FC<LiveNavigationHUDProps> = ({
 
       {/* 3. BOTTOM TELEMETRY & CONTROLS BAR (Google Maps Style) */}
       <div className="nav-hud-bottom-bar">
-        {/* Left: ETA, Remaining Distance & Clock */}
-        <div className="nav-hud-eta-group">
-          <div className="eta-main-time text-emerald-400">
-            {formatDuration(userNavState.remainingDuration_s)}
+        {/* Left: ETA, Remaining Distance & Speed Cluster */}
+        <div className="nav-hud-telemetry-cluster">
+          <div className="nav-hud-eta-group">
+            <div className="eta-main-time text-emerald-400">
+              {formatDuration(userNavState.remainingDuration_s)}
+            </div>
+            <div className="eta-sub-row">
+              <span className="eta-sub-distance">
+                {formatDistance(userNavState.remainingDistance_m)}
+              </span>
+              <span className="eta-dot">•</span>
+              <span className="eta-sub-clock">ETA {arrivalTimeFormatted}</span>
+            </div>
           </div>
-          <div className="eta-sub-row">
-            <span className="eta-sub-distance">
-              {formatDistance(userNavState.remainingDistance_m)}
-            </span>
-            <span className="eta-dot">•</span>
-            <span className="eta-sub-clock">ETA {arrivalTimeFormatted}</span>
-          </div>
-        </div>
 
-        {/* Center: Live Speedometer */}
-        <div className="nav-hud-speedometer-box">
-          <span className="speed-val">{userNavState.speed_kmh}</span>
-          <span className="speed-unit">KM/H</span>
+          {/* Live Speedometer */}
+          <div className="nav-hud-speedometer-box">
+            <span className="speed-val">{userNavState.speed_kmh}</span>
+            <span className="speed-unit">KM/H</span>
+          </div>
         </div>
 
         {/* Right: Mode & Camera Controls */}
@@ -241,3 +243,4 @@ export const LiveNavigationHUD: React.FC<LiveNavigationHUDProps> = ({
     </div>
   );
 };
+
