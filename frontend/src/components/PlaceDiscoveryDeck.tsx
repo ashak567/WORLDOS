@@ -250,14 +250,14 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
                 >
                   <div className="places-card-img-wrap">
                     <img src={heroPhoto} alt={place.name} className="places-card-img" loading="lazy" />
-                    <div style={{ position: 'absolute', top: 8, left: 8, display: 'flex', gap: 6 }}>
-                      <span style={{ background: 'rgba(5, 8, 12, 0.85)', padding: '2px 8px', borderRadius: 4, fontSize: '10px', color: '#38bdf8', fontWeight: 700, border: '1px solid rgba(255,255,255,0.1)' }}>
+                    <div className="places-card-badge-top-left">
+                      <span className="places-badge-price">
                         {place.price_level || '$$$'} · {place.price_display || 'Upscale'}
                       </span>
                     </div>
 
-                    <div style={{ position: 'absolute', top: 8, right: 8 }}>
-                      <span className="places-card-rating" style={{ background: 'rgba(5, 8, 12, 0.85)', padding: '2px 8px', borderRadius: 4, border: '1px solid rgba(234, 179, 8, 0.3)' }}>
+                    <div className="places-card-badge-top-right">
+                      <span className="places-badge-rating">
                         <Star size={11} fill="#eab308" color="#eab308" />
                         <span>{place.rating ? place.rating.toFixed(1) : '4.8'}</span>
                         <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
@@ -265,20 +265,20 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
                         </span>
                       </span>
                     </div>
-
-                    <div style={{ position: 'absolute', bottom: 8, left: 10, right: 10, textShadow: '0 2px 8px rgba(0,0,0,0.9)' }}>
-                      <div className="places-card-name" style={{ color: '#fff', fontSize: '13px' }}>{place.name}</div>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 4, color: 'rgba(255,255,255,0.8)', fontSize: '10px' }}>
-                        <MapPin size={10} color="#eab308" />
-                        <span style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{place.formatted_address}</span>
-                      </div>
-                    </div>
                   </div>
 
                   <div className="places-card-body">
-                    <p style={{ fontSize: '11px', color: 'var(--text-secondary)', lineHeight: 1.4, margin: 0, display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical', overflow: 'hidden' }}>
-                      {place.summary}
-                    </p>
+                    <div className="places-card-name" title={place.name}>{place.name}</div>
+                    <div className="places-card-address" title={place.formatted_address}>
+                      <MapPin size={11} color="#eab308" style={{ flexShrink: 0 }} />
+                      <span>{place.formatted_address}</span>
+                    </div>
+
+                    {place.summary && (
+                      <p className="places-card-summary">
+                        {place.summary}
+                      </p>
+                    )}
 
                     <div className="places-card-actions">
                       <button

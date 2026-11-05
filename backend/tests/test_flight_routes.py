@@ -68,3 +68,4 @@ def test_enrich_aircraft_payload():
     assert "departure_time_formatted" in attr
     assert "estimated_arrival_time_formatted" in attr
     assert attr["flight_phase"] == "EN ROUTE (CRUISE)"
+

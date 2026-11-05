@@ -58,6 +58,77 @@ function readPreferences(): TravelPreferences {
   } catch { return {}; }
 }
 
+function sanitizeAiMessageAndExecute(
+  rawText: string,
+  onAction: (action: AssistantAction) => void
+): string {
+  const isCode =
+    rawText.includes('tool_code') ||
+    rawText.includes('default_api.') ||
+    rawText.includes('print(') ||
+    rawText.includes('discover_places') ||
+    rawText.includes('fly_to_location');
+
+  if (!isCode) return rawText;
+
+  // 1. Try parsing discover_places
+  const discoverMatch = rawText.match(/discover_places\s*\(([\s\S]*?)\)/);
+  if (discoverMatch) {
+    const inner = discoverMatch[1];
+    const catMatch = inner.match(/category\s*=\s*["']([^"']+)["']/);
+    const latMatch = inner.match(/latitude\s*=\s*([-0-9.]+)/);
+    const lonMatch = inner.match(/longitude\s*=\s*([-0-9.]+)/);
+    const queryMatch = inner.match(/query\s*=\s*["']([\s\S]*?)["']/);
+
+    const category = (catMatch?.[1] as any) || 'stays';
+    const lat = latMatch ? parseFloat(latMatch[1]) : undefined;
+    const lon = lonMatch ? parseFloat(lonMatch[1]) : undefined;
+    const query = queryMatch ? queryMatch[1].replace(/[\r\n]+/g, ' ').trim() : undefined;
+
+    if (typeof lon === 'number' && typeof lat === 'number') {
+      onAction({ type: 'fly_to', center: [lon, lat], zoom: 14 });
+      onAction({ type: 'discover_places', category, query, center: [lon, lat] });
+    } else {
+      onAction({ type: 'discover_places', category, query });
+    }
+
+    return `Roger: Locating top-rated ${query || category} in this sector...`;
+  }
+
+  // 2. Try parsing fly_to_location
+  const flyMatch = rawText.match(/fly_to_location\s*\(([\s\S]*?)\)/);
+  if (flyMatch) {
+    const inner = flyMatch[1];
+    const latMatch = inner.match(/latitude\s*=\s*([-0-9.]+)/);
+    const lonMatch = inner.match(/longitude\s*=\s*([-0-9.]+)/);
+    const zoomMatch = inner.match(/zoom\s*=\s*([0-9.]+)/);
+
+    const lat = latMatch ? parseFloat(latMatch[1]) : undefined;
+    const lon = lonMatch ? parseFloat(lonMatch[1]) : undefined;
+    const zoom = zoomMatch ? parseFloat(zoomMatch[1]) : 13;
+
+    if (typeof lon === 'number' && typeof lat === 'number') {
+      onAction({ type: 'fly_to', center: [lon, lat], zoom });
+    }
+    return 'Roger: Navigating 3D camera to requested coordinates.';
+  }
+
+  // 3. Try parsing set_map_layer_visibility
+  const layerMatch = rawText.match(/set_map_layer_visibility\s*\(([\s\S]*?)\)/);
+  if (layerMatch) {
+    const inner = layerMatch[1];
+    const idMatch = inner.match(/layer_id\s*=\s*["']([^"']+)["']/);
+    const visMatch = inner.match(/visible\s*=\s*(True|False|true|false)/i);
+    if (idMatch) {
+      const visible = visMatch ? visMatch[1].toLowerCase() === 'true' : true;
+      onAction({ type: 'set_layer_visibility', layer_id: idMatch[1], visible });
+      return `Roger: Updated ${idMatch[1]} layer visibility.`;
+    }
+  }
+
+  return 'Roger: Mission command processed.';
+}
+
 export const AssistantPanel: React.FC<AssistantPanelProps> = (props) => (
   <ConversationProvider>
     <AssistantPanelSession {...props} />
@@ -77,13 +148,20 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   const contextRef = useRef(context);
   const preferencesRef = useRef(preferences);
   const onActionRef = useRef(onAction);
+  const conversationRef = useRef<any>(null);
   contextRef.current = context;
   preferencesRef.current = preferences;
   onActionRef.current = onAction;
 
   const handleMessage = useCallback((item: AssistantMessage) => {
     if (!item.message.trim()) return;
-    setMessages((current) => [...current.slice(-29), item]);
+
+    let displayMessage = item.message;
+    if (item.role === 'ai') {
+      displayMessage = sanitizeAiMessageAndExecute(item.message, onActionRef.current);
+    }
+
+    setMessages((current) => [...current.slice(-29), { role: item.role, message: displayMessage }]);
 
     // Intelligent client-side intent interpreter for voice and text commands
     if (item.role === 'user') {
@@ -120,8 +198,23 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   }, []);
 
   const conversation = useConversation({
-    onMessage: ({ message: text, role, source }) =>
-      handleMessage({ role: role === 'user' || source === 'user' ? 'user' : 'ai', message: text }),
+    onMessage: ({ message: text, role, source }) => {
+      const isUser = role === 'user' || source === 'user';
+      if (!isUser) {
+        const isCode = text.includes('tool_code') || text.includes('default_api.') || text.includes('print(');
+        if (isCode) {
+          try {
+            conversationRef.current?.setVolume?.({ volume: 0 });
+            setTimeout(() => {
+              try {
+                conversationRef.current?.setVolume?.({ volume: 1 });
+              } catch {}
+            }, 3500);
+          } catch {}
+        }
+      }
+      handleMessage({ role: isUser ? 'user' : 'ai', message: text });
+    },
     onError: (error) => setMessage(error || 'The ElevenLabs conversation hit a snag.'),
     clientTools: {
       get_worldos_map_context: async () => {
@@ -213,6 +306,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
       },
     },
   });
+  conversationRef.current = conversation;
 
   // Preserve messages and evidence across panel open/close so the user doesn't lose context
   useEffect(() => {
