@@ -30,6 +30,7 @@ import {
   RoadRouteStep,
   fetchInboundFlightPlans,
   fetchRoadRoute,
+  geocodeLocation,
 } from '../api';
 
 interface NavigationDeckProps {
@@ -75,6 +76,89 @@ const DESTINATION_AIRPORT_PRESETS = [
   { code: 'LHR', label: 'LHR (London)' },
   { code: 'DXB', label: 'DXB (Dubai)' },
   { code: 'SYD', label: 'SYD (Sydney)' },
+];
+
+export const ROAD_CORRIDOR_PRESETS = [
+  {
+    city: 'Tokyo',
+    country: 'Japan',
+    originLabel: 'Haneda Airport (HND)',
+    originCoords: [139.7798, 35.5494] as [number, number],
+    destLabel: 'Sensō-ji Temple',
+    destCoords: [139.7967, 35.7148] as [number, number],
+  },
+  {
+    city: 'Paris',
+    country: 'France',
+    originLabel: 'Charles de Gaulle (CDG)',
+    originCoords: [2.5479, 49.0097] as [number, number],
+    destLabel: 'Eiffel Tower',
+    destCoords: [2.2945, 48.8584] as [number, number],
+  },
+  {
+    city: 'Rome',
+    country: 'Italy',
+    originLabel: 'Fiumicino Airport (FCO)',
+    originCoords: [12.2462, 41.7999] as [number, number],
+    destLabel: 'Colosseum',
+    destCoords: [12.4922, 41.8902] as [number, number],
+  },
+  {
+    city: 'New York',
+    country: 'USA',
+    originLabel: 'JFK International (JFK)',
+    originCoords: [-73.7781, 40.6413] as [number, number],
+    destLabel: 'Times Square',
+    destCoords: [-73.9851, 40.7580] as [number, number],
+  },
+  {
+    city: 'London',
+    country: 'UK',
+    originLabel: 'Heathrow Airport (LHR)',
+    originCoords: [-0.4543, 51.4700] as [number, number],
+    destLabel: 'Tower Bridge',
+    destCoords: [-0.0754, 51.5055] as [number, number],
+  },
+  {
+    city: 'Dubai',
+    country: 'UAE',
+    originLabel: 'Dubai International (DXB)',
+    originCoords: [55.3644, 25.2532] as [number, number],
+    destLabel: 'Burj Khalifa',
+    destCoords: [55.2744, 25.1972] as [number, number],
+  },
+  {
+    city: 'Sydney',
+    country: 'Australia',
+    originLabel: 'Kingsford Smith (SYD)',
+    originCoords: [151.1772, -33.9399] as [number, number],
+    destLabel: 'Sydney Opera House',
+    destCoords: [151.2153, -33.8568] as [number, number],
+  },
+  {
+    city: 'Delhi',
+    country: 'India',
+    originLabel: 'Indira Gandhi Intl (DEL)',
+    originCoords: [77.1000, 28.5562] as [number, number],
+    destLabel: 'India Gate',
+    destCoords: [77.2295, 28.6129] as [number, number],
+  },
+  {
+    city: 'Kyoto',
+    country: 'Japan',
+    originLabel: 'Kansai Airport (KIX)',
+    originCoords: [135.2442, 34.4347] as [number, number],
+    destLabel: 'Fushimi Inari Taisha',
+    destCoords: [135.7727, 34.9671] as [number, number],
+  },
+  {
+    city: 'Cross-Europe',
+    country: 'Europe',
+    originLabel: 'Paris Center',
+    originCoords: [2.3522, 48.8566] as [number, number],
+    destLabel: 'Berlin Center',
+    destCoords: [13.4050, 52.5200] as [number, number],
+  },
 ];
 
 export const NavigationDeck: React.FC<NavigationDeckProps> = ({
@@ -164,23 +248,90 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
     handleLoadFlightPlans(code, flightOrigin);
   };
 
-  const handleCalculateRoadRoute = async () => {
+  const handleCalculateRoadRoute = async (
+    customOrigCoords?: [number, number],
+    customDestCoords?: [number, number],
+    customOrigName?: string,
+    customDestName?: string
+  ) => {
     setIsRoadLoading(true);
     setRoadError(null);
+
+    let useOrigName = customOrigName !== undefined ? customOrigName : originName;
+    let useDestName = customDestName !== undefined ? customDestName : destName;
+    let useOrigCoords: [number, number] = customOrigCoords
+      ? [customOrigCoords[0], customOrigCoords[1]]
+      : [originCoords[0], originCoords[1]];
+    let useDestCoords: [number, number] = customDestCoords
+      ? [customDestCoords[0], customDestCoords[1]]
+      : [destCoords[0], destCoords[1]];
+
+    // 1. Check if name matches any of our known road corridor presets
+    const matchedOrig = ROAD_CORRIDOR_PRESETS.find(
+      (p) =>
+        p.city.toLowerCase() === useOrigName.toLowerCase() ||
+        p.originLabel.toLowerCase().includes(useOrigName.toLowerCase())
+    );
+    if (matchedOrig && !customOrigCoords) {
+      useOrigCoords = matchedOrig.originCoords;
+      setOriginCoords(useOrigCoords);
+    }
+
+    const matchedDest = ROAD_CORRIDOR_PRESETS.find(
+      (p) =>
+        p.city.toLowerCase() === useDestName.toLowerCase() ||
+        p.destLabel.toLowerCase().includes(useDestName.toLowerCase())
+    );
+    if (matchedDest && !customDestCoords) {
+      useDestCoords = matchedDest.destCoords;
+      setDestCoords(useDestCoords);
+    }
+
+    // 2. Geocode custom names if not matching preset
+    if (!matchedOrig && useOrigName.trim().length >= 2) {
+      try {
+        const geoOrig = await geocodeLocation(useOrigName);
+        if (geoOrig) {
+          useOrigCoords = [geoOrig.longitude, geoOrig.latitude];
+          setOriginCoords(useOrigCoords);
+        }
+      } catch (_) {}
+    }
+
+    if (!matchedDest && useDestName.trim().length >= 2) {
+      try {
+        const geoDest = await geocodeLocation(useDestName);
+        if (geoDest) {
+          useDestCoords = [geoDest.longitude, geoDest.latitude];
+          setDestCoords(useDestCoords);
+        }
+      } catch (_) {}
+    }
+
     try {
       const resp = await fetchRoadRoute(
-        originCoords[1], // originLat
-        originCoords[0], // originLon
-        destCoords[1],   // destLat
-        destCoords[0],   // destLon
-        originName,
-        destName
+        useOrigCoords[1], // originLat
+        useOrigCoords[0], // originLon
+        useDestCoords[1],   // destLat
+        useDestCoords[0],   // destLon
+        useOrigName,
+        useDestName
       );
+
+      // Sync state with resolved coordinates
+      if (resp.origin_coords && resp.origin_coords.length === 2) {
+        setOriginCoords([resp.origin_coords[0], resp.origin_coords[1]]);
+      }
+      if (resp.destination_coords && resp.destination_coords.length === 2) {
+        setDestCoords([resp.destination_coords[0], resp.destination_coords[1]]);
+      }
+
       onSelectRoadRoute(resp);
       // Fly camera to midpoint of road route
-      const midLon = (originCoords[0] + destCoords[0]) / 2.0;
-      const midLat = (originCoords[1] + destCoords[1]) / 2.0;
-      onFlyToCoordinates([midLon, midLat], 13);
+      const midLon = (resp.origin_coords[0] + resp.destination_coords[0]) / 2.0;
+      const midLat = (resp.origin_coords[1] + resp.destination_coords[1]) / 2.0;
+      const zoomLevel = resp.total_distance_km > 300 ? 7 : resp.total_distance_km > 50 ? 10 : 13;
+      onFlyToCoordinates([midLon, midLat], zoomLevel);
     } catch (err: any) {
       setRoadError(err.message || 'Failed to calculate road route');
     } finally {
@@ -195,6 +346,17 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
     setDestName(city.sight);
     setDestCoords(city.sightCoords);
     handleLoadFlightPlans(city.name, flightOrigin);
+    if (activeTab === 'road') {
+      handleCalculateRoadRoute(city.aptCoords, city.sightCoords, city.airport, city.sight);
+    }
+  };
+
+  const handleSelectRoadPreset = (preset: typeof ROAD_CORRIDOR_PRESETS[0]) => {
+    setOriginName(preset.originLabel);
+    setOriginCoords(preset.originCoords);
+    setDestName(preset.destLabel);
+    setDestCoords(preset.destCoords);
+    handleCalculateRoadRoute(preset.originCoords, preset.destCoords, preset.originLabel, preset.destLabel);
   };
 
   const handleSwapRoadEndpoints = () => {
@@ -566,21 +728,49 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
       {/* TAB 2: ROAD ROUTE SHORT NAVIGATION SYSTEM */}
       {activeTab === 'road' && (
         <div className="navigation-tab-content">
+          {/* Preset City Corridors Bar */}
+          <div className="navigation-presets-bar">
+            <span className="presets-label">CITY CORRIDORS:</span>
+            <div className="presets-scroll">
+              {ROAD_CORRIDOR_PRESETS.map((p) => {
+                const isActive =
+                  originName.toLowerCase().includes(p.city.toLowerCase()) ||
+                  destName.toLowerCase().includes(p.city.toLowerCase());
+                return (
+                  <button
+                    key={p.city}
+                    className={`preset-pill ${isActive ? 'active' : ''}`}
+                    onClick={() => handleSelectRoadPreset(p)}
+                  >
+                    {p.city}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Origin & Destination Config */}
           <div className="road-route-builder">
             <div className="road-input-block">
               <label className="road-input-label">
                 <span className="dot origin-dot" />
-                <span>START POINT (Airport or Landmark)</span>
+                <span>START POINT (Airport, Hotel, or Address)</span>
               </label>
               <div className="road-input-row">
                 <input
                   type="text"
                   value={originName}
                   onChange={(e) => setOriginName(e.target.value)}
-                  placeholder="Departure airport or hotel..."
+                  onKeyDown={(e) => e.key === 'Enter' && handleCalculateRoadRoute()}
+                  placeholder="Departure airport, address, or landmark..."
                   className="road-text-input"
                 />
+              </div>
+              <div className="road-coords-badge">
+                <MapPin size={10} className="text-cyan-400" />
+                <span>
+                  {originCoords[1].toFixed(4)}°N, {originCoords[0].toFixed(4)}°E
+                </span>
               </div>
             </div>
 
@@ -591,29 +781,36 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
                 title="Swap Start and Destination"
               >
                 <ArrowLeftRight size={14} />
-                <span>Swap</span>
+                <span>⇄ Swap</span>
               </button>
             </div>
 
             <div className="road-input-block">
               <label className="road-input-label">
                 <span className="dot dest-dot" />
-                <span>DESTINATION (Place or Attraction)</span>
+                <span>DESTINATION (Place, Attraction, or City)</span>
               </label>
               <div className="road-input-row">
                 <input
                   type="text"
                   value={destName}
                   onChange={(e) => setDestName(e.target.value)}
-                  placeholder="Attraction, restaurant, or hotel..."
+                  onKeyDown={(e) => e.key === 'Enter' && handleCalculateRoadRoute()}
+                  placeholder="Attraction, restaurant, or city..."
                   className="road-text-input"
                 />
+              </div>
+              <div className="road-coords-badge">
+                <MapPin size={10} className="text-emerald-400" />
+                <span>
+                  {destCoords[1].toFixed(4)}°N, {destCoords[0].toFixed(4)}°E
+                </span>
               </div>
             </div>
 
             <button
               className="nav-action-btn primary full-width mt-2"
-              onClick={handleCalculateRoadRoute}
+              onClick={() => handleCalculateRoadRoute()}
               disabled={isRoadLoading}
             >
               {isRoadLoading ? (

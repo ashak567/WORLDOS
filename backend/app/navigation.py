@@ -58,6 +58,14 @@ class RoadRouteResponse(BaseModel):
     polyline: list[list[float]]  # [[lon, lat], ...]
 
 
+class GeocodeResponse(BaseModel):
+    query: str
+    name: str
+    latitude: float
+    longitude: float
+    formatted_address: str
+
+
 class AirportSummary(BaseModel):
     icao: str
     iata: str
@@ -1498,6 +1506,211 @@ def _format_duration(seconds: float) -> str:
     return f"{hrs}h {rem_mins}m"
 
 
+KNOWN_WORLD_CITIES: dict[str, tuple[float, float, str]] = {
+    "tokyo": (35.6762, 139.6503, "Tokyo, Japan"),
+    "paris": (48.8566, 2.3522, "Paris, France"),
+    "rome": (41.9028, 12.4964, "Rome, Italy"),
+    "london": (51.5074, -0.1278, "London, United Kingdom"),
+    "new york": (40.7128, -74.0060, "New York, USA"),
+    "nyc": (40.7128, -74.0060, "New York, USA"),
+    "dubai": (25.2048, 55.2708, "Dubai, UAE"),
+    "sydney": (-33.8688, 151.2093, "Sydney, Australia"),
+    "delhi": (28.6139, 77.2090, "Delhi, India"),
+    "new delhi": (28.6139, 77.2090, "New Delhi, India"),
+    "mumbai": (19.0760, 72.8777, "Mumbai, India"),
+    "bengaluru": (12.9716, 77.5946, "Bengaluru, India"),
+    "bangalore": (12.9716, 77.5946, "Bengaluru, India"),
+    "singapore": (1.3521, 103.8198, "Singapore"),
+    "bangkok": (13.7563, 100.5018, "Bangkok, Thailand"),
+    "seoul": (37.5665, 126.9780, "Seoul, South Korea"),
+    "berlin": (52.5200, 13.4050, "Berlin, Germany"),
+    "frankfurt": (50.1109, 8.6821, "Frankfurt, Germany"),
+    "munich": (48.1351, 11.5820, "Munich, Germany"),
+    "amsterdam": (52.3676, 4.9041, "Amsterdam, Netherlands"),
+    "madrid": (40.4168, -3.7038, "Madrid, Spain"),
+    "barcelona": (41.3879, 2.1699, "Barcelona, Spain"),
+    "zurich": (47.3769, 8.5417, "Zurich, Switzerland"),
+    "geneva": (46.2044, 6.1432, "Geneva, Switzerland"),
+    "vienna": (48.2082, 16.3738, "Vienna, Austria"),
+    "san francisco": (37.7749, -122.4194, "San Francisco, USA"),
+    "los angeles": (34.0522, -118.2437, "Los Angeles, USA"),
+    "chicago": (41.8781, -87.6298, "Chicago, USA"),
+    "las vegas": (36.1699, -115.1398, "Las Vegas, USA"),
+    "seattle": (47.6062, -122.3321, "Seattle, USA"),
+    "miami": (25.7617, -80.1918, "Miami, USA"),
+    "toronto": (43.6532, -79.3832, "Toronto, Canada"),
+    "vancouver": (49.2827, -123.1207, "Vancouver, Canada"),
+    "cairo": (30.0444, 31.2357, "Cairo, Egypt"),
+    "kyoto": (35.0116, 135.7681, "Kyoto, Japan"),
+    "osaka": (34.6937, 135.5023, "Osaka, Japan"),
+    "florence": (43.7696, 11.2558, "Florence, Italy"),
+    "venice": (45.4408, 12.3155, "Venice, Italy"),
+    "milan": (45.4642, 9.1900, "Milan, Italy"),
+    "istanbul": (41.0082, 28.9784, "Istanbul, Turkey"),
+    "doha": (25.2854, 51.5310, "Doha, Qatar"),
+    "riyadh": (24.7136, 46.6753, "Riyadh, Saudi Arabia"),
+    "hong kong": (22.3193, 114.1694, "Hong Kong"),
+    "beijing": (39.9042, 116.4074, "Beijing, China"),
+    "shanghai": (31.2304, 121.4737, "Shanghai, China"),
+    "melbourne": (-37.8136, 144.9631, "Melbourne, Australia"),
+    "auckland": (-36.8485, 174.7633, "Auckland, New Zealand"),
+    "sao paulo": (-23.5505, -46.6333, "São Paulo, Brazil"),
+    "buenos aires": (-34.6037, -58.3816, "Buenos Aires, Argentina"),
+}
+
+KNOWN_WORLD_LANDMARKS: dict[str, tuple[float, float, str]] = {
+    # Paris
+    "eiffel tower": (48.8584, 2.2945, "Eiffel Tower, Paris"),
+    "louvre": (48.8606, 2.3376, "Musée du Louvre, Paris"),
+    "arc de triomphe": (48.8738, 2.2950, "Arc de Triomphe, Paris"),
+    "notre dame": (48.8530, 2.3499, "Cathédrale Notre-Dame, Paris"),
+    "champs-elysees": (48.8698, 2.3075, "Champs-Élysées, Paris"),
+    "sacre-coeur": (48.8867, 2.3431, "Sacré-Cœur, Paris"),
+    # Rome
+    "colosseum": (41.8902, 12.4922, "Colosseum, Rome"),
+    "vatican": (41.9029, 12.4534, "St. Peter's Basilica, Vatican City"),
+    "trevi fountain": (41.9009, 12.4833, "Trevi Fountain, Rome"),
+    "pantheon": (41.8986, 12.4769, "Pantheon, Rome"),
+    "spanish steps": (41.9060, 12.4828, "Spanish Steps, Rome"),
+    # Tokyo
+    "senso-ji": (35.7148, 139.7967, "Sensō-ji Temple, Tokyo"),
+    "senso ji": (35.7148, 139.7967, "Sensō-ji Temple, Tokyo"),
+    "tokyo tower": (35.6586, 139.7454, "Tokyo Tower, Tokyo"),
+    "shibuya crossing": (35.6595, 139.7005, "Shibuya Crossing, Tokyo"),
+    "shinjuku gyoen": (35.6852, 139.7101, "Shinjuku Gyoen, Tokyo"),
+    "meiji shrine": (35.6764, 139.6993, "Meiji Shrine, Tokyo"),
+    "tokyo skytree": (35.7101, 139.8107, "Tokyo Skytree, Tokyo"),
+    # New York
+    "times square": (40.7580, -73.9855, "Times Square, New York"),
+    "central park": (40.7851, -73.9683, "Central Park, New York"),
+    "empire state": (40.7484, -73.9857, "Empire State Building, New York"),
+    "statue of liberty": (40.6892, -74.0445, "Statue of Liberty, New York"),
+    "brooklyn bridge": (40.7061, -73.9969, "Brooklyn Bridge, New York"),
+    "one world trade center": (40.7127, -74.0134, "One World Trade Center, New York"),
+    # London
+    "tower bridge": (51.5055, -0.0754, "Tower Bridge, London"),
+    "big ben": (51.5007, -0.1246, "Big Ben, London"),
+    "british museum": (51.5194, -0.1270, "The British Museum, London"),
+    "london eye": (51.5033, -0.1195, "London Eye, London"),
+    "buckingham palace": (51.5014, -0.1419, "Buckingham Palace, London"),
+    "hyde park": (51.5073, -0.1657, "Hyde Park, London"),
+    # Dubai
+    "burj khalifa": (25.1972, 55.2744, "Burj Khalifa, Dubai"),
+    "dubai mall": (25.1975, 55.2798, "The Dubai Mall, Dubai"),
+    "burj al arab": (25.1412, 55.1852, "Burj Al Arab, Dubai"),
+    "palm jumeirah": (25.1124, 55.1390, "Palm Jumeirah, Dubai"),
+    # Sydney
+    "sydney opera house": (-33.8568, 151.2153, "Sydney Opera House, Sydney"),
+    "opera house": (-33.8568, 151.2153, "Sydney Opera House, Sydney"),
+    "sydney harbour bridge": (-33.8523, 151.2108, "Sydney Harbour Bridge, Sydney"),
+    "bondi beach": (-33.8915, 151.2767, "Bondi Beach, Sydney"),
+    "darling harbour": (-33.8732, 151.1996, "Darling Harbour, Sydney"),
+    # Delhi & India
+    "india gate": (28.6129, 77.2295, "India Gate, New Delhi"),
+    "qutub minar": (28.5244, 77.1855, "Qutub Minar, Delhi"),
+    "red fort": (28.6562, 77.2410, "Red Fort, Delhi"),
+    "taj mahal": (27.1751, 78.0421, "Taj Mahal, Agra"),
+    "lotus temple": (28.5535, 77.2588, "Lotus Temple, New Delhi"),
+    "gateway of india": (18.9220, 72.8347, "Gateway of India, Mumbai"),
+    "marine drive": (18.9432, 72.8230, "Marine Drive, Mumbai"),
+    # Singapore
+    "marina bay sands": (1.2838, 103.8607, "Marina Bay Sands, Singapore"),
+    "gardens by the bay": (1.2816, 103.8636, "Gardens by the Bay, Singapore"),
+    "sentosa": (1.2494, 103.8303, "Sentosa Island, Singapore"),
+    # Kyoto & Osaka
+    "fushimi inari": (34.9671, 135.7727, "Fushimi Inari Taisha, Kyoto"),
+    "kinkaku-ji": (35.0394, 135.7292, "Kinkaku-ji Golden Pavilion, Kyoto"),
+    "kiyomizu-dera": (34.9949, 135.7850, "Kiyomizu-dera, Kyoto"),
+    "osaka castle": (34.6873, 135.5262, "Osaka Castle, Osaka"),
+    "dotonbori": (34.6687, 135.5013, "Dōtonbori, Osaka"),
+    # Europe
+    "sagrada familia": (41.4036, 2.1744, "La Sagrada Família, Barcelona"),
+    "park guell": (41.4145, 2.1527, "Park Güell, Barcelona"),
+    "brandenburg gate": (52.5163, 13.3777, "Brandenburg Gate, Berlin"),
+    "reichstag": (52.5186, 13.3761, "Reichstag Building, Berlin"),
+    "rijksmuseum": (52.3600, 4.8852, "Rijksmuseum, Amsterdam"),
+    "van gogh museum": (52.3584, 4.8811, "Van Gogh Museum, Amsterdam"),
+}
+
+
+def resolve_location_coordinates(query: str) -> tuple[float, float, str] | None:
+    """Resolve latitude, longitude, and descriptive name for any world city, landmark, or airport."""
+    if not query or not isinstance(query, str):
+        return None
+    clean = query.strip()
+    if not clean:
+        return None
+    lower = clean.lower()
+    upper = clean.upper()
+
+    # 1. Match famous world landmarks
+    for k, (lat, lon, name) in KNOWN_WORLD_LANDMARKS.items():
+        if k in lower or lower in k:
+            return lat, lon, name
+
+    # 2. Match airports in WORLD_AIRPORTS catalog
+    if upper in AIRPORTS_BY_IATA:
+        a = AIRPORTS_BY_IATA[upper]
+        return a.latitude, a.longitude, f"{a.name} ({a.iata})"
+    if upper in WORLD_AIRPORTS:
+        a = WORLD_AIRPORTS[upper]
+        return a.latitude, a.longitude, f"{a.name} ({a.iata})"
+
+    for a in WORLD_AIRPORTS.values():
+        if (
+            f"({a.iata.lower()})" in lower
+            or f" {a.iata.lower()} " in f" {lower} "
+            or a.iata.lower() == lower
+            or clean.lower() == a.name.lower()
+            or (len(clean) >= 4 and clean.lower() in a.name.lower())
+        ):
+            return a.latitude, a.longitude, f"{a.name} ({a.iata})"
+
+    # 3. Match major world cities
+    for k, (lat, lon, name) in KNOWN_WORLD_CITIES.items():
+        if k == lower or f" {k} " in f" {lower} " or k in lower:
+            return lat, lon, name
+
+    # 4. Fallback online geocoding via OpenStreetMap Nominatim
+    try:
+        encoded = urllib.parse.quote(clean)
+        url = f"https://nominatim.openstreetmap.org/search?q={encoded}&format=json&limit=1"
+        req = urllib.request.Request(url, headers={"User-Agent": "WORLDOS-Navigator/2.0"})
+        with urllib.request.urlopen(req, timeout=3.0) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            if data:
+                lat = float(data[0]["lat"])
+                lon = float(data[0]["lon"])
+                display_name = data[0].get("display_name", clean)
+                short_name = ", ".join(display_name.split(",")[:3]).strip()
+                return lat, lon, short_name
+    except Exception as exc:
+        logger.debug("Online geocoding lookup failed for '%s': %s", clean, exc)
+
+    return None
+
+
+def geocode_location(query: str) -> GeocodeResponse:
+    """Geocode any place, landmark, city, or airport query into exact geographic coordinates."""
+    res = resolve_location_coordinates(query)
+    if res:
+        lat, lon, name = res
+        return GeocodeResponse(
+            query=query,
+            name=name,
+            latitude=round(lat, 6),
+            longitude=round(lon, 6),
+            formatted_address=name,
+        )
+    return GeocodeResponse(
+        query=query,
+        name=query,
+        latitude=35.6762,
+        longitude=139.6503,
+        formatted_address=query,
+    )
+
+
 def _fallback_road_route(
     origin_lat: float,
     origin_lon: float,
@@ -1613,9 +1826,34 @@ def calculate_road_route(
     """Calculate driving route with turn-by-turn maneuvers and full polyline geometry.
 
     Uses OSRM driving engine with automatic deterministic fallback if network unavailable.
+    Automatically resolves and corrects coordinates if place names are provided or if coordinates
+    are default/stale.
     """
     orig_label = origin_name.strip() if origin_name else "Origin"
     dest_label = dest_name.strip() if dest_name else "Destination"
+
+    # Auto-resolve / correct coordinates if place names were provided
+    if orig_label:
+        resolved_orig = resolve_location_coordinates(orig_label)
+        if resolved_orig:
+            r_lat, r_lon, r_name = resolved_orig
+            is_zero = abs(origin_lat) < 0.001 and abs(origin_lon) < 0.001
+            is_mismatched = haversine_distance_km(origin_lat, origin_lon, r_lat, r_lon) > 40.0
+            if is_zero or is_mismatched:
+                origin_lat = r_lat
+                origin_lon = r_lon
+                orig_label = r_name
+
+    if dest_label:
+        resolved_dest = resolve_location_coordinates(dest_label)
+        if resolved_dest:
+            r_lat, r_lon, r_name = resolved_dest
+            is_zero = abs(dest_lat) < 0.001 and abs(dest_lon) < 0.001
+            is_mismatched = haversine_distance_km(dest_lat, dest_lon, r_lat, r_lon) > 40.0
+            if is_zero or is_mismatched:
+                dest_lat = r_lat
+                dest_lon = r_lon
+                dest_label = r_name
 
     # Build OSRM query URL
     # Format: /route/v1/driving/{lon1},{lat1};{lon2},{lat2}?overview=full&geometries=geojson&steps=true

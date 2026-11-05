@@ -840,6 +840,27 @@ export async function fetchInboundFlightPlans(
   return response.json();
 }
 
+export interface GeocodeResult {
+  query: string;
+  name: string;
+  latitude: number;
+  longitude: number;
+  formatted_address: string;
+}
+
+export async function geocodeLocation(query: string): Promise<GeocodeResult | null> {
+  if (!query || query.trim().length < 2) return null;
+  const params = new URLSearchParams({ query: query.trim() });
+  try {
+    const response = await fetch(`${apiBase}/navigation/geocode?${params.toString()}`);
+    if (!response.ok) return null;
+    return response.json();
+  } catch (err) {
+    console.warn('Geocoding request failed:', err);
+    return null;
+  }
+}
+
 export async function fetchRoadRoute(
   originLat: number,
   originLon: number,

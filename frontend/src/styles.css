@@ -4050,6 +4050,17 @@ html, body, #root {
   font-weight: 600;
 }
 
+.road-coords-badge {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-top: 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  color: var(--text-muted);
+}
+
+
 
 
 

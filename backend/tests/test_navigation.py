@@ -5,13 +5,16 @@ import unittest
 
 from backend.app.navigation import (
     calculate_road_route,
+    geocode_location,
     get_inbound_flight_plans,
     list_airports,
     resolve_airport,
     resolve_destination_airport,
+    resolve_location_coordinates,
     _fallback_road_route,
 )
 from backend.app.main import (
+    geocode_endpoint,
     get_flight_plans_endpoint,
     get_road_route_endpoint,
     list_airports_endpoint,
@@ -156,6 +159,50 @@ class NavigationTests(unittest.TestCase):
         )
         self.assertGreater(rr_resp.total_distance_km, 15.0)
         self.assertGreaterEqual(len(rr_resp.steps), 4)
+
+        # Test geocode_endpoint
+        geo = geocode_endpoint(query="Eiffel Tower")
+        self.assertAlmostEqual(geo.latitude, 48.8584, delta=0.1)
+        self.assertAlmostEqual(geo.longitude, 2.2945, delta=0.1)
+
+    def test_road_route_auto_resolution_different_cities(self) -> None:
+        # Paris route: even if passed Tokyo coordinates, auto-resolves to Paris!
+        paris_route = calculate_road_route(
+            origin_lat=35.5494,
+            origin_lon=139.7798,
+            dest_lat=35.7148,
+            dest_lon=139.7967,
+            origin_name="Charles de Gaulle (CDG)",
+            dest_name="Eiffel Tower",
+        )
+        self.assertAlmostEqual(paris_route.origin_coords[1], 49.0097, delta=0.1) # Paris lat
+        self.assertAlmostEqual(paris_route.destination_coords[1], 48.8584, delta=0.1) # Eiffel lat
+        self.assertGreater(paris_route.total_distance_km, 25.0)
+
+        # Rome route: should have distinct coordinates in Rome (~41.9° N, 12.5° E)
+        rome_route = calculate_road_route(
+            origin_lat=35.5494,
+            origin_lon=139.7798,
+            dest_lat=35.7148,
+            dest_lon=139.7967,
+            origin_name="Rome",
+            dest_name="Colosseum",
+        )
+        self.assertAlmostEqual(rome_route.origin_coords[1], 41.9028, delta=0.2)
+        self.assertAlmostEqual(rome_route.destination_coords[1], 41.8902, delta=0.2)
+        # Distance between Rome center and Colosseum is ~2-3 km, NOT 25 km!
+        self.assertLess(rome_route.total_distance_km, 10.0)
+
+        # Cross-country Paris to Berlin: ~1000 km
+        europe_route = calculate_road_route(
+            origin_lat=0,
+            origin_lon=0,
+            dest_lat=0,
+            dest_lon=0,
+            origin_name="Paris",
+            dest_name="Berlin",
+        )
+        self.assertGreater(europe_route.total_distance_km, 800.0)
 
 
 if __name__ == "__main__":

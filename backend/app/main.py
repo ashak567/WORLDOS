@@ -178,10 +178,12 @@ from .travel_intelligence import (
 )
 from .navigation import (
     calculate_road_route,
+    geocode_location,
     get_inbound_flight_plans,
     list_airports,
     AirportSummary,
     FlightPlansResponse,
+    GeocodeResponse,
     RoadRouteResponse,
 )
 
@@ -559,6 +561,15 @@ def get_flight_plans_endpoint(
     filter_val = origin_country if isinstance(origin_country, str) else None
     origin_val = origin if isinstance(origin, str) and origin.strip() else None
     return get_inbound_flight_plans(destination=destination, origin=origin_val, origin_country_filter=filter_val)
+
+
+@app.get("/navigation/geocode", response_model=GeocodeResponse)
+def geocode_endpoint(
+    query: str = Query(..., min_length=2, description="Place, city, or airport name to geocode"),
+) -> GeocodeResponse:
+    """Geocode any place, landmark, city, or airport into exact geographic coordinates."""
+    q_str = query if isinstance(query, str) else ""
+    return geocode_location(q_str)
 
 
 @app.get("/navigation/road-route", response_model=RoadRouteResponse)
