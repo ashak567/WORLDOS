@@ -942,7 +942,7 @@ export async function fetchDiscoveredPlaces(params: {
       const nearbyTypes: Record<string, string[]> = {
         stays: ['hotel', 'resort_hotel', 'lodging', 'bed_and_breakfast', 'inn', 'motel'],
         food: ['restaurant', 'cafe', 'fine_dining_restaurant', 'bar', 'bakery'],
-        scenery: ['tourist_attraction', 'historical_landmark', 'museum', 'park', 'viewpoint'],
+        scenery: ['tourist_attraction', 'historical_landmark', 'museum', 'park', 'art_gallery'],
         nightlife: ['bar', 'night_club', 'cocktail_bar', 'lounge_bar', 'pub'],
       };
 

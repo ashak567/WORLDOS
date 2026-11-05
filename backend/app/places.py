@@ -38,7 +38,7 @@ CATEGORY_SEARCH_TEMPLATES = {
 NEARBY_INCLUDED_TYPES: dict[PlaceCategory, list[str]] = {
     "stays": ["hotel", "resort_hotel", "lodging", "bed_and_breakfast", "inn", "motel"],
     "food": ["restaurant", "cafe", "fine_dining_restaurant", "bar", "bakery", "meal_takeaway"],
-    "scenery": ["tourist_attraction", "historical_landmark", "museum", "park", "viewpoint", "art_gallery"],
+    "scenery": ["tourist_attraction", "historical_landmark", "museum", "park", "art_gallery"],
     "nightlife": ["bar", "night_club", "cocktail_bar", "lounge_bar", "pub"],
 }
 
