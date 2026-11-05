@@ -117,59 +117,63 @@ html, body, #root {
   top: 0;
   left: 0;
   right: 0;
-  height: 52px;
-  background: var(--bg-surface);
-  backdrop-filter: var(--glass-blur);
-  -webkit-backdrop-filter: var(--glass-blur);
-  border-bottom: 1px solid var(--border-subtle);
+  height: 48px;
+  background: rgba(8, 14, 23, 0.92);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 16px;
-  z-index: 100;
-  overflow: visible;
+  padding: 0 14px;
+  z-index: 110;
+  overflow: hidden;
+  gap: 12px;
+  box-shadow: 0 4px 20px rgba(0, 0, 0, 0.45);
 }
 
 .hud-brand {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
   flex: 0 0 auto;
 }
 
 .hud-brand-title {
   font-family: var(--font-brand);
-  font-size: 14px;
+  font-size: 13.5px;
   font-weight: 700;
-  letter-spacing: 0.15em;
+  letter-spacing: 0.14em;
   color: var(--cy);
   text-shadow: 0 0 10px var(--cy-glow);
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 7px;
 }
 
 .hud-brand-tag {
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 9.5px;
   color: var(--text-muted);
   letter-spacing: 0.08em;
   border: 1px solid var(--border-subtle);
-  padding: 2px 6px;
+  padding: 1px 5px;
   border-radius: 2px;
 }
 
 .hud-center-group {
   display: flex;
   align-items: center;
-  gap: 16px;
-  flex: 1 1 0;
+  gap: 10px;
+  flex: 1 1 auto;
   min-width: 0;
   justify-content: flex-start;
-  overflow: visible;
+  overflow: hidden;
 }
 
-.hud-center-group > * { flex: 0 0 auto; }
+.hud-center-group > * {
+  flex: 0 0 auto;
+}
 
 /* Mode Switcher Pill */
 .mode-switcher {
@@ -210,10 +214,37 @@ html, body, #root {
 .hud-telemetry {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 6px;
   font-family: var(--font-mono);
   font-size: 11px;
   color: var(--text-secondary);
+  flex: 0 1 auto;
+  min-width: 0;
+  overflow: hidden;
+}
+
+/* Telemetry auto-collapse rules to prevent any navbar overlap */
+@media (max-width: 1540px) {
+  .telemetry-badge.red,
+  .telemetry-badge.neon-red {
+    display: none !important;
+  }
+}
+
+@media (max-width: 1340px) {
+  .telemetry-badge.cyan,
+  .telemetry-badge.time {
+    display: none !important;
+  }
+  .hud-brand-tag {
+    display: none !important;
+  }
+}
+
+@media (max-width: 1120px) {
+  .hud-telemetry {
+    display: none !important;
+  }
 }
 
 .telemetry-item {
@@ -249,18 +280,19 @@ html, body, #root {
 .hud-actions {
   display: flex;
   align-items: center;
-  gap: 10px;
+  gap: 6px;
   flex: 0 0 auto;
+  margin-left: auto;
 }
 
 .hud-btn {
-  background: rgba(16, 26, 38, 0.6);
-  border: 1px solid var(--border-subtle);
+  background: rgba(16, 26, 38, 0.75);
+  border: 1px solid rgba(255, 255, 255, 0.1);
   color: var(--text-primary);
   font-family: var(--font-ui);
   font-size: 11px;
-  font-weight: 500;
-  padding: 6px 12px;
+  font-weight: 600;
+  padding: 5px 10px;
   border-radius: 4px;
   cursor: pointer;
   display: flex;
@@ -272,10 +304,17 @@ html, body, #root {
 }
 
 .hud-btn:hover {
-  background: var(--bg-hover);
+  background: rgba(6, 182, 212, 0.16);
   border-color: var(--cy);
   color: var(--cy);
   box-shadow: 0 0 8px var(--cy-glow);
+}
+
+.hud-btn.active {
+  background: rgba(6, 182, 212, 0.22);
+  border-color: var(--cy);
+  color: var(--cy);
+  box-shadow: 0 0 10px var(--cy-glow);
 }
 
 .hud-btn kbd {
@@ -286,6 +325,26 @@ html, body, #root {
   border-radius: 2px;
   border: 1px solid var(--border-subtle);
   color: var(--text-muted);
+}
+
+@media (max-width: 1280px) {
+  .hud-actions {
+    gap: 4px;
+  }
+  .hud-btn {
+    padding: 5px 8px;
+    font-size: 10.5px;
+    gap: 4px;
+  }
+}
+
+@media (max-width: 1040px) {
+  .hud-btn span {
+    display: none;
+  }
+  .hud-btn {
+    padding: 6px 8px;
+  }
 }
 
 /* ==========================================================================
@@ -303,7 +362,7 @@ html, body, #root {
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
-  z-index: 30;
+  z-index: 90;
   display: flex;
   flex-direction: column;
   box-shadow: var(--shadow-tactical);
@@ -514,20 +573,20 @@ html, body, #root {
 
 .details-drawer {
   position: absolute;
-  top: 68px;
+  top: 60px;
   right: 16px;
   width: 390px;
   max-width: calc(100vw - 32px);
-  max-height: calc(100vh - 84px);
+  max-height: calc(100vh - 76px);
   background: var(--bg-surface);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-subtle);
-  border-radius: 6px;
-  z-index: 85;
+  border-radius: 8px;
+  z-index: 95;
   display: flex;
   flex-direction: column;
-  box-shadow: var(--shadow-tactical);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.75);
   animation: slide-in-right 0.22s cubic-bezier(0.16, 1, 0.3, 1);
 }
 
@@ -938,7 +997,7 @@ html, body, #root {
   font-size: 11px;
   letter-spacing: 0.1em;
   cursor: pointer;
-  z-index: 30;
+  z-index: 90;
   box-shadow: var(--shadow-tactical);
   transition: all 0.18s ease;
 }
@@ -1006,7 +1065,7 @@ html, body, #root {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.7);
-  z-index: 50;
+  z-index: 130;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1147,7 +1206,7 @@ html, body, #root {
   border: 1px solid var(--border-subtle);
   border-radius: 6px;
   box-shadow: 0 16px 36px rgba(0, 0, 0, 0.85);
-  z-index: 120;
+  z-index: 130;
   overflow: hidden;
   display: flex;
   flex-direction: column;
@@ -1286,10 +1345,21 @@ html, body, #root {
    TACTICAL TELEMETRY PILLS IN HUD
    ========================================================================== */
 .assistant-panel {
-  position: absolute; z-index: 80; top: 70px; right: 16px; bottom: 16px;
-  width: min(390px, calc(100vw - 32px)); display: flex; flex-direction: column;
-  overflow: hidden; border: 1px solid var(--border-strong); border-radius: 6px;
-  background: var(--bg-surface-elevated); box-shadow: var(--shadow-tactical);
+  position: absolute;
+  z-index: 95;
+  top: 60px;
+  right: 16px;
+  bottom: 16px;
+  width: min(420px, calc(100vw - 32px));
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  border: 1px solid var(--border-strong);
+  border-radius: 8px;
+  background: var(--bg-surface-elevated);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.75);
 }
 .assistant-panel-header { display: flex; align-items: center; justify-content: space-between; padding: 12px; border-bottom: 1px solid var(--border-subtle); }
 .assistant-panel-header > div { display: flex; flex-direction: column; gap: 4px; }
@@ -2590,7 +2660,7 @@ html, body, #root {
    ========================================================================== */
 .places-deck {
   position: absolute;
-  top: 70px;
+  top: 60px;
   right: 16px;
   bottom: 16px;
   width: min(420px, calc(100vw - 32px));
@@ -2598,9 +2668,9 @@ html, body, #root {
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-strong);
-  border-radius: 6px;
-  box-shadow: var(--shadow-tactical);
-  z-index: 75;
+  border-radius: 8px;
+  box-shadow: 0 20px 48px rgba(0, 0, 0, 0.75);
+  z-index: 95;
   display: flex;
   flex-direction: column;
   overflow: hidden;
@@ -2988,16 +3058,16 @@ html, body, #root {
 
 .navigation-deck {
   position: absolute;
-  top: 70px;
+  top: 60px;
   right: 16px;
   bottom: 16px;
-  width: min(440px, calc(100vw - 32px));
+  width: min(420px, calc(100vw - 32px));
   background: var(--bg-surface-elevated);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--border-strong);
   border-radius: 8px;
-  z-index: 105;
+  z-index: 95;
   display: flex;
   flex-direction: column;
   overflow: hidden;

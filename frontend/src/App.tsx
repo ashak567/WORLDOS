@@ -147,6 +147,43 @@ export default function App() {
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
   const [discoveredPlaces, setDiscoveredPlaces] = useState<PlaceItem[]>([]);
 
+  // Mutually exclusive right-dock drawers (Assistant, Stays/Places, Navigation, Details)
+  const handleToggleAssistant = useCallback(() => {
+    setIsAssistantOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsPlacesDeckOpen(false);
+        setIsNavigationOpen(false);
+        setSelectedItem(null);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleTogglePlacesDeck = useCallback(() => {
+    setIsPlacesDeckOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsAssistantOpen(false);
+        setIsNavigationOpen(false);
+        setSelectedItem(null);
+      }
+      return next;
+    });
+  }, []);
+
+  const handleToggleNavigation = useCallback(() => {
+    setIsNavigationOpen((prev) => {
+      const next = !prev;
+      if (next) {
+        setIsAssistantOpen(false);
+        setIsPlacesDeckOpen(false);
+        setSelectedItem(null);
+      }
+      return next;
+    });
+  }, []);
+
   const debounceTimerRef = useRef<NodeJS.Timeout | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
 
@@ -342,6 +379,9 @@ export default function App() {
   const handleSelectItem = useCallback((item: SelectedItemPayload) => {
     setSelectedItem(item);
     setSelectedTrack(null);
+    setIsAssistantOpen(false);
+    setIsPlacesDeckOpen(false);
+    setIsNavigationOpen(false);
 
     const coords = item.data?.point || item.data?.coordinates || item.data?.geometry?.coordinates;
     const longitude = item.data?.longitude ?? (Array.isArray(coords) ? coords[0] : undefined);
@@ -431,6 +471,8 @@ export default function App() {
       }
     } else if (action.type === 'discover_places') {
       setIsPlacesDeckOpen(true);
+      setIsAssistantOpen(false);
+      setIsNavigationOpen(false);
       if (action.center) {
         setTargetLocation({ center: action.center, zoom: 15 });
       }
@@ -568,11 +610,11 @@ export default function App() {
         onOpenCommandPalette={() => setIsCommandOpen(true)}
         onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
         onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
-        onOpenAssistant={() => setIsAssistantOpen(true)}
+        onOpenAssistant={handleToggleAssistant}
         isAssistantOpen={isAssistantOpen}
-        onTogglePlacesDeck={() => setIsPlacesDeckOpen((prev) => !prev)}
+        onTogglePlacesDeck={handleTogglePlacesDeck}
         isPlacesDeckOpen={isPlacesDeckOpen}
-        onToggleNavigation={() => setIsNavigationOpen((prev) => !prev)}
+        onToggleNavigation={handleToggleNavigation}
         isNavigationOpen={isNavigationOpen}
         isNavActive={activeRoadRoute !== null || activeFlightPlan !== null}
         isRouteActive={activeRoute !== null}
@@ -642,6 +684,8 @@ export default function App() {
         onOpenNavigation={(dest) => {
           if (dest) setNavigationDestination(dest);
           setIsNavigationOpen(true);
+          setIsAssistantOpen(false);
+          setIsPlacesDeckOpen(false);
         }}
       />
 
@@ -654,7 +698,7 @@ export default function App() {
             : [139.6917, 35.6895])
         }
         isOpen={isPlacesDeckOpen}
-        onToggle={() => setIsPlacesDeckOpen((prev) => !prev)}
+        onToggle={handleTogglePlacesDeck}
         onPlacesLoaded={(places) => {
           setDiscoveredPlaces(places);
         }}
@@ -666,8 +710,11 @@ export default function App() {
           setSelectedItem({ type: 'place', data: place });
           setTargetLocation({ center: [place.longitude, place.latitude], zoom: 17 });
         }}
-        onAddToRoute={() => {
-          setIsRoutePlannerOpen(true);
+        onAddToRoute={(place) => {
+          if (place) setNavigationDestination(place.name);
+          setIsNavigationOpen(true);
+          setIsPlacesDeckOpen(false);
+          setIsAssistantOpen(false);
         }}
         selectedPlace={selectedPlace}
       />
