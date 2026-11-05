@@ -117,6 +117,7 @@ from .constraints import ConstraintEngine, ConstraintViolationError
 from .export import export_observations
 from .ingestion.natural_earth import fetch_country_boundary
 from .ingestion.fires import fetch_live_firms_anomalies
+from .ingestion.flight_routes import resolve_flight_route
 from .ingestion.opensky import (
     AircraftStateRecord,
     OpenSkyAuthError,
@@ -1074,12 +1075,69 @@ def ingest_opensky_states(
         raise HTTPException(status_code=500, detail=f"OpenSky ingestion failed: {exc}") from exc
 
 
+def _enrich_aircraft_payload(rec: dict[str, Any]) -> dict[str, Any]:
+    """Enrich aircraft record with departure/destination airports, departure time, and ETA."""
+    attr = rec.setdefault("attributes", {})
+    if "departure_airport" in attr and "destination_airport" in attr:
+        return rec
+
+    callsign = attr.get("callsign") or rec.get("canonical_name")
+    icao24 = attr.get("icao24") or rec.get("entity_id", "")
+    lat = rec.get("latitude") if rec.get("latitude") is not None else attr.get("latitude", 0.0)
+    lon = rec.get("longitude") if rec.get("longitude") is not None else attr.get("longitude", 0.0)
+    true_track = attr.get("true_track")
+    velocity = attr.get("velocity")
+    baro_altitude = attr.get("baro_altitude") or rec.get("value")
+    on_ground = bool(attr.get("on_ground", False))
+    origin_country = attr.get("origin_country")
+
+    observed_dt: datetime | None = None
+    if rec.get("observed_at"):
+        try:
+            observed_dt = datetime.fromisoformat(str(rec["observed_at"]).replace("Z", "+00:00"))
+        except Exception:
+            pass
+
+    try:
+        route_info = resolve_flight_route(
+            callsign=callsign,
+            icao24=str(icao24),
+            current_lat=float(lat),
+            current_lon=float(lon),
+            true_track=float(true_track) if true_track is not None else None,
+            velocity=float(velocity) if velocity is not None else None,
+            baro_altitude=float(baro_altitude) if baro_altitude is not None else None,
+            on_ground=on_ground,
+            origin_country=origin_country,
+            observed_at=observed_dt,
+        )
+        attr.update({
+            "departure_airport": route_info["departure_airport"],
+            "destination_airport": route_info["destination_airport"],
+            "departure_time": route_info["departure_time"],
+            "departure_time_formatted": route_info["departure_time_formatted"],
+            "estimated_arrival_time": route_info["estimated_arrival_time"],
+            "estimated_arrival_time_formatted": route_info["estimated_arrival_time_formatted"],
+            "flight_progress_pct": route_info["flight_progress_pct"],
+            "flight_phase": route_info["flight_phase"],
+            "airline": route_info["airline"],
+            "distance_flown_km": route_info["distance_flown_km"],
+            "remaining_distance_km": route_info["remaining_distance_km"],
+            "total_distance_km": route_info["total_distance_km"],
+            "is_international": route_info["is_international"],
+        })
+    except Exception as exc:
+        logger.debug("Failed to resolve route for aircraft %s: %s", callsign or icao24, exc)
+
+    return rec
+
+
 def _aircraft_record_to_api(r: AircraftStateRecord, truth_class: str = "OBSERVED") -> dict[str, Any]:
     time_str = r.observation_time.isoformat()
     obs_id = str(stable_id("observation", "aircraft", r.icao24, time_str))
     entity_id = str(stable_id("entity", "aircraft", r.icao24))
     canonical_name = r.callsign if r.callsign else f"ICAO24:{r.icao24.upper()}"
-    return {
+    base = {
         "id": obs_id,
         "observation_id": obs_id,
         "entity_id": entity_id,
@@ -1112,6 +1170,7 @@ def _aircraft_record_to_api(r: AircraftStateRecord, truth_class: str = "OBSERVED
             "position_source": r.position_source,
         },
     }
+    return _enrich_aircraft_payload(base)
 
 
 def _vessel_record_to_api(r: Any) -> dict[str, Any]:
@@ -1192,7 +1251,7 @@ def list_aircraft_states(
                     except Exception:
                         pass
             if newest_obs and (now - newest_obs).total_seconds() < 900 and len(db_records) >= 10:
-                return db_records
+                return [_enrich_aircraft_payload(r) for r in db_records]
             logger.info("Persisted DB aircraft records are stale (%s); checking live or dynamic fleet", newest_obs)
     except Exception as exc:
         logger.warning("Could not query DB aircraft states: %s", exc)

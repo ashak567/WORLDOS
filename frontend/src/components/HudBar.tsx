@@ -178,7 +178,7 @@ export const HudBar: React.FC<HudBarProps> = ({
         </div>
 
         {/* Basemap Selection Dropdown */}
-        <div className="hud-dropdown-wrapper" ref={basemapMenuRef}>
+        <div className="hud-dropdown-wrapper" ref={basemapMenuRef} onPointerDown={(e) => e.stopPropagation()}>
           <button
             className={`hud-dropdown-trigger-btn ${isBasemapMenuOpen ? 'active' : ''}`}
             onClick={() => setIsBasemapMenuOpen((prev) => !prev)}
@@ -271,7 +271,7 @@ export const HudBar: React.FC<HudBarProps> = ({
         </div>
 
         {/* Street Cameras Quick-Jump Selector Dropdown */}
-        <div className="street-cam-selector-wrapper" ref={cameraMenuRef}>
+        <div className="street-cam-selector-wrapper" ref={cameraMenuRef} onPointerDown={(e) => e.stopPropagation()}>
           <button
             className={`street-cam-trigger-btn ${isCameraMenuOpen ? 'active' : ''}`}
             onClick={() => setIsCameraMenuOpen((prev) => !prev)}
@@ -374,7 +374,7 @@ export const HudBar: React.FC<HudBarProps> = ({
         </button>
 
         {/* Operations & Tactical Tools Dropdown */}
-        <div className="hud-dropdown-wrapper" ref={toolsMenuRef}>
+        <div className="hud-dropdown-wrapper" ref={toolsMenuRef} onPointerDown={(e) => e.stopPropagation()}>
           <button
             className={`hud-btn ${isToolsMenuOpen || isRouteActive ? 'active' : ''}`}
             onClick={() => setIsToolsMenuOpen((prev) => !prev)}

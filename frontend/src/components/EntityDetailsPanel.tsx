@@ -14,6 +14,9 @@ import {
   Camera,
   Flame,
   Plane,
+  PlaneTakeoff,
+  PlaneLanding,
+  ArrowRight,
   Anchor,
   Globe2,
   Building2,
@@ -360,7 +363,17 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
       },
     ];
 
+    const depAirport = attr.departure_airport;
+    const destAirport = attr.destination_airport;
+
     properties = {
+      'Departure Airport': depAirport ? `${depAirport.iata || depAirport.icao} · ${depAirport.name} (${depAirport.city}, ${depAirport.country})` : undefined,
+      'Departure Time': attr.departure_time_formatted || (attr.departure_time ? `${new Date(attr.departure_time).toUTCString()}` : undefined),
+      'Destination Airport': destAirport ? `${destAirport.iata || destAirport.icao} · ${destAirport.name} (${destAirport.city}, ${destAirport.country})` : undefined,
+      'Estimated Arrival (ETA)': attr.estimated_arrival_time_formatted || (attr.estimated_arrival_time ? `${new Date(attr.estimated_arrival_time).toUTCString()}` : undefined),
+      'Flight Progress': attr.flight_progress_pct !== undefined ? `${attr.flight_progress_pct}% Completed (${attr.flight_phase || 'En Route'})` : undefined,
+      'Route Distance': attr.total_distance_km ? `${attr.distance_flown_km?.toLocaleString()} km flown · ${attr.remaining_distance_km?.toLocaleString()} km remaining (Total: ${attr.total_distance_km?.toLocaleString()} km)` : undefined,
+      'Airline Operator': attr.airline || undefined,
       'ICAO 24-bit Hex': icao ? String(icao).toUpperCase() : undefined,
       'Callsign / Flight': callsign || undefined,
       'Flight Category': attr.is_international ? 'International (Cross-Border / Long-Haul)' : 'Domestic (Within Country Airspace)',
@@ -688,6 +701,103 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
             ))}
           </div>
         )}
+
+        {/* Flight Route, Airports & Schedule Card */}
+        {type === 'aircraft' && (data?.attributes?.departure_airport || data?.attributes?.destination_airport) && (() => {
+          const attr = data.attributes || {};
+          const dep = attr.departure_airport;
+          const dest = attr.destination_airport;
+          const progress = attr.flight_progress_pct ?? 50;
+          return (
+            <section
+              className="details-section flight-route-card"
+              style={{
+                background: 'linear-gradient(135deg, rgba(6, 182, 212, 0.08) 0%, rgba(56, 189, 248, 0.03) 100%)',
+                border: '1px solid rgba(56, 189, 248, 0.25)',
+                borderRadius: '8px',
+                padding: '12px 14px',
+                marginBottom: '16px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '10px' }}>
+                <span style={{ fontSize: '11px', fontWeight: 700, letterSpacing: '0.08em', color: 'var(--cy)', display: 'flex', alignItems: 'center', gap: '6px' }}>
+                  <Plane size={13} /> FLIGHT ROUTE &amp; SCHEDULE
+                </span>
+                <span style={{ fontSize: '10px', padding: '2px 8px', borderRadius: '4px', background: 'rgba(56, 189, 248, 0.15)', color: '#38bdf8', fontWeight: 600 }}>
+                  {attr.flight_phase || (attr.on_ground ? 'ON GROUND' : 'AIRBORNE')}
+                </span>
+              </div>
+
+              {attr.airline && (
+                <div style={{ fontSize: '11px', color: 'var(--text-muted)', marginBottom: '12px' }}>
+                  Airline: <strong style={{ color: '#f8fafc' }}>{attr.airline}</strong>
+                </div>
+              )}
+
+              {/* Origin & Destination Grid */}
+              <div style={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', gap: '8px', marginBottom: '12px' }}>
+                {/* Departure Airport */}
+                <div style={{ textAlign: 'left' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px', color: '#38bdf8', fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
+                    <PlaneTakeoff size={12} /> DEPARTED
+                  </div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#f8fafc', letterSpacing: '0.05em', lineHeight: 1.2 }}>
+                    {dep?.iata || dep?.icao || 'DEP'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-normal)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '125px' }} title={dep?.name}>
+                    {dep?.city || dep?.name || 'Origin Airport'}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#94a3b8', marginTop: '2px' }}>
+                    {attr.departure_time_formatted || 'Departed'}
+                  </div>
+                </div>
+
+                {/* Arrow & Progress */}
+                <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'center', justifyContent: 'center', padding: '0 4px' }}>
+                  <ArrowRight size={16} color="#38bdf8" />
+                  <span style={{ fontSize: '9px', color: '#64748b', marginTop: '2px', fontWeight: 600 }}>{progress}%</span>
+                </div>
+
+                {/* Destination Airport */}
+                <div style={{ textAlign: 'right' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'flex-end', gap: '4px', color: '#10b981', fontSize: '10px', fontWeight: 700, letterSpacing: '0.05em' }}>
+                    DESTINATION <PlaneLanding size={12} />
+                  </div>
+                  <div style={{ fontSize: '18px', fontWeight: 800, color: '#f8fafc', letterSpacing: '0.05em', lineHeight: 1.2 }}>
+                    {dest?.iata || dest?.icao || 'ARR'}
+                  </div>
+                  <div style={{ fontSize: '11px', color: 'var(--text-normal)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis', maxWidth: '125px' }} title={dest?.name}>
+                    {dest?.city || dest?.name || 'Destination Airport'}
+                  </div>
+                  <div style={{ fontSize: '10px', color: '#34d399', marginTop: '2px', fontWeight: 600 }}>
+                    ETA: {attr.estimated_arrival_time_formatted || 'En Route'}
+                  </div>
+                </div>
+              </div>
+
+              {/* Progress Bar */}
+              <div style={{ width: '100%', height: '5px', background: 'rgba(255, 255, 255, 0.08)', borderRadius: '3px', overflow: 'hidden', marginBottom: '8px' }}>
+                <div
+                  style={{
+                    width: `${Math.min(100, Math.max(0, progress))}%`,
+                    height: '100%',
+                    background: 'linear-gradient(90deg, #38bdf8 0%, #10b981 100%)',
+                    borderRadius: '3px',
+                    transition: 'width 0.4s ease',
+                  }}
+                />
+              </div>
+
+              {/* Flight Distance Metrics */}
+              {(attr.distance_flown_km !== undefined || attr.remaining_distance_km !== undefined) && (
+                <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '10px', color: '#64748b' }}>
+                  <span>{attr.distance_flown_km !== undefined ? `${attr.distance_flown_km.toLocaleString()} km flown` : 'Departed'}</span>
+                  <span>{attr.remaining_distance_km !== undefined ? `${attr.remaining_distance_km.toLocaleString()} km remaining` : ''}</span>
+                </div>
+              )}
+            </section>
+          );
+        })()}
 
         {/* Live Street Camera Interactive Video Surveillance Player */}
         {type === 'camera' && (

@@ -19,6 +19,34 @@ const SAFE_LAYER_IDS = new Set([
   'thermal-fires', 'critical-infrastructure', 'anomalies', 'system-alerts',
 ]);
 
+const POPULAR_LOCATIONS: { keywords: string[]; center: [number, number]; zoom: number; label: string }[] = [
+  { keywords: ['tokyo', 'japan', 'haneda', 'narita'], center: [139.6917, 35.6895], zoom: 12, label: 'Tokyo, Japan' },
+  { keywords: ['shibuya'], center: [139.7016, 35.6580], zoom: 15, label: 'Shibuya Crossing, Tokyo' },
+  { keywords: ['shinjuku'], center: [139.7006, 35.6897], zoom: 15, label: 'Shinjuku, Tokyo' },
+  { keywords: ['kyoto'], center: [135.7681, 35.0116], zoom: 13, label: 'Kyoto, Japan' },
+  { keywords: ['osaka'], center: [135.5023, 34.6937], zoom: 13, label: 'Osaka, Japan' },
+  { keywords: ['new york', 'nyc', 'manhattan', 'jfk', 'newark'], center: [-74.0060, 40.7128], zoom: 12, label: 'New York City, USA' },
+  { keywords: ['times square'], center: [-73.9855, 40.7580], zoom: 16, label: 'Times Square, New York' },
+  { keywords: ['london', 'heathrow', 'gatwick'], center: [-0.1278, 51.5074], zoom: 12, label: 'London, United Kingdom' },
+  { keywords: ['paris', 'france', 'eiffel', 'orly', 'cdg'], center: [2.3522, 48.8566], zoom: 12, label: 'Paris, France' },
+  { keywords: ['san francisco', 'sfo', 'bay area', 'silicon valley'], center: [-122.4194, 37.7749], zoom: 12, label: 'San Francisco, USA' },
+  { keywords: ['los angeles', 'la', 'lax', 'hollywood'], center: [-118.2437, 34.0522], zoom: 12, label: 'Los Angeles, USA' },
+  { keywords: ['chicago', 'o\'hare', 'midway'], center: [-87.6298, 41.8781], zoom: 12, label: 'Chicago, USA' },
+  { keywords: ['dubai', 'dxb', 'burj'], center: [55.2708, 25.2048], zoom: 12, label: 'Dubai, UAE' },
+  { keywords: ['singapore', 'changi'], center: [103.8198, 1.3521], zoom: 12, label: 'Singapore' },
+  { keywords: ['hong kong', 'hkg'], center: [114.1694, 22.3193], zoom: 12, label: 'Hong Kong' },
+  { keywords: ['sydney', 'australia'], center: [151.2093, -33.8688], zoom: 12, label: 'Sydney, Australia' },
+  { keywords: ['delhi', 'new delhi', 'indira gandhi'], center: [77.2090, 28.6139], zoom: 12, label: 'Delhi, India' },
+  { keywords: ['mumbai', 'bombay'], center: [72.8777, 19.0760], zoom: 12, label: 'Mumbai, India' },
+  { keywords: ['bengaluru', 'bangalore'], center: [77.5946, 12.9716], zoom: 12, label: 'Bengaluru, India' },
+  { keywords: ['seoul', 'incheon', 'korea'], center: [126.9780, 37.5665], zoom: 12, label: 'Seoul, South Korea' },
+  { keywords: ['rome', 'italy', 'fiumicino'], center: [12.4964, 41.9028], zoom: 12, label: 'Rome, Italy' },
+  { keywords: ['berlin', 'germany'], center: [13.4050, 52.5200], zoom: 12, label: 'Berlin, Germany' },
+  { keywords: ['amsterdam', 'schiphol', 'netherlands'], center: [4.9041, 52.3676], zoom: 12, label: 'Amsterdam, Netherlands' },
+  { keywords: ['cairo', 'egypt'], center: [31.2357, 30.0444], zoom: 12, label: 'Cairo, Egypt' },
+  { keywords: ['bangkok', 'thailand'], center: [100.5018, 13.7563], zoom: 12, label: 'Bangkok, Thailand' },
+];
+
 function readPreferences(): TravelPreferences {
   try {
     const saved = JSON.parse(window.localStorage.getItem(PREFERENCES_KEY) || '{}');
@@ -54,8 +82,40 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   onActionRef.current = onAction;
 
   const handleMessage = useCallback((item: AssistantMessage) => {
-    if (item.message.trim()) {
-      setMessages((current) => [...current.slice(-29), item]);
+    if (!item.message.trim()) return;
+    setMessages((current) => [...current.slice(-29), item]);
+
+    // Intelligent client-side intent interpreter for voice and text commands
+    if (item.role === 'user') {
+      const lower = item.message.toLowerCase();
+
+      // Check for world location navigation commands
+      for (const loc of POPULAR_LOCATIONS) {
+        if (loc.keywords.some((k) => lower.includes(k))) {
+          onActionRef.current({
+            type: 'fly_to',
+            center: loc.center,
+            zoom: loc.zoom,
+          });
+          setMessage(`Roger: Flying 3D camera to ${loc.label} now.`);
+
+          if (lower.includes('flight') || lower.includes('plane') || lower.includes('aircraft')) {
+            onActionRef.current({ type: 'set_layer_visibility', layer_id: 'aircraft-states', visible: true });
+          }
+          if (lower.includes('stay') || lower.includes('place') || lower.includes('hotel') || lower.includes('motel')) {
+            onActionRef.current({ type: 'discover_places', category: 'stays', center: loc.center });
+          }
+          break;
+        }
+      }
+
+      // Check for standalone layer toggle keywords
+      if (lower.includes('satellite') || lower.includes('orbit')) {
+        onActionRef.current({ type: 'set_layer_visibility', layer_id: 'space-satellites', visible: true });
+      }
+      if (lower.includes('vessel') || lower.includes('ship') || lower.includes('boat') || lower.includes('maritime')) {
+        onActionRef.current({ type: 'set_layer_visibility', layer_id: 'maritime-vessels', visible: true });
+      }
     }
   }, []);
 

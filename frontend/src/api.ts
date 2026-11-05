@@ -170,6 +170,17 @@ export interface AerialViewVideo {
   portrait_uri?: string;
 }
 
+export type AirportInfo = {
+  icao: string;
+  iata: string;
+  name: string;
+  city: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  coordinates: [number, number];
+};
+
 export type AircraftState = {
   id: string;
   observation_id?: string;
@@ -201,6 +212,19 @@ export type AircraftState = {
     squawk?: string | null;
     position_source?: number;
     category?: number | null;
+    departure_airport?: AirportInfo;
+    destination_airport?: AirportInfo;
+    departure_time?: string;
+    departure_time_formatted?: string;
+    estimated_arrival_time?: string;
+    estimated_arrival_time_formatted?: string;
+    flight_progress_pct?: number;
+    flight_phase?: string;
+    airline?: string;
+    distance_flown_km?: number;
+    remaining_distance_km?: number;
+    total_distance_km?: number;
+    is_international?: boolean;
   };
 };
 

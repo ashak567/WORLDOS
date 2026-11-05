@@ -83,23 +83,38 @@ class OpenSkyTokenManager:
             method="POST",
         )
 
-        try:
-            with urlopen(req, timeout=8) as resp:
-                data = json.loads(resp.read().decode("utf-8"))
-        except HTTPError as e:
-            status = e.code
-            logger.error("OpenSky token exchange failed with HTTP %d", status)
-            if status in (400, 401):
-                raise OpenSkyAuthError(f"OpenSky authentication failed: HTTP {status} (invalid client credentials)") from None
-            elif status == 429:
-                raise OpenSkyRateLimitError("OpenSky token endpoint rate limit exceeded") from None
-            elif status >= 500:
-                raise OpenSkyConnectionError(f"OpenSky token endpoint returned HTTP {status}") from None
-            raise OpenSkyAuthError(f"OpenSky token exchange failed: HTTP {status}") from None
-        except (URLError, TimeoutError, OSError) as e:
-            reason = getattr(e, "reason", e)
-            logger.error("OpenSky token endpoint unreachable: %s", reason)
-            raise OpenSkyConnectionError(f"OpenSky token endpoint unreachable: {reason}") from None
+        last_err: Exception | None = None
+        data = None
+        for attempt in range(2):
+            try:
+                with urlopen(req, timeout=25) as resp:
+                    data = json.loads(resp.read().decode("utf-8"))
+                    break
+            except HTTPError as e:
+                status = e.code
+                logger.error("OpenSky token exchange failed with HTTP %d", status)
+                if status in (400, 401):
+                    raise OpenSkyAuthError(f"OpenSky authentication failed: HTTP {status} (invalid client credentials)") from None
+                elif status == 429:
+                    raise OpenSkyRateLimitError("OpenSky token endpoint rate limit exceeded") from None
+                elif status >= 500:
+                    last_err = OpenSkyConnectionError(f"OpenSky token endpoint returned HTTP {status}")
+                else:
+                    raise OpenSkyAuthError(f"OpenSky token exchange failed: HTTP {status}") from None
+            except (URLError, TimeoutError, OSError) as e:
+                reason = getattr(e, "reason", e)
+                last_err = e
+                if attempt == 0:
+                    logger.warning("OpenSky token endpoint retry 1/2 after: %s", reason)
+                    time.sleep(1.0)
+                    continue
+                logger.error("OpenSky token endpoint unreachable: %s", reason)
+                raise OpenSkyConnectionError(f"OpenSky token endpoint unreachable: {reason}") from None
+
+        if data is None:
+            if last_err:
+                raise last_err
+            raise OpenSkyConnectionError("OpenSky token exchange timed out")
 
         token = data.get("access_token")
         expires_in = data.get("expires_in", 1800)

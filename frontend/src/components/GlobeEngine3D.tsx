@@ -1195,6 +1195,99 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         entity.billboard.height = new ConstantProperty(32);
       }
     }
+
+    if (selectedItem?.type === 'aircraft') {
+      const plane = selectedItem.data;
+      const attr = plane?.attributes || {};
+      const dep = attr.departure_airport;
+      const dest = attr.destination_airport;
+      const planeLon = plane?.longitude ?? attr.longitude;
+      const planeLat = plane?.latitude ?? attr.latitude;
+      const planeAlt = attr.baro_altitude ?? (plane?.value || 10000);
+
+      const tracks: any[] = [];
+
+      if (dep && dest && typeof planeLon === 'number' && typeof planeLat === 'number') {
+        // 1. Departed flight segment (origin airport -> current aircraft position)
+        const flownLine = viewer.entities.add({
+          polyline: {
+            positions: [
+              Cartesian3.fromDegrees(dep.longitude, dep.latitude, 20),
+              Cartesian3.fromDegrees(planeLon, planeLat, Math.max(planeAlt, 500)),
+            ],
+            width: 4.0,
+            material: new PolylineGlowMaterialProperty({
+              glowPower: 0.35,
+              color: Color.fromCssColorString('#38bdf8'),
+            }),
+          },
+        });
+        tracks.push(flownLine);
+
+        // 2. Remaining flight segment (current aircraft position -> destination airport)
+        const remainingLine = viewer.entities.add({
+          polyline: {
+            positions: [
+              Cartesian3.fromDegrees(planeLon, planeLat, Math.max(planeAlt, 500)),
+              Cartesian3.fromDegrees(dest.longitude, dest.latitude, 20),
+            ],
+            width: 3.5,
+            material: new PolylineGlowMaterialProperty({
+              glowPower: 0.25,
+              color: Color.fromCssColorString('#10b981').withAlpha(0.85),
+            }),
+          },
+        });
+        tracks.push(remainingLine);
+
+        // 3. Departure airport visual pin
+        const depPin = viewer.entities.add({
+          position: Cartesian3.fromDegrees(dep.longitude, dep.latitude, 10),
+          point: {
+            pixelSize: 10,
+            color: Color.fromCssColorString('#38bdf8'),
+            outlineColor: Color.BLACK,
+            outlineWidth: 2,
+          },
+          label: {
+            text: `DEP: ${dep.iata || dep.icao} (${dep.city || dep.name})`,
+            font: '11px sans-serif',
+            fillColor: Color.WHITE,
+            showBackground: true,
+            backgroundColor: Color.fromCssColorString('rgba(15, 23, 42, 0.9)'),
+            pixelOffset: new Cartesian2(0, -18),
+          },
+        });
+        tracks.push(depPin);
+
+        // 4. Destination airport visual pin
+        const destPin = viewer.entities.add({
+          position: Cartesian3.fromDegrees(dest.longitude, dest.latitude, 10),
+          point: {
+            pixelSize: 10,
+            color: Color.fromCssColorString('#10b981'),
+            outlineColor: Color.BLACK,
+            outlineWidth: 2,
+          },
+          label: {
+            text: `ARR: ${dest.iata || dest.icao} (${dest.city || dest.name})`,
+            font: '11px sans-serif',
+            fillColor: Color.WHITE,
+            showBackground: true,
+            backgroundColor: Color.fromCssColorString('rgba(15, 23, 42, 0.9)'),
+            pixelOffset: new Cartesian2(0, -18),
+          },
+        });
+        tracks.push(destPin);
+
+        selectedHighlightRef.current = {
+          entity: null,
+          width: 24,
+          height: 24,
+          tracks,
+        };
+      }
+    }
     viewer.scene.requestRender();
   }, [selectedItem, satellites]);
 
