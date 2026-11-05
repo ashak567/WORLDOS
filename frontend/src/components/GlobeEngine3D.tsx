@@ -18,6 +18,7 @@ import {
   IonGeocodeProviderType,
   LabelStyle,
   Math as CesiumMath,
+  Matrix4,
   NearFarScalar,
   PolylineGlowMaterialProperty,
   ScreenSpaceEventHandler,
@@ -72,6 +73,7 @@ import {
   PlaceItem,
   RoadRouteResponse,
   InboundFlightPlan,
+  UserNavigationState,
   splitTrackAtAntimeridian,
 } from '../api';
 import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
@@ -168,6 +170,8 @@ interface GlobeEngine3DProps {
   onSelectPlace?: (place: PlaceItem) => void;
   targetLocation?: { center: [number, number]; zoom?: number } | null;
   selectedItem?: SelectedItemPayload | null;
+  userNavState?: UserNavigationState | null;
+  onUserPannedCamera?: () => void;
   onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -195,12 +199,20 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   onSelectPlace,
   targetLocation,
   selectedItem = null,
+  userNavState = null,
+  onUserPannedCamera,
   onViewportChange,
   onSelectItem,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const googleTilesetRef = useRef<Cesium3DTileset | null>(null);
+  const userNavSourceRef = useRef<CustomDataSource | null>(null);
+  const isCameraLockedToNavRef = useRef<boolean>(false);
+  const onUserPannedCameraRef = useRef(onUserPannedCamera);
+  useEffect(() => {
+    onUserPannedCameraRef.current = onUserPannedCamera;
+  }, [onUserPannedCamera]);
   const imageryRequestRef = useRef(0);
   const terrainPromiseRef = useRef<ReturnType<typeof createWorldTerrainAsync> | null>(null);
   const geojsonSourceRef = useRef<GeoJsonDataSource | null>(null);
@@ -391,12 +403,22 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.dataSources.add(tracksDs);
     satelliteTracksSourceRef.current = tracksDs;
 
+    // Persistent data source for User Live Navigation Tracking Puck (isolated from entities.removeAll)
+    const userNavDs = new CustomDataSource('user-navigation-track');
+    viewer.dataSources.add(userNavDs);
+    userNavSourceRef.current = userNavDs;
+
     // User interaction tracking for realistic Earth rotation when idle
     let isInteracting = false;
     let lastInteractionTime = Date.now();
     const markInteraction = () => {
       isInteracting = true;
       lastInteractionTime = Date.now();
+      if (isCameraLockedToNavRef.current) {
+        viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+        isCameraLockedToNavRef.current = false;
+        onUserPannedCameraRef.current?.();
+      }
     };
     const endInteraction = () => {
       isInteracting = false;
@@ -504,6 +526,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       if (satelliteTracksSourceRef.current) {
         viewer.dataSources.remove(satelliteTracksSourceRef.current, true);
         satelliteTracksSourceRef.current = null;
+      }
+      if (userNavSourceRef.current) {
+        viewer.dataSources.remove(userNavSourceRef.current, true);
+        userNavSourceRef.current = null;
       }
       viewer.destroy();
     };
@@ -1422,6 +1448,101 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       duration: 2.0,
     });
   }, [selectedPlace]);
+
+  // Live Google Maps-Style 3D User Navigation Puck & Driver Follow Camera
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    const navDs = userNavSourceRef.current;
+    if (!viewer || !navDs) return;
+
+    if (!userNavState || !userNavState.isActive) {
+      navDs.entities.removeAll();
+      if (isCameraLockedToNavRef.current) {
+        viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+        isCameraLockedToNavRef.current = false;
+      }
+      return;
+    }
+
+    const [lon, lat] = userNavState.currentCoords;
+    const heading = userNavState.heading;
+    const accuracy = userNavState.accuracy_m || 20;
+
+    navDs.entities.suspendEvents();
+    navDs.entities.removeAll();
+
+    // 1. Accuracy Halo on ground
+    navDs.entities.add({
+      name: 'User Accuracy Halo',
+      position: Cartesian3.fromDegrees(lon, lat, 2),
+      ellipse: {
+        semiMinorAxis: accuracy,
+        semiMajorAxis: accuracy,
+        material: Color.fromCssColorString('#00d2ff').withAlpha(0.18),
+        outline: true,
+        outlineColor: Color.fromCssColorString('#00d2ff').withAlpha(0.6),
+        outlineWidth: 2,
+        height: 2,
+      },
+    });
+
+    // 2. Forward Direction Indicator (Heading Beam)
+    const headingRad = CesiumMath.toRadians(heading);
+    const forwardDistM = 25;
+    const dLat = (forwardDistM * Math.cos(headingRad)) / 111320;
+    const dLon = (forwardDistM * Math.sin(headingRad)) / (111320 * Math.cos((lat * Math.PI) / 180));
+    const aheadPos = Cartesian3.fromDegrees(lon + dLon, lat + dLat, 6);
+
+    navDs.entities.add({
+      name: 'User Heading Beam',
+      polyline: {
+        positions: [Cartesian3.fromDegrees(lon, lat, 5), aheadPos],
+        width: 5,
+        clampToGround: true,
+        material: new PolylineGlowMaterialProperty({
+          glowPower: 0.4,
+          color: Color.fromCssColorString('#00f0ff'),
+        }),
+      },
+    });
+
+    // 3. User Location Puck (Glowing Cyan-Blue with Crisp White Border)
+    navDs.entities.add({
+      name: 'User Navigation Puck',
+      position: Cartesian3.fromDegrees(lon, lat, 8),
+      point: {
+        pixelSize: 22,
+        color: Color.fromCssColorString('#00d2ff'),
+        outlineColor: Color.WHITE,
+        outlineWidth: 3.5,
+        disableDepthTestDistance: Number.POSITIVE_INFINITY,
+      },
+    });
+
+    navDs.entities.resumeEvents();
+
+    // 4. Driver 3D Camera Follow Mode
+    if (userNavState.isCameraFollowing) {
+      isCameraLockedToNavRef.current = true;
+      if (userNavState.hasArrived) {
+        viewer.camera.lookAt(
+          Cartesian3.fromDegrees(lon, lat, 10),
+          new HeadingPitchRange(headingRad, CesiumMath.toRadians(-40), 200)
+        );
+      } else {
+        const driverPitch = CesiumMath.toRadians(-26.0); // tilted 3D driver perspective
+        const followRange = 75.0; // 75 meters behind vehicle
+        viewer.camera.lookAt(
+          Cartesian3.fromDegrees(lon, lat, 4),
+          new HeadingPitchRange(headingRad, driverPitch, followRange)
+        );
+      }
+    } else if (isCameraLockedToNavRef.current) {
+      viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+      isCameraLockedToNavRef.current = false;
+    }
+    viewer.scene.requestRender();
+  }, [userNavState]);
 
   return <div ref={containerRef} className="globe-container-3d" />;
 };

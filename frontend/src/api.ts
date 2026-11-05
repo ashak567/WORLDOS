@@ -774,6 +774,57 @@ export interface RoadRouteResponse {
   polyline: [number, number][]; // [[lon, lat], ...]
 }
 
+export interface UserNavigationState {
+  isActive: boolean;
+  isSimulating: boolean;
+  simulationSpeed: number; // 1, 2, 4, 8
+  currentCoords: [number, number]; // [lon, lat]
+  heading: number; // 0-360 degrees
+  speed_kmh: number;
+  altitude_m: number;
+  currentStepIndex: number;
+  distanceToNextStep_m: number;
+  remainingDistance_m: number;
+  remainingDuration_s: number;
+  isCameraFollowing: boolean;
+  hasArrived: boolean;
+  accuracy_m?: number;
+}
+
+export function computeDistanceMeters(
+  coords1: [number, number],
+  coords2: [number, number]
+): number {
+  const R = 6371000;
+  const dLat = ((coords2[1] - coords1[1]) * Math.PI) / 180;
+  const dLon = ((coords2[0] - coords1[0]) * Math.PI) / 180;
+  const lat1 = (coords1[1] * Math.PI) / 180;
+  const lat2 = (coords2[1] * Math.PI) / 180;
+
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.sin(dLon / 2) * Math.sin(dLon / 2) * Math.cos(lat1) * Math.cos(lat2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+export function computeBearingDegrees(
+  from: [number, number],
+  to: [number, number]
+): number {
+  const lon1 = (from[0] * Math.PI) / 180;
+  const lat1 = (from[1] * Math.PI) / 180;
+  const lon2 = (to[0] * Math.PI) / 180;
+  const lat2 = (to[1] * Math.PI) / 180;
+
+  const y = Math.sin(lon2 - lon1) * Math.cos(lat2);
+  const x =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(lon2 - lon1);
+  const brng = (Math.atan2(y, x) * 180) / Math.PI;
+  return (brng + 360) % 360;
+}
+
 export interface AirportSummary {
   icao: string;
   iata: string;

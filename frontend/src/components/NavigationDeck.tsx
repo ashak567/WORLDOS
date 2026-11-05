@@ -22,6 +22,9 @@ import {
   Trash2,
   Building,
   Sparkles,
+  LocateFixed,
+  Play,
+  Radio,
 } from 'lucide-react';
 import {
   FlightPlansResponse,
@@ -43,6 +46,8 @@ interface NavigationDeckProps {
   onFlyToCoordinates: (coords: [number, number], zoom?: number) => void;
   initialDestination?: string;
   currentCenter?: [number, number]; // [lon, lat]
+  onStartNavigation?: (mode: 'simulate' | 'gps') => void;
+  userNavActive?: boolean;
 }
 
 const DESTINATION_PRESETS = [
@@ -171,6 +176,8 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
   onFlyToCoordinates,
   initialDestination = 'Tokyo',
   currentCenter,
+  onStartNavigation,
+  userNavActive = false,
 }) => {
   const [activeTab, setActiveTab] = useState<'flights' | 'road'>('flights');
 
@@ -191,6 +198,36 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
   const [isRoadLoading, setIsRoadLoading] = useState<boolean>(false);
   const [roadError, setRoadError] = useState<string | null>(null);
   const [activeStepIndex, setActiveStepIndex] = useState<number | null>(null);
+  const [isLocatingUser, setIsLocatingUser] = useState<boolean>(false);
+
+  // Request browser GPS position and set as departure point
+  const handleUseCurrentLocation = () => {
+    if (!navigator.geolocation) {
+      alert('Geolocation is not supported by your browser.');
+      return;
+    }
+    setIsLocatingUser(true);
+    navigator.geolocation.getCurrentPosition(
+      async (pos) => {
+        const lat = pos.coords.latitude;
+        const lon = pos.coords.longitude;
+        setOriginCoords([lon, lat]);
+        setOriginName('My Current Location');
+        try {
+          const geo = await geocodeLocation(`${lat.toFixed(4)}, ${lon.toFixed(4)}`);
+          if (geo && (geo.name || geo.formatted_address)) {
+            setOriginName(`My Location (${geo.name || geo.formatted_address.split(',')[0]})`);
+          }
+        } catch (_) {}
+        setIsLocatingUser(false);
+      },
+      (err) => {
+        setIsLocatingUser(false);
+        alert(`Could not acquire GPS position: ${err.message}`);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
+  };
 
   // Sync initial destination when it changes
   useEffect(() => {
@@ -752,10 +789,26 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
           {/* Origin & Destination Config */}
           <div className="road-route-builder">
             <div className="road-input-block">
-              <label className="road-input-label">
-                <span className="dot origin-dot" />
-                <span>START POINT (Airport, Hotel, or Address)</span>
-              </label>
+              <div className="road-input-label-row">
+                <label className="road-input-label">
+                  <span className="dot origin-dot" />
+                  <span>START POINT (Airport, Hotel, or Address)</span>
+                </label>
+                <button
+                  type="button"
+                  className="use-gps-btn"
+                  onClick={handleUseCurrentLocation}
+                  disabled={isLocatingUser}
+                  title="Use My Current GPS Location"
+                >
+                  {isLocatingUser ? (
+                    <Loader2 size={11} className="animate-spin text-cyan-400" />
+                  ) : (
+                    <LocateFixed size={11} className="text-cyan-400" />
+                  )}
+                  <span>{isLocatingUser ? 'Locating...' : 'My Location'}</span>
+                </button>
+              </div>
               <div className="road-input-row">
                 <input
                   type="text"
@@ -847,6 +900,26 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
                   title="Clear road route"
                 >
                   <Trash2 size={14} />
+                </button>
+              </div>
+
+              {/* Start Live Navigation / Driving Mode Action */}
+              <div className="nav-drive-mode-actions">
+                <button
+                  className="nav-start-drive-btn primary"
+                  onClick={() => onStartNavigation?.('simulate')}
+                  title="Start 3D Turn-by-Turn Navigation with simulated car driving along route"
+                >
+                  <Play size={15} />
+                  <span>Simulate Drive (3D Follow)</span>
+                </button>
+                <button
+                  className="nav-start-drive-btn secondary"
+                  onClick={() => onStartNavigation?.('gps')}
+                  title="Track real-time device GPS coordinates along this route"
+                >
+                  <Radio size={14} className="text-emerald-400" />
+                  <span>Live GPS Track</span>
                 </button>
               </div>
 

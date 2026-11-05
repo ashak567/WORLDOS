@@ -47,6 +47,8 @@ import { RoutePlannerModal } from './components/RoutePlannerModal';
 import { AssistantPanel } from './components/AssistantPanel';
 import { PlaceDiscoveryDeck } from './components/PlaceDiscoveryDeck';
 import { NavigationDeck } from './components/NavigationDeck';
+import { LiveNavigationHUD } from './components/LiveNavigationHUD';
+import { useNavigationTracking } from './useNavigationTracking';
 import './styles.css';
 
 function withLiveFeedHealth(layers: LayerDefinition[], sources: LiveEventsResponse['sources']): LayerDefinition[] {
@@ -146,6 +148,18 @@ export default function App() {
   const [navigationDestination, setNavigationDestination] = useState<string>('Tokyo');
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
   const [discoveredPlaces, setDiscoveredPlaces] = useState<PlaceItem[]>([]);
+
+  // Live Google Maps-Style Navigation Tracking Engine
+  const {
+    navState,
+    startNavigation,
+    stopNavigation,
+    setSimSpeed,
+    toggleCameraFollow,
+    recenterCamera,
+    toggleSimulate,
+    onUserPannedCamera,
+  } = useNavigationTracking(activeRoadRoute);
 
   // Mutually exclusive right-dock drawers (Assistant, Stays/Places, Navigation, Details)
   const handleToggleAssistant = useCallback(() => {
@@ -658,6 +672,8 @@ export default function App() {
           }}
           targetLocation={targetLocation}
           selectedItem={selectedItem}
+          userNavState={navState}
+          onUserPannedCamera={onUserPannedCamera}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
@@ -771,7 +787,25 @@ export default function App() {
             ? [(viewportBbox.min_lon + viewportBbox.max_lon) / 2, (viewportBbox.min_lat + viewportBbox.max_lat) / 2]
             : undefined
         }
+        onStartNavigation={(mode) => {
+          setIsNavigationOpen(false);
+          startNavigation(mode);
+        }}
+        userNavActive={navState?.isActive}
       />
+
+      {/* Live Turn-by-Turn Driving Navigation HUD (Google Maps Style) */}
+      {navState && navState.isActive && activeRoadRoute && (
+        <LiveNavigationHUD
+          userNavState={navState}
+          activeRoadRoute={activeRoadRoute}
+          onExitNavigation={stopNavigation}
+          onToggleCameraFollow={toggleCameraFollow}
+          onToggleSimulate={toggleSimulate}
+          onChangeSimSpeed={setSimSpeed}
+          onRecenter={recenterCamera}
+        />
+      )}
 
       {/* Strategic Multi-Modal Route Planner (Phase 1) */}
       <RoutePlannerModal
