@@ -1,7 +1,28 @@
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ConversationProvider, useConversation } from '@elevenlabs/react';
-import { Mic, PhoneOff, Send, Trash2, Volume2, X } from 'lucide-react';
-import { AssistantAction, AssistantContext, fetchAssistantMapContext, getAssistantSession } from '../api';
+import {
+  Mic,
+  PhoneOff,
+  Send,
+  Trash2,
+  Volume2,
+  X,
+  Globe,
+  MapPin,
+  Calendar,
+  Utensils,
+  Compass,
+  Star,
+  Sparkles,
+} from 'lucide-react';
+import {
+  AssistantAction,
+  AssistantContext,
+  fetchAssistantMapContext,
+  getAssistantSession,
+  fetchTravelPlan,
+  TravelPlanResponse,
+} from '../api';
 
 interface AssistantPanelProps {
   isOpen: boolean;
@@ -144,6 +165,10 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   const [preferences, setPreferences] = useState<TravelPreferences>(readPreferences);
   const [paceDraft, setPaceDraft] = useState<TravelPreferences['pace']>('balanced');
   const [photoDraft, setPhotoDraft] = useState('');
+  const [activeTravelPlan, setActiveTravelPlan] = useState<TravelPlanResponse | null>(null);
+  const [activeDayIndex, setActiveDayIndex] = useState<number>(0);
+  const [loadingPlan, setLoadingPlan] = useState<boolean>(false);
+
   const transcriptRef = useRef<HTMLDivElement>(null);
   const contextRef = useRef(context);
   const preferencesRef = useRef(preferences);
@@ -152,6 +177,37 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   contextRef.current = context;
   preferencesRef.current = preferences;
   onActionRef.current = onAction;
+
+  const fetchPlanForDestination = useCallback(async (destName: string) => {
+    setLoadingPlan(true);
+    setMessage(`Retrieving live internet travel intelligence for ${destName}...`);
+    try {
+      const plan = await fetchTravelPlan(
+        destName,
+        3,
+        preferencesRef.current.pace || 'balanced',
+        preferencesRef.current.photo_interest || ''
+      );
+      setActiveTravelPlan(plan);
+      setActiveDayIndex(0);
+      if (plan.center && plan.center.length === 2) {
+        onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
+      }
+      setMessages((prev) => [
+        ...prev,
+        {
+          role: 'ai',
+          message: plan.spoken_summary,
+        },
+      ]);
+      setMessage(`Generated live internet travel plan for ${plan.destination}!`);
+    } catch (err) {
+      console.warn('Could not generate travel plan:', err);
+      setMessage(`Travel search: ${err instanceof Error ? err.message : 'Could not fetch travel plan'}`);
+    } finally {
+      setLoadingPlan(false);
+    }
+  }, []);
 
   const handleMessage = useCallback((item: AssistantMessage) => {
     if (!item.message.trim()) return;
@@ -166,6 +222,33 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
     // Intelligent client-side intent interpreter for voice and text commands
     if (item.role === 'user') {
       const lower = item.message.toLowerCase();
+
+      // Check if user is asking for a travel plan or recommendations
+      const isAskingTravel =
+        lower.includes('plan') ||
+        lower.includes('travel') ||
+        lower.includes('itinerary') ||
+        lower.includes('trip') ||
+        lower.includes('visit') ||
+        lower.includes('famous') ||
+        lower.includes('local') ||
+        lower.includes('things to do') ||
+        lower.includes('suggest') ||
+        lower.includes('recommend');
+
+      if (isAskingTravel) {
+        let matchedCity: string | null = null;
+        for (const loc of POPULAR_LOCATIONS) {
+          if (loc.keywords.some((k) => lower.includes(k))) {
+            matchedCity = loc.label.split(',')[0].trim();
+            break;
+          }
+        }
+        if (matchedCity) {
+          fetchPlanForDestination(matchedCity);
+          return;
+        }
+      }
 
       // Check for world location navigation commands
       for (const loc of POPULAR_LOCATIONS) {
@@ -195,7 +278,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
         onActionRef.current({ type: 'set_layer_visibility', layer_id: 'maritime-vessels', visible: true });
       }
     }
-  }, []);
+  }, [fetchPlanForDestination]);
 
   const conversation = useConversation({
     onMessage: ({ message: text, role, source }) => {
@@ -304,6 +387,56 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
           message: `Opened places & stays discovery deck for ${args.category || 'stays'} recommendations.`,
         });
       },
+      search_internet_travel_intelligence: async (args: { location: string; query?: string }) => {
+        try {
+          const plan = await fetchTravelPlan(
+            args.location,
+            3,
+            preferencesRef.current.pace || 'balanced',
+            preferencesRef.current.photo_interest || ''
+          );
+          setActiveTravelPlan(plan);
+          setActiveDayIndex(0);
+          if (plan.center && plan.center.length === 2) {
+            onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
+          }
+          return JSON.stringify({
+            status: 'success',
+            destination: plan.destination,
+            summary: plan.summary,
+            spoken_summary: plan.spoken_summary,
+            days: plan.days,
+            famous_attractions: plan.famous_attractions,
+            local_food_recommendations: plan.local_food_recommendations,
+            pro_tips: plan.pro_tips,
+            instruction: 'Present this concrete travel plan directly to the user. Do NOT ask more questions.',
+          });
+        } catch (err) {
+          return JSON.stringify({ error: err instanceof Error ? err.message : 'Travel search failed' });
+        }
+      },
+      create_travel_itinerary: async (args: { destination: string; days?: number; pace?: string }) => {
+        try {
+          const plan = await fetchTravelPlan(
+            args.destination,
+            args.days || 3,
+            args.pace || preferencesRef.current.pace || 'balanced',
+            preferencesRef.current.photo_interest || ''
+          );
+          setActiveTravelPlan(plan);
+          setActiveDayIndex(0);
+          if (plan.center && plan.center.length === 2) {
+            onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
+          }
+          return JSON.stringify({
+            success: true,
+            spoken_summary: plan.spoken_summary,
+            plan,
+          });
+        } catch (err) {
+          return JSON.stringify({ error: err instanceof Error ? err.message : 'Itinerary creation failed' });
+        }
+      },
     },
   });
   conversationRef.current = conversation;
@@ -348,8 +481,11 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   const sendQuestion = (event: FormEvent) => {
     event.preventDefault();
     const text = question.trim();
-    if (!text || conversation.status !== 'connected') return;
-    conversation.sendUserMessage(text);
+    if (!text) return;
+    handleMessage({ role: 'user', message: text });
+    if (conversation.status === 'connected') {
+      conversation.sendUserMessage(text);
+    }
     setQuestion('');
   };
 
@@ -409,6 +545,126 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
           </form>
         </details>
 
+        {/* Quick Travel Destination Pills */}
+        <div className="assistant-quick-travel-bar">
+          <div className="assistant-quick-travel-header">
+            <Globe size={11} color="var(--cy)" />
+            <span>INTERNET TRAVEL INTELLIGENCE</span>
+          </div>
+          <div className="assistant-quick-travel-pills">
+            {['Tokyo', 'Paris', 'Kyoto', 'New York', 'Rome', 'London', 'Dubai'].map((city) => (
+              <button
+                key={city}
+                type="button"
+                className="assistant-quick-travel-pill"
+                onClick={() => fetchPlanForDestination(city)}
+                disabled={loadingPlan}
+              >
+                {city}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {/* Live Internet Travel Plan Deck */}
+        {activeTravelPlan && (
+          <div className="assistant-travel-plan-deck">
+            <div className="assistant-plan-header">
+              <div className="assistant-plan-title-block">
+                <span className="assistant-plan-badge">LIVE INTERNET PLAN</span>
+                <h4>{activeTravelPlan.destination}</h4>
+                <span className="assistant-plan-source">Google Places & Wikipedia Live</span>
+              </div>
+              <button
+                type="button"
+                className="assistant-plan-close-btn"
+                onClick={() => setActiveTravelPlan(null)}
+                title="Hide Travel Plan"
+              >
+                <X size={12} />
+              </button>
+            </div>
+
+            <p className="assistant-plan-summary">{activeTravelPlan.summary}</p>
+
+            {/* Day Selector Tabs */}
+            <div className="assistant-plan-tabs">
+              {activeTravelPlan.days.map((day, idx) => (
+                <button
+                  key={day.day_number}
+                  type="button"
+                  className={`assistant-plan-tab ${activeDayIndex === idx ? 'active' : ''}`}
+                  onClick={() => setActiveDayIndex(idx)}
+                >
+                  Day {day.day_number}
+                </button>
+              ))}
+            </div>
+
+            {/* Day Activities */}
+            {activeTravelPlan.days[activeDayIndex] && (
+              <div className="assistant-plan-day-content">
+                <div className="assistant-plan-day-theme">
+                  <Calendar size={11} color="var(--cy)" />
+                  <span>{activeTravelPlan.days[activeDayIndex].theme}</span>
+                </div>
+
+                <div className="assistant-plan-activities">
+                  {activeTravelPlan.days[activeDayIndex].activities.map((act, i) => (
+                    <div className="assistant-plan-activity-item" key={i}>
+                      <div className="assistant-act-header">
+                        <span className="assistant-act-time">{act.time_of_day}</span>
+                        <span className="assistant-act-rating">★ {act.rating?.toFixed(1) || '4.6'}</span>
+                      </div>
+                      <strong className="assistant-act-title">{act.title}</strong>
+                      <p className="assistant-act-desc">{act.description}</p>
+                      {typeof act.lat === 'number' && typeof act.lon === 'number' && (
+                        <button
+                          type="button"
+                          className="assistant-act-fly-btn"
+                          onClick={() => onActionRef.current({ type: 'fly_to', center: [act.lon, act.lat], zoom: 15 })}
+                        >
+                          <MapPin size={10} /> Fly to Location
+                        </button>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Authentic Local Food Highlights */}
+            {activeTravelPlan.local_food_recommendations && activeTravelPlan.local_food_recommendations.length > 0 && (
+              <div className="assistant-plan-food-section">
+                <div className="assistant-plan-section-title">
+                  <Utensils size={11} color="var(--gold)" />
+                  <span>AUTHENTIC LOCAL SPECIALTIES</span>
+                </div>
+                <div className="assistant-plan-food-list">
+                  {activeTravelPlan.local_food_recommendations.slice(0, 3).map((food, idx) => (
+                    <div className="assistant-plan-food-item" key={idx}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                        <strong style={{ fontSize: '11px', color: 'var(--text-primary)' }}>{food.name}</strong>
+                        {food.rating && <span style={{ color: 'var(--gold)', fontSize: '10px' }}>★ {food.rating.toFixed(1)}</span>}
+                      </div>
+                      <p style={{ margin: '2px 0 0 0', fontSize: '10px', color: 'var(--text-secondary)' }}>{food.summary}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Explore Stays & Places Button */}
+            <button
+              type="button"
+              className="assistant-plan-explore-btn"
+              onClick={() => onActionRef.current({ type: 'discover_places', category: 'stays', center: activeTravelPlan.center })}
+            >
+              <Compass size={12} /> Explore Stays & Sights in 3D
+            </button>
+          </div>
+        )}
+
         <div className="assistant-transcript-section">
           <div className="assistant-transcript-bar">
             <span className="assistant-transcript-title">TRANSCRIPT</span>
@@ -457,10 +713,9 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
             id="assistant-question"
             value={question}
             onChange={(event) => setQuestion(event.target.value)}
-            rows={3}
+            rows={2}
             maxLength={1200}
-            placeholder={conversation.status === 'connected' ? 'What stands out in this view? (or speak aloud)' : 'Connect voice assistant below to start chatting…'}
-            disabled={conversation.status !== 'connected'}
+            placeholder="Ask for a travel plan (e.g. Plan a 3-day trip to Tokyo), or speak aloud..."
           />
           <div className="assistant-controls">
             {conversation.status === 'connected' ? (
@@ -470,7 +725,10 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
                 <button className="assistant-control-button primary" type="submit" disabled={!question.trim()}><Send size={14} /> Send</button>
               </>
             ) : (
-              <button className="assistant-control-button primary" type="button" onClick={() => void startConversation()} disabled={isStarting}><Mic size={14} /> {isStarting ? 'Connecting…' : 'Start voice assistant'}</button>
+              <>
+                <button className="assistant-control-button primary" type="button" onClick={() => void startConversation()} disabled={isStarting}><Mic size={14} /> {isStarting ? 'Connecting…' : 'Start voice'}</button>
+                <button className="assistant-control-button" type="submit" disabled={!question.trim()}><Send size={14} /> Send Text</button>
+              </>
             )}
             <span><Volume2 size={14} /> {conversation.status}</span>
           </div>

@@ -683,6 +683,65 @@ export async function fetchAssistantMapContext(context: AssistantContext): Promi
   return response.json();
 }
 
+export interface TravelActivityItem {
+  time_of_day: string;
+  title: string;
+  description: string;
+  location_name: string;
+  lat: number;
+  lon: number;
+  rating?: number;
+  type?: 'sight' | 'food' | 'scenic' | 'hidden_gem';
+}
+
+export interface TravelDayItem {
+  day_number: number;
+  theme: string;
+  activities: TravelActivityItem[];
+}
+
+export interface TravelHighlightItem {
+  name: string;
+  summary: string;
+  lat: number;
+  lon: number;
+  rating?: number;
+  type?: string;
+  address?: string;
+}
+
+export interface TravelPlanResponse {
+  status: string;
+  destination: string;
+  country: string;
+  summary: string;
+  center: [number, number];
+  zoom: number;
+  days: TravelDayItem[];
+  famous_attractions: TravelHighlightItem[];
+  local_food_recommendations: TravelHighlightItem[];
+  pro_tips: string[];
+  spoken_summary: string;
+  source: string;
+}
+
+export async function fetchTravelPlan(
+  destination: string,
+  days: number = 3,
+  pace: string = 'balanced',
+  interest: string = ''
+): Promise<TravelPlanResponse> {
+  const params = new URLSearchParams({
+    destination,
+    days: String(days),
+    pace,
+    interest,
+  });
+  const response = await fetch(`${apiBase}/assistant/travel-plan?${params.toString()}`);
+  if (!response.ok) throw new Error(`API error ${response.status} fetching travel plan`);
+  return response.json();
+}
+
 export async function fetchEntityContext(entityId: string): Promise<WorldContext> {
   const response = await fetch(`${apiBase}/entities/${encodeURIComponent(entityId)}/context`);
   if (!response.ok) throw new Error(`API error ${response.status} fetching entity context`);

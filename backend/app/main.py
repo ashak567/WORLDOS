@@ -172,6 +172,10 @@ from .places import (
     search_youtube_tours,
     search_youtube_live_cam,
 )
+from .travel_intelligence import (
+    generate_travel_plan,
+    resolve_destination_from_coords,
+)
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -469,12 +473,61 @@ def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]
             limit=30,
         )
         result = _compact_assistant_context(context)
-        if request.travel_preferences:
-            result["user_preferences"] = request.travel_preferences.model_dump(exclude_none=True)
-        return result
     except Exception as exc:
-        logger.exception("Could not assemble assistant map context")
-        raise HTTPException(status_code=503, detail="WORLDOS map context is unavailable") from exc
+        logger.warning("Database scoped_context query failed (%s); providing live travel intelligence", exc)
+        result = {
+            "query_scope": None,
+            "entities": [],
+            "observations": [],
+            "events": [],
+            "geometries": [],
+            "relationships": [],
+            "claims": [],
+            "evidence": [],
+            "assumptions_or_limitations": ["Database offline; live internet travel intelligence active."],
+        }
+
+    if request.travel_preferences:
+        result["user_preferences"] = request.travel_preferences.model_dump(exclude_none=True)
+
+    # Enrich assistant context with live internet travel intelligence
+    if request.map_bounds:
+        c_lat = (request.map_bounds.min_lat + request.map_bounds.max_lat) / 2
+        c_lon = (request.map_bounds.min_lon + request.map_bounds.max_lon) / 2
+        dest_guess = resolve_destination_from_coords(c_lat, c_lon)
+        pace_val = request.travel_preferences.pace if request.travel_preferences and request.travel_preferences.pace else "balanced"
+        interest_val = request.travel_preferences.photo_interest if request.travel_preferences and request.travel_preferences.photo_interest else ""
+        try:
+            plan = generate_travel_plan(destination=dest_guess, days=3, pace=pace_val, interest=interest_val)
+            result["travel_intelligence"] = {
+                "destination": plan["destination"],
+                "summary": plan["summary"],
+                "spoken_summary": plan["spoken_summary"],
+                "famous_attractions": plan["famous_attractions"],
+                "local_food_recommendations": plan["local_food_recommendations"],
+                "itinerary_days": plan["days"],
+                "pro_tips": plan["pro_tips"],
+                "assistant_instructions": (
+                    "CRITICAL DIRECTIVE: DO NOT ask endless questions back to the user. "
+                    "Immediately present concrete travel recommendations and day-by-day plans "
+                    "for this destination, citing famous landmarks and local hidden gems with exact coordinates."
+                ),
+            }
+        except Exception as exc:
+            logger.warning("Could not generate travel intelligence for map context: %s", exc)
+
+    return result
+
+
+@app.get("/assistant/travel-plan")
+def get_assistant_travel_plan_endpoint(
+    destination: str = Query(..., min_length=2),
+    days: int = Query(default=3, ge=1, le=7),
+    pace: str = Query(default="balanced"),
+    interest: str = Query(default=""),
+) -> dict[str, Any]:
+    """Search the live internet (Google Places New, Wikipedia) to formulate rich travel plans, famous sights, and local food."""
+    return generate_travel_plan(destination=destination, days=days, pace=pace, interest=interest)
 
 
 
