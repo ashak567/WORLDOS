@@ -5,8 +5,7 @@
 
 // Helper to create colored SVGs
 function createSvgDataUrl(svgContent: string, fillColorHex: string): string {
-  const encodedColor = encodeURIComponent(fillColorHex);
-  const fullSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="${encodedColor}">${svgContent}</svg>`;
+  const fullSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" width="32" height="32" fill="${fillColorHex}">${svgContent}</svg>`;
   return `data:image/svg+xml;utf8,${encodeURIComponent(fullSvg)}`;
 }
 
@@ -66,7 +65,6 @@ export const NIGHTLIFE_ICON_PURPLE = createSvgDataUrl(NIGHTLIFE_PATH, '#a855f7')
 
 // 10. High-Contrast Pinpoint Location Markers (Pin with needle pointing directly to ground coordinates)
 function createPinpointSvg(pinColorHex: string, innerIconPath: string): string {
-  const encColor = encodeURIComponent(pinColorHex);
   const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 36 48" width="36" height="48">
     <defs>
       <filter id="pindrop" x="-20%" y="-20%" width="140%" height="140%">
@@ -74,11 +72,11 @@ function createPinpointSvg(pinColorHex: string, innerIconPath: string): string {
       </filter>
     </defs>
     <!-- Outer teardrop pin body -->
-    <path d="M18 2C9.72 2 3 8.72 3 17c0 10.5 15 29 15 29s15-18.5 15-29c0-8.28-6.72-15-15-15z" fill="${encColor}" stroke="#ffffff" stroke-width="2.5" filter="url(#pindrop)"/>
+    <path d="M18 2C9.72 2 3 8.72 3 17c0 10.5 15 29 15 29s15-18.5 15-29c0-8.28-6.72-15-15-15z" fill="${pinColorHex}" stroke="#ffffff" stroke-width="2.5" filter="url(#pindrop)"/>
     <!-- Inner contrast disk -->
     <circle cx="18" cy="17" r="9" fill="#0a0f1d"/>
     <!-- Centered category icon scaled inside disk -->
-    <g transform="translate(10, 9) scale(0.65)" fill="${encColor}">
+    <g transform="translate(10, 9) scale(0.65)" fill="${pinColorHex}">
       ${innerIconPath}
     </g>
   </svg>`;

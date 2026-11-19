@@ -519,8 +519,11 @@ def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]
                 "pro_tips": plan["pro_tips"],
                 "assistant_instructions": (
                     "CRITICAL DIRECTIVE: DO NOT ask endless questions back to the user. "
+                    f"The 3D globe viewport is currently near {plan['destination']}. "
+                    "If the user requests recommendations or a travel plan for a specific destination or country, "
+                    "ALWAYS prioritize their requested destination over the current viewport. "
                     "Immediately present concrete travel recommendations and day-by-day plans "
-                    "for this destination, citing famous landmarks and local hidden gems with exact coordinates."
+                    "citing famous landmarks and local hidden gems with exact coordinates."
                 ),
             }
         except Exception as exc:

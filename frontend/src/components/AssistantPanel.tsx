@@ -42,6 +42,35 @@ const SAFE_LAYER_IDS = new Set([
   'thermal-fires',
 ]);
 
+function matchesKeyword(text: string, keyword: string): boolean {
+  const escaped = keyword.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const regex = new RegExp(`(^|\\b|\\s)${escaped}(\\b|\\s|$)`, 'i');
+  return regex.test(text);
+}
+
+function extractDestinationFromTravelQuery(text: string): string | null {
+  const clean = text.trim().replace(/[?!.,;]+$/, '');
+  const prepMatch = clean.match(/\b(?:in|to|for|around)\s+([a-zA-Z\s'-]+)$/i);
+  if (prepMatch && prepMatch[1]) {
+    const candidate = prepMatch[1].trim();
+    const generic = new Set([
+      'days', 'day', 'week', 'weeks', 'month', 'months', 'hours', 'me', 'us',
+      'today', 'tomorrow', 'vacation', 'holiday', 'trip', 'travel', 'plan',
+      'itinerary', 'here', 'there', 'food', 'places', 'stay', 'stays'
+    ]);
+    const words = candidate.toLowerCase().split(/\s+/);
+    if (!words.every((w) => generic.has(w)) && candidate.length >= 2) {
+      return candidate;
+    }
+  }
+  const verbMatch = clean.match(/\b(?:visit|explore|tour)\s+([a-zA-Z\s'-]+)$/i);
+  if (verbMatch && verbMatch[1]) {
+    const candidate = verbMatch[1].trim();
+    if (candidate.length >= 2) return candidate;
+  }
+  return null;
+}
+
 const POPULAR_LOCATIONS: { keywords: string[]; center: [number, number]; zoom: number; label: string }[] = [
   { keywords: ['tokyo', 'japan', 'haneda', 'narita'], center: [139.6917, 35.6895], zoom: 12, label: 'Tokyo, Japan' },
   { keywords: ['shibuya'], center: [139.7016, 35.6580], zoom: 15, label: 'Shibuya Crossing, Tokyo' },
@@ -68,6 +97,7 @@ const POPULAR_LOCATIONS: { keywords: string[]; center: [number, number]; zoom: n
   { keywords: ['amsterdam', 'schiphol', 'netherlands'], center: [4.9041, 52.3676], zoom: 12, label: 'Amsterdam, Netherlands' },
   { keywords: ['cairo', 'egypt'], center: [31.2357, 30.0444], zoom: 12, label: 'Cairo, Egypt' },
   { keywords: ['bangkok', 'thailand'], center: [100.5018, 13.7563], zoom: 12, label: 'Bangkok, Thailand' },
+  { keywords: ['pakistan', 'islamabad', 'lahore', 'karachi', 'rawalpindi'], center: [73.0479, 33.6844], zoom: 12, label: 'Islamabad, Pakistan' },
 ];
 
 function readPreferences(): TravelPreferences {
@@ -241,10 +271,13 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
       if (isAskingTravel) {
         let matchedCity: string | null = null;
         for (const loc of POPULAR_LOCATIONS) {
-          if (loc.keywords.some((k) => lower.includes(k))) {
+          if (loc.keywords.some((k) => matchesKeyword(lower, k))) {
             matchedCity = loc.label.split(',')[0].trim();
             break;
           }
+        }
+        if (!matchedCity) {
+          matchedCity = extractDestinationFromTravelQuery(item.message);
         }
         if (matchedCity) {
           fetchPlanForDestination(matchedCity);
@@ -254,7 +287,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
 
       // Check for world location navigation commands
       for (const loc of POPULAR_LOCATIONS) {
-        if (loc.keywords.some((k) => lower.includes(k))) {
+        if (loc.keywords.some((k) => matchesKeyword(lower, k))) {
           onActionRef.current({
             type: 'fly_to',
             center: loc.center,
