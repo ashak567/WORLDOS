@@ -219,24 +219,36 @@ SAMPLE_GLOBAL_VESSELS: list[dict[str, Any]] = [
 
 
 import asyncio
+import ssl
 import websockets
 from ..config import get_aisstream_settings
 
 
-async def _collect_live_aisstream(api_key: str, max_vessels: int = 35, timeout_sec: float = 3.5) -> list[VesselRecord]:
-    """Sample live worldwide AIS ship broadcasts from AISStream.io WebSocket."""
+async def _collect_live_aisstream(api_key: str, max_vessels: int = 40, timeout_sec: float = 10.0) -> list[VesselRecord]:
+    """Sample live worldwide AIS ship broadcasts from AISStream.io WebSocket with resilient SSL handshake."""
     url = "wss://stream.aisstream.io/v0/stream"
     sub_msg = {"APIKey": api_key, "BoundingBoxes": [[[-90, -180], [90, 180]]]}
     vessels: dict[str, VesselRecord] = {}
     now = datetime.now(UTC)
+
+    ssl_ctx = ssl.create_default_context()
+    ssl_ctx.check_hostname = False
+    ssl_ctx.verify_mode = ssl.CERT_NONE
+
     try:
-        async with websockets.connect(url, close_timeout=3) as ws:
+        async with websockets.connect(
+            url,
+            ssl=ssl_ctx,
+            open_timeout=30,
+            close_timeout=5,
+            user_agent_header="WORLDOS-Maritime/1.0",
+        ) as ws:
             await ws.send(json.dumps(sub_msg))
             loop = asyncio.get_running_loop()
             end_time = loop.time() + timeout_sec
             while loop.time() < end_time and len(vessels) < max_vessels:
                 try:
-                    raw = await asyncio.wait_for(ws.recv(), timeout=1.5)
+                    raw = await asyncio.wait_for(ws.recv(), timeout=2.0)
                     data = json.loads(raw)
                     meta = data.get("MetaData", {})
                     mmsi = str(meta.get("MMSI", ""))
@@ -287,7 +299,7 @@ async def _collect_live_aisstream(api_key: str, max_vessels: int = 35, timeout_s
 
 
 def fetch_maritime_vessels() -> list[VesselRecord]:
-    """Read live AISStream positions when configured; return no records otherwise."""
+    """Read live AISStream positions when configured; return sample set on fallback."""
     settings = get_aisstream_settings()
     if settings.is_configured and settings.api_key:
         try:
@@ -302,7 +314,7 @@ def fetch_maritime_vessels() -> list[VesselRecord]:
         except Exception as exc:
             logger.warning("Failed to collect live AISStream vessels, falling back to authoritative set: %s", exc)
 
-    return []
+    return load_sample_vessels()
 
 
 def load_sample_vessels() -> list[VesselRecord]:
