@@ -721,8 +721,41 @@ export interface TravelPlanResponse {
   famous_attractions: TravelHighlightItem[];
   local_food_recommendations: TravelHighlightItem[];
   pro_tips: string[];
+  social_intelligence?: Array<{ platform: string; title: string; url: string; snippet?: string }>;
+  web_intelligence?: Array<{ platform: string; title: string; url: string; snippet?: string; source?: string }>;
   spoken_summary: string;
   source: string;
+}
+
+export interface IntelligenceSearchResult {
+  platform: string;
+  title: string;
+  url: string;
+  snippet?: string;
+  source?: string;
+}
+
+export interface IntelligenceSearchResponse {
+  status: string;
+  query: string;
+  platform: string;
+  count: number;
+  results: IntelligenceSearchResult[];
+}
+
+export async function fetchIntelligenceSearch(
+  query: string,
+  platform: string = 'auto',
+  limit: number = 5
+): Promise<IntelligenceSearchResponse> {
+  const params = new URLSearchParams({
+    q: query,
+    platform,
+    limit: String(limit),
+  });
+  const response = await fetch(`${apiBase}/intelligence/search?${params.toString()}`);
+  if (!response.ok) throw new Error(`API error ${response.status} searching intelligence`);
+  return response.json();
 }
 
 export async function fetchTravelPlan(

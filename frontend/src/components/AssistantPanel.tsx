@@ -31,6 +31,7 @@ interface AssistantPanelProps {
   onClose: () => void;
   onAction: (action: AssistantAction) => void;
   onOpenNavigation?: (destination?: string) => void;
+  onSearchStatusChange?: (status: { active: boolean; platform: string; query: string }) => void;
 }
 
 type TravelPreferences = NonNullable<AssistantContext['travel_preferences']>;
@@ -188,7 +189,14 @@ export const AssistantPanel: React.FC<AssistantPanelProps> = (props) => (
   </ConversationProvider>
 );
 
-const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context, onClose, onAction, onOpenNavigation }) => {
+const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
+  isOpen,
+  context,
+  onClose,
+  onAction,
+  onOpenNavigation,
+  onSearchStatusChange,
+}) => {
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [evidence, setEvidence] = useState<NonNullable<Awaited<ReturnType<typeof fetchAssistantMapContext>>['evidence']>>([]);
@@ -213,6 +221,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
   const fetchPlanForDestination = useCallback(async (destName: string) => {
     setLoadingPlan(true);
     setMessage(`Retrieving live internet travel intelligence for ${destName}...`);
+    onSearchStatusChange?.({ active: true, platform: 'reddit', query: `${destName} travel intelligence` });
     try {
       const plan = await fetchTravelPlan(
         destName,
@@ -233,13 +242,17 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
         },
       ]);
       setMessage(`Generated live internet travel plan for ${plan.destination}!`);
+      setTimeout(() => {
+        onSearchStatusChange?.({ active: false, platform: 'reddit', query: '' });
+      }, 4000);
     } catch (err) {
       console.warn('Could not generate travel plan:', err);
       setMessage(`Travel search: ${err instanceof Error ? err.message : 'Could not fetch travel plan'}`);
+      onSearchStatusChange?.({ active: false, platform: 'reddit', query: '' });
     } finally {
       setLoadingPlan(false);
     }
-  }, []);
+  }, [onSearchStatusChange]);
 
   const handleMessage = useCallback((item: AssistantMessage) => {
     if (!item.message.trim()) return;
@@ -684,6 +697,35 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({ isOpen, context,
                       </div>
                       <p style={{ margin: '2px 0 0 0', fontSize: '10px', color: 'var(--text-secondary)' }}>{food.summary}</p>
                     </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Reddit Community Intelligence */}
+            {activeTravelPlan.social_intelligence && activeTravelPlan.social_intelligence.length > 0 && (
+              <div className="assistant-plan-food-section" style={{ borderLeft: '2px solid #f97316' }}>
+                <div className="assistant-plan-section-title">
+                  <span style={{ display: 'inline-block', width: '7px', height: '7px', borderRadius: '50%', background: '#f97316', marginRight: '4px' }} />
+                  <span style={{ color: '#fb923c' }}>REDDIT COMMUNITY INTEL</span>
+                </div>
+                <div className="assistant-plan-food-list">
+                  {activeTravelPlan.social_intelligence.slice(0, 3).map((social, idx) => (
+                    <a
+                      key={idx}
+                      href={social.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="assistant-plan-food-item"
+                      style={{ textDecoration: 'none', display: 'block' }}
+                    >
+                      <strong style={{ fontSize: '11px', color: '#fed7aa', display: 'block' }}>{social.title}</strong>
+                      {social.snippet && (
+                        <p style={{ margin: '2px 0 0 0', fontSize: '10px', color: '#94a3b8' }}>
+                          {social.snippet}
+                        </p>
+                      )}
+                    </a>
                   ))}
                 </div>
               </div>

@@ -48,6 +48,7 @@ import { AssistantPanel } from './components/AssistantPanel';
 import { PlaceDiscoveryDeck } from './components/PlaceDiscoveryDeck';
 import { NavigationDeck } from './components/NavigationDeck';
 import { LiveNavigationHUD } from './components/LiveNavigationHUD';
+import { SearchHUD } from './components/SearchHUD';
 import { useNavigationTracking } from './useNavigationTracking';
 import './styles.css';
 
@@ -148,6 +149,11 @@ export default function App() {
   const [navigationDestination, setNavigationDestination] = useState<string>('Tokyo');
   const [selectedPlace, setSelectedPlace] = useState<PlaceItem | null>(null);
   const [discoveredPlaces, setDiscoveredPlaces] = useState<PlaceItem[]>([]);
+  const [searchHUD, setSearchHUD] = useState<{ active: boolean; platform: string; query: string }>({
+    active: false,
+    platform: 'reddit',
+    query: '',
+  });
 
   // Live Google Maps-Style Navigation Tracking Engine
   const {
@@ -697,12 +703,21 @@ export default function App() {
         }}
         onClose={() => setIsAssistantOpen(false)}
         onAction={handleAssistantAction}
+        onSearchStatusChange={setSearchHUD}
         onOpenNavigation={(dest) => {
           if (dest) setNavigationDestination(dest);
           setIsNavigationOpen(true);
           setIsAssistantOpen(false);
           setIsPlacesDeckOpen(false);
         }}
+      />
+
+      {/* 13 by 4 Frosted Glassroom Brick Search HUD */}
+      <SearchHUD
+        active={searchHUD.active}
+        platform={searchHUD.platform}
+        query={searchHUD.query}
+        onDismiss={() => setSearchHUD((prev) => ({ ...prev, active: false }))}
       />
 
       {/* Multimodal Places & Stays Discovery Deck (Google Places, Aerial View, YouTube) */}

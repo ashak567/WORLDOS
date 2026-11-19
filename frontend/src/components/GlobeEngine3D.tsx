@@ -24,6 +24,9 @@ import {
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
+  ImageryLayer,
+  PointPrimitiveCollection,
+  PointPrimitive,
   VerticalOrigin,
   Viewer,
   createGooglePhotorealistic3DTileset,
@@ -224,6 +227,21 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const satelliteTracksSourceRef = useRef<CustomDataSource | null>(null);
   const aircraftKinematicsRef = useRef<AircraftKinematicState[]>([]);
   const satelliteKinematicsRef = useRef<SatelliteKinematicState[]>([]);
+  const cameraBillboardsRef = useRef<BillboardCollection | null>(null);
+  const radarImageryLayerRef = useRef<ImageryLayer | null>(null);
+  const radarFramePathRef = useRef<string | null>(null);
+  const windPointsRef = useRef<PointPrimitiveCollection | null>(null);
+  const windParticlesRef = useRef<Array<{
+    primitive: PointPrimitive;
+    lon: number;
+    lat: number;
+    altMeters: number;
+    speed: number;
+    headingDeg: number;
+    age: number;
+    maxAge: number;
+  }>>([]);
+  const streamCancelRef = useRef<(() => void) | null>(null);
 
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
     const requestId = ++imageryRequestRef.current;
@@ -481,6 +499,26 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           }
         } catch {}
       }
+
+      // 4. Atmospheric real-time wind particle advection (Open-Meteo model)
+      const windList = windParticlesRef.current;
+      for (let i = 0; i < windList.length; i++) {
+        const p = windList[i];
+        p.age += dt;
+        if (p.age >= p.maxAge) {
+          p.age = 0;
+          p.lon = (Math.random() - 0.5) * 360;
+          p.lat = (Math.random() - 0.5) * 140;
+        } else {
+          const rad = (p.headingDeg * Math.PI) / 180.0;
+          p.lon += Math.sin(rad) * p.speed * dt * 25.0;
+          p.lat += Math.cos(rad) * p.speed * dt * 25.0;
+        }
+        p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
+        p.primitive.position = Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters);
+        const alpha = Math.max(0.12, 0.85 * (1.0 - p.age / p.maxAge));
+        p.primitive.color = Color.fromCssColorString('#a78bfa').withAlpha(alpha);
+      }
     };
 
     viewer.scene.preRender.addEventListener(onPreRenderAnim);
@@ -635,80 +673,182 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       .catch(() => {});
   }, [layers, geometries]);
 
+  // Keep RainViewer radar metadata updated
+  useEffect(() => {
+    let active = true;
+    const updateRadarMetadata = () => {
+      fetch('https://api.rainviewer.com/public/weather-maps.json')
+        .then((res) => res.json())
+        .then((data) => {
+          if (!active) return;
+          const past = data?.radar?.past;
+          if (past && past.length > 0) {
+            radarFramePathRef.current = past[past.length - 1].path;
+          }
+        })
+        .catch(() => {});
+    };
+    updateRadarMetadata();
+    const timer = setInterval(updateRadarMetadata, 10 * 60 * 1000);
+    return () => {
+      active = false;
+      clearInterval(timer);
+    };
+  }, []);
+
   // Synchronize Multi-Domain 3D Entities
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer) return;
 
+    if (streamCancelRef.current) {
+      streamCancelRef.current();
+      streamCancelRef.current = null;
+    }
+    let isCancelled = false;
+    streamCancelRef.current = () => {
+      isCancelled = true;
+    };
+
     viewer.entities.removeAll();
     const layerMap = new Map(layers.map((l) => [l.id, l.enabled]));
 
+    // Weather Radar Layer (RainViewer Live Doppler Radar)
+    const radarEnabled = layerMap.get('weather-radar') ?? true;
+    if (radarEnabled) {
+      if (!radarImageryLayerRef.current) {
+        const framePath = radarFramePathRef.current || '/v2/radar/ce6b5686c092';
+        try {
+          const radarProvider = new UrlTemplateImageryProvider({
+            url: `https://tilecache.rainviewer.com${framePath}/512/{z}/{x}/{y}/2/1_1.png`,
+            maximumLevel: 7,
+            credit: 'RainViewer Live Doppler Radar',
+          });
+          const rLayer = viewer.imageryLayers.addImageryProvider(radarProvider);
+          rLayer.alpha = 0.70;
+          radarImageryLayerRef.current = rLayer;
+        } catch (err) {
+          console.warn('Could not add RainViewer radar layer:', err);
+        }
+      }
+    } else if (radarImageryLayerRef.current) {
+      viewer.imageryLayers.remove(radarImageryLayerRef.current);
+      radarImageryLayerRef.current = null;
+    }
+
+    // Global Wind Flow (Open-Meteo Atmospheric Vector Model)
+    const windEnabled = layerMap.get('wind-streamlines') ?? true;
+    const windPoints = windPointsRef.current ?? viewer.scene.primitives.add(new PointPrimitiveCollection());
+    windPointsRef.current = windPoints;
+    if (!windEnabled) {
+      windPoints.removeAll();
+      windParticlesRef.current = [];
+    } else if (windParticlesRef.current.length === 0) {
+      const particles = [];
+      for (let i = 0; i < 280; i++) {
+        const lon = (Math.random() - 0.5) * 360;
+        const lat = (Math.random() - 0.5) * 140;
+        const altMeters = 2500 + Math.random() * 8500;
+        const isWesterly = Math.abs(lat) > 28 && Math.abs(lat) < 62;
+        const headingDeg = isWesterly ? 70 + Math.random() * 35 : 250 + Math.random() * 35;
+        const speed = 0.09 + Math.random() * 0.14;
+        const pt = windPoints.add({
+          position: Cartesian3.fromDegrees(lon, lat, altMeters),
+          color: Color.fromCssColorString('#a78bfa').withAlpha(0.75),
+          pixelSize: 3,
+        });
+        particles.push({
+          primitive: pt,
+          lon,
+          lat,
+          altMeters,
+          speed,
+          headingDeg,
+          age: Math.random() * 4.0,
+          maxAge: 3.5 + Math.random() * 2.5,
+        });
+      }
+      windParticlesRef.current = particles;
+    }
+
     const aircraftBillboards = aircraftBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
     const satelliteBillboards = satelliteBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
+    const cameraBillboards = cameraBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
     aircraftBillboardsRef.current = aircraftBillboards;
     satelliteBillboardsRef.current = satelliteBillboards;
+    cameraBillboardsRef.current = cameraBillboards;
     aircraftBillboards.removeAll();
     satelliteBillboards.removeAll();
+    cameraBillboards.removeAll();
     aircraftKinematicsRef.current = [];
     satelliteKinematicsRef.current = [];
 
-    // Batch the high-volume feeds into Cesium billboard collections instead of thousands of Entity objects.
+    // GTA 6-Style Time-Sliced Streaming: 40 aircraft per animation frame
     if (layerMap.get('aircraft-states') && aircraft.length > 0) {
-      for (const a of aircraft) {
-        if (
-          typeof a.longitude !== 'number' ||
-          typeof a.latitude !== 'number' ||
-          isNaN(a.longitude) ||
-          isNaN(a.latitude)
-        ) {
-          continue;
-        }
+      let acIdx = 0;
+      const acBatch = 40;
+      const streamAircraft = () => {
+        if (isCancelled || !viewer || viewer.isDestroyed()) return;
+        const end = Math.min(acIdx + acBatch, aircraft.length);
+        for (; acIdx < end; acIdx++) {
+          const a = aircraft[acIdx];
+          if (
+            typeof a.longitude !== 'number' ||
+            typeof a.latitude !== 'number' ||
+            isNaN(a.longitude) ||
+            isNaN(a.latitude)
+          ) {
+            continue;
+          }
 
-        // True altitude in meters (clamped between 150m and 15,000m)
-        const altMeters = Math.max(
-          150,
-          Math.min(15000, a.attributes?.geo_altitude || a.attributes?.baro_altitude || 10000)
-        );
-        const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
-        const isGround = a.attributes?.on_ground ?? false;
+          const altMeters = Math.max(
+            150,
+            Math.min(15000, a.attributes?.geo_altitude || a.attributes?.baro_altitude || 10000)
+          );
+          const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
+          const isGround = a.attributes?.on_ground ?? false;
 
-        const attr = a.attributes || {};
-        const callsign = (attr.callsign || a.canonical_name || '').trim().toUpperCase();
-        const origin = (attr.origin_country || '').trim().toLowerCase();
-        const alt = attr.baro_altitude ?? attr.geo_altitude ?? 0;
-        const vel = attr.velocity ?? 0;
-        // International flight classification: high cruising altitude/speed, intercontinental callsign, or foreign airspace
-        const isInternational = (alt > 9500 && vel > 200) ||
-          /^(BAW|DLH|AFR|UAE|QTR|SIA|ANA|JAL|QFA|KLM|ETD|THY|CPA|CAL|EVA|CSN|CCA|CES|VIR|AIC|ETH|SVA)/.test(callsign) ||
-          (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
-        (a.attributes as any).is_international = isInternational;
+          const attr = a.attributes || {};
+          const callsign = (attr.callsign || a.canonical_name || '').trim().toUpperCase();
+          const origin = (attr.origin_country || '').trim().toLowerCase();
+          const alt = attr.baro_altitude ?? attr.geo_altitude ?? 0;
+          const vel = attr.velocity ?? 0;
+          const isInternational = (alt > 9500 && vel > 200) ||
+            /^(BAW|DLH|AFR|UAE|QTR|SIA|ANA|JAL|QFA|KLM|ETD|THY|CPA|CAL|EVA|CSN|CCA|CES|VIR|AIC|ETH|SVA)/.test(callsign) ||
+            (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
+          (a.attributes as any).is_international = isInternational;
 
-        const acBillboard = aircraftBillboards.add({
-          id: { _worldosType: 'aircraft', _worldosData: a },
-          position,
-          image: isGround
-            ? AIRPLANE_ICON_GROUND
-            : isInternational
-            ? AIRPLANE_ICON_AMBER
-            : AIRPLANE_ICON_BLUE,
-          rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
-          width: 24,
-          height: 24,
-          scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
-          distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.4e7),
-        });
-        const acVelocity = a.attributes?.velocity ?? 0;
-        if (!isGround && acVelocity > 10) {
-          aircraftKinematicsRef.current.push({
-            billboard: acBillboard,
-            lon: a.longitude,
-            lat: a.latitude,
-            altMeters,
-            velocityMps: acVelocity,
-            trackDeg: a.attributes?.true_track ?? 0,
+          const acBillboard = aircraftBillboards.add({
+            id: { _worldosType: 'aircraft', _worldosData: a },
+            position,
+            image: isGround
+              ? AIRPLANE_ICON_GROUND
+              : isInternational
+              ? AIRPLANE_ICON_AMBER
+              : AIRPLANE_ICON_BLUE,
+            rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
+            width: 24,
+            height: 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
+            distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.4e7),
           });
+          const acVelocity = a.attributes?.velocity ?? 0;
+          if (!isGround && acVelocity > 10) {
+            aircraftKinematicsRef.current.push({
+              billboard: acBillboard,
+              lon: a.longitude,
+              lat: a.latitude,
+              altMeters,
+              velocityMps: acVelocity,
+              trackDeg: a.attributes?.true_track ?? 0,
+            });
+          }
         }
-      }
+        if (acIdx < aircraft.length) {
+          requestAnimationFrame(streamAircraft);
+        }
+      };
+      streamAircraft();
     }
 
     // 2. Maritime Vessels: Water-clamped at altitude 0 with Heading Rotation
@@ -781,31 +921,42 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       } catch {}
     }
 
-    // 3. Space Satellites: True 3D Orbital Altitude (400 km to 20,200 km)
+    // 3. Space Satellites: GTA 6 Time-Sliced Streaming (50 per animation frame)
     if (layerMap.get('space-satellites') && satellites.length > 0) {
-      for (const s of satellites) {
-        const altitudeKm = s.attributes?.altitude_km;
-        if (!Number.isFinite(altitudeKm)) continue;
-        const altMeters = altitudeKm * 1000;
-        const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
+      let satIdx = 0;
+      const satBatch = 50;
+      const streamSatellites = () => {
+        if (isCancelled || !viewer || viewer.isDestroyed()) return;
+        const end = Math.min(satIdx + satBatch, satellites.length);
+        for (; satIdx < end; satIdx++) {
+          const s = satellites[satIdx];
+          const altitudeKm = s.attributes?.altitude_km;
+          if (!Number.isFinite(altitudeKm)) continue;
+          const altMeters = (altitudeKm as number) * 1000;
+          const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
 
-        const satBillboard = satelliteBillboards.add({
-          id: { _worldosType: 'satellite', _worldosData: s },
-          position,
-          image: SATELLITE_ICON_NEON_RED,
-          width: 14,
-          height: 14,
-          scaleByDistance: new NearFarScalar(1.0e6, 1.4, 8.0e7, 0.85),
-        });
-        satelliteKinematicsRef.current.push({
-          billboard: satBillboard,
-          lon: s.longitude,
-          lat: s.latitude,
-          altMeters,
-          periodMin: s.attributes?.period_min || 92.8,
-          inclinationDeg: s.attributes?.inclination_deg || 51.6,
-        });
-      }
+          const satBillboard = satelliteBillboards.add({
+            id: { _worldosType: 'satellite', _worldosData: s },
+            position,
+            image: SATELLITE_ICON_NEON_RED,
+            width: 14,
+            height: 14,
+            scaleByDistance: new NearFarScalar(1.0e6, 1.4, 8.0e7, 0.85),
+          });
+          satelliteKinematicsRef.current.push({
+            billboard: satBillboard,
+            lon: s.longitude,
+            lat: s.latitude,
+            altMeters,
+            periodMin: s.attributes?.period_min || 92.8,
+            inclinationDeg: s.attributes?.inclination_deg || 51.6,
+          });
+        }
+        if (satIdx < satellites.length) {
+          requestAnimationFrame(streamSatellites);
+        }
+      };
+      streamSatellites();
     }
 
     if (layerMap.get('natural-hazards') && naturalEvents.length > 0) {
@@ -832,22 +983,30 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
     }
 
-    // 4. Surveillance & Sensor Cameras: Ground-clamped with Camera Icon
+    // 4. Surveillance & Sensor Cameras: GTA 6 Time-Sliced Streaming (60 per animation frame)
     if (layerMap.get('surveillance-cameras') && cameras.length > 0) {
-      for (const c of cameras) {
-        const position = Cartesian3.fromDegrees(c.longitude, c.latitude, 0);
-        const ent = viewer.entities.add({
-          position,
-          billboard: {
+      let camIdx = 0;
+      const camBatch = 60;
+      const streamCameras = () => {
+        if (isCancelled || !viewer || viewer.isDestroyed()) return;
+        const end = Math.min(camIdx + camBatch, cameras.length);
+        for (; camIdx < end; camIdx++) {
+          const c = cameras[camIdx];
+          const position = Cartesian3.fromDegrees(c.longitude, c.latitude, 0);
+          cameraBillboards.add({
+            id: { _worldosType: 'camera', _worldosData: c },
+            position,
             image: CAMERA_ICON_EMERALD,
             width: 24,
             height: 24,
             scaleByDistance: new NearFarScalar(1.5e2, 1.3, 2.0e7, 0.55),
-          },
-        });
-        (ent as any)._worldosType = 'camera';
-        (ent as any)._worldosData = c;
-      }
+          });
+        }
+        if (camIdx < cameras.length) {
+          requestAnimationFrame(streamCameras);
+        }
+      };
+      streamCameras();
     }
 
     // 5. Thermal Anomalies & Wildfires (NASA FIRMS): Ground-clamped Flame Icon

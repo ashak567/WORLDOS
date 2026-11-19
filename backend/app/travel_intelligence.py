@@ -13,6 +13,7 @@ from dataclasses import asdict, dataclass
 from typing import Any
 
 from .places import _get_api_key
+from .web_intelligence import search_reddit_intelligence, search_web_intelligence
 
 logger = logging.getLogger("worldos.travel_intelligence")
 
@@ -422,6 +423,10 @@ def generate_travel_plan(
     # 3. Fetch Wikipedia summary
     wiki = fetch_wikipedia_summary(cleaned_dest)
 
+    # 4. Fetch Live Social & Neural Intelligence (Reddit, Exa, Tavily)
+    social_intel = search_reddit_intelligence(f"{cleaned_dest} travel tips hidden gems itinerary", limit=3)
+    web_intel = search_web_intelligence(f"best places to visit in {cleaned_dest} sights and food", limit=3)
+
     # Resolve center coordinates
     center_lon = 0.0
     center_lat = 0.0
@@ -594,6 +599,8 @@ def generate_travel_plan(
         "famous_attractions": combined_sights[:6],
         "local_food_recommendations": combined_food[:5],
         "pro_tips": pro_tips,
+        "social_intelligence": social_intel,
+        "web_intelligence": web_intel,
         "spoken_summary": spoken_summary,
-        "source": "Google Places API (New) · Wikipedia · WORLDOS Travel Intelligence",
+        "source": "Exa Neural Search · Reddit Intelligence · Google Places · Wikipedia",
     }

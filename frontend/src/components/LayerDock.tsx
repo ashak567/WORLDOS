@@ -19,6 +19,7 @@ const CATEGORY_TITLES: Record<LayerCategory, string> = {
   space: 'SPACE & ORBITAL',
   surveillance: 'OPTICAL & SENSORS',
   disasters: 'DISASTERS & SEVERE EVENTS',
+  weather: 'ATMOSPHERE & WEATHER RADAR',
 };
 
 export const LayerDock: React.FC<LayerDockProps> = ({

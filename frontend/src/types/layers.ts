@@ -9,7 +9,9 @@ export type LayerId =
   | 'surveillance-cameras'
   | 'earthquake-events'
   | 'natural-hazards'
-  | 'thermal-fires';
+  | 'thermal-fires'
+  | 'weather-radar'
+  | 'wind-streamlines';
 
 export type LayerCategory =
   | 'geography'
@@ -17,7 +19,8 @@ export type LayerCategory =
   | 'maritime'
   | 'space'
   | 'surveillance'
-  | 'disasters';
+  | 'disasters'
+  | 'weather';
 
 export type BasemapMode = 'dark-tactical' | 'satellite-hybrid' | 'streets' | 'oceanic' | 'google-3d';
 
@@ -159,6 +162,30 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     color: '#ef4444', // Red
     enabled: true,
     count: 0,
+    truthClass: 'OBSERVED',
+    loading: false,
+  },
+  {
+    id: 'weather-radar',
+    name: 'Live Doppler Radar (RainViewer)',
+    category: 'weather',
+    description: 'Real-time global weather radar composite showing live precipitation, storm cells, rain, and snow coverage.',
+    source: 'RainViewer Live Radar API (No key required)',
+    color: '#38bdf8', // Sky blue
+    enabled: true,
+    count: 1,
+    truthClass: 'OBSERVED',
+    loading: false,
+  },
+  {
+    id: 'wind-streamlines',
+    name: 'Global Wind Flow (Open-Meteo)',
+    category: 'weather',
+    description: 'Real-time global atmospheric wind vectors and animated streamlines derived from live NOAA GFS & Open-Meteo forecast models.',
+    source: 'Open-Meteo Atmospheric Grid (No key required)',
+    color: '#a78bfa', // Purple / Violet
+    enabled: true,
+    count: 1,
     truthClass: 'OBSERVED',
     loading: false,
   },

@@ -176,6 +176,10 @@ from .travel_intelligence import (
     generate_travel_plan,
     resolve_destination_from_coords,
 )
+from .web_intelligence import (
+    search_reddit_intelligence,
+    search_web_intelligence,
+)
 from .navigation import (
     calculate_road_route,
     geocode_location,
@@ -541,6 +545,23 @@ def get_assistant_travel_plan_endpoint(
 ) -> dict[str, Any]:
     """Search the live internet (Google Places New, Wikipedia) to formulate rich travel plans, famous sights, and local food."""
     return generate_travel_plan(destination=destination, days=days, pace=pace, interest=interest)
+
+
+@app.get("/intelligence/search")
+def search_intelligence_endpoint(
+    q: str = Query(..., min_length=2, description="Search query"),
+    platform: str = Query(default="auto", description="Target platform: auto, reddit, exa, tavily"),
+    limit: int = Query(default=5, ge=1, le=10),
+) -> dict[str, Any]:
+    """Execute live neural web or social intelligence search via Exa and Tavily."""
+    results = search_web_intelligence(query=q, limit=limit, platform=platform)
+    return {
+        "status": "success",
+        "query": q,
+        "platform": platform,
+        "count": len(results),
+        "results": results,
+    }
 
 
 @app.get("/navigation/airports", response_model=list[AirportSummary])
