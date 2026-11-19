@@ -1688,13 +1688,15 @@ def list_thermal_anomalies(
     max_lat_v = _clean_param(max_lat)
     limit_v = _clean_param(limit, 200)
 
-    return WorldRepository().thermal_anomalies(
+    records = WorldRepository().thermal_anomalies(
         min_lon=float(min_lon_v) if min_lon_v is not None else None,
         min_lat=float(min_lat_v) if min_lat_v is not None else None,
         max_lon=float(max_lon_v) if max_lon_v is not None else None,
         max_lat=float(max_lat_v) if max_lat_v is not None else None,
         limit=limit_v,
     )
+    from .ingestion.fires import is_saa_oceanic_false_alarm
+    return [r for r in records if not is_saa_oceanic_false_alarm(float(r.get("latitude", 0)), float(r.get("longitude", 0)))]
 
 
 @app.post("/ingest/nasa-firms/fires")

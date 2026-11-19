@@ -1012,6 +1012,14 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     // 5. Thermal Anomalies & Wildfires (NASA FIRMS): Ground-clamped Flame Icon
     if (layerMap.get('thermal-fires') && thermalEvents.length > 0) {
       for (const f of thermalEvents) {
+        // Filter out South Atlantic Anomaly (SAA) cosmic radiation ocean glitches
+        if (
+          (f.latitude >= 5.0 && f.latitude <= 35.0 && f.longitude >= -50.0 && f.longitude <= -22.0) ||
+          (f.latitude >= 0.0 && f.latitude < 5.0 && f.longitude >= -45.0 && f.longitude <= -22.0) ||
+          (f.latitude >= -35.0 && f.latitude < 0.0 && f.longitude >= -34.0 && f.longitude <= -12.0)
+        ) {
+          continue;
+        }
         const position = Cartesian3.fromDegrees(f.longitude, f.latitude, 0);
         const ent = viewer.entities.add({
           position,

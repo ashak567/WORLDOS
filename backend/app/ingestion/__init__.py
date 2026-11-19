@@ -1,6 +1,6 @@
 """Explicit ingestion adapters; each maps a public source to the world contract."""
 from .cameras import camera_to_world_bundle, load_authoritative_cameras
-from .fires import load_authoritative_thermal_anomalies, thermal_anomaly_to_world_bundle
+from .fires import is_saa_oceanic_false_alarm, load_authoritative_thermal_anomalies, thermal_anomaly_to_world_bundle
 from .infrastructure import infrastructure_to_world_bundle, load_authoritative_infrastructure
 from .live_hazards import LiveHazardFeedError, fetch_gdacs_alerts, fetch_open_natural_events, fetch_recent_earthquakes
 from .live_context import LiveContextFeedError, fetch_global_climate, fetch_global_news

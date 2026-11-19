@@ -153,6 +153,25 @@ import urllib.request
 from ..config import get_firms_settings
 
 
+def is_saa_oceanic_false_alarm(lat: float, lon: float) -> bool:
+    """Filter out phantom thermal anomalies in open Atlantic waters caused by the South Atlantic Anomaly (SAA).
+
+    High-energy trapped protons in Earth's dipping inner Van Allen radiation belt strike the VIIRS
+    sensor electronics (mid-infrared channel I4) as the satellite traverses the South Atlantic,
+    registering spurious high-temperature spikes over deep oceanic waters where no terrestrial fires exist.
+    """
+    # 1. Central/North Atlantic open ocean (north of South America mainland, lat 5°N to 35°N)
+    if 5.0 <= lat <= 35.0 and -50.0 <= lon <= -22.0:
+        return True
+    # 2. Equatorial open ocean (lat 0° to 5°N, east of Amapá/Guianas coast)
+    if 0.0 <= lat < 5.0 and -45.0 <= lon <= -22.0:
+        return True
+    # 3. South Atlantic open ocean (east of Ponta do Seixas -34.79°W, lat -35°S to 0°)
+    if -35.0 <= lat < 0.0 and -34.0 <= lon <= -12.0:
+        return True
+    return False
+
+
 def fetch_live_firms_anomalies(map_key: str, max_records: int = 100) -> list[ThermalAnomalyRecord]:
     """Retrieve real-time global thermal anomaly detections from NASA FIRMS VIIRS satellite sensor."""
     url = f"https://firms.modaps.eosdis.nasa.gov/api/area/csv/{map_key}/VIIRS_NOAA20_NRT/world/1"
@@ -162,11 +181,15 @@ def fetch_live_firms_anomalies(map_key: str, max_records: int = 100) -> list[The
         text = resp.read().decode("utf-8")
         reader = csv.DictReader(text.strip().splitlines())
         for idx, row in enumerate(reader):
-            if idx >= max_records:
+            if len(records) >= max_records:
                 break
             try:
                 lat = float(row["latitude"])
                 lon = float(row["longitude"])
+                # Discard South Atlantic Anomaly cosmic radiation false positives over deep open ocean
+                if is_saa_oceanic_false_alarm(lat, lon):
+                    continue
+
                 bright = float(row.get("bright_ti4", 320.0))
                 frp = float(row.get("frp", 10.0))
                 conf_code = str(row.get("confidence", "nominal")).lower()
