@@ -179,6 +179,8 @@ export default function App() {
       }
     }
     setCockpitAircraft(null);
+    setSelectedItem(null);
+    setSelectedTrack(null);
   }, [cockpitAircraft]);
 
   useEffect(() => {
@@ -664,34 +666,36 @@ export default function App() {
       {/* Background Tactical Grid */}
       <div className="tactical-grid-bg" />
 
-      {/* Mission Control HUD Bar */}
-      <HudBar
-        basemapMode={basemapMode}
-        onSetBasemapMode={setBasemapMode}
-        viewportBbox={viewportBbox}
-        isLoading={isLoading}
-        onOpenCommandPalette={() => setIsCommandOpen(true)}
-        onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
-        onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
-        onOpenAssistant={handleToggleAssistant}
-        isAssistantOpen={isAssistantOpen}
-        onTogglePlacesDeck={handleTogglePlacesDeck}
-        isPlacesDeckOpen={isPlacesDeckOpen}
-        onToggleNavigation={handleToggleNavigation}
-        isNavigationOpen={isNavigationOpen}
-        isNavActive={activeRoadRoute !== null || activeFlightPlan !== null}
-        isRouteActive={activeRoute !== null}
-        isDockCollapsed={isDockCollapsed}
-        onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
-        aircraftCount={aircraft.length}
-        vesselCount={vessels.length}
-        satelliteCount={satellites.length}
-        cameraCount={cameras.length}
-        fireCount={thermalEvents.length}
-        infraCount={infrastructure.length}
-        cameras={cameras}
-        onJumpToCamera={handleJumpToCamera}
-      />
+      {/* Mission Control HUD Bar (Hidden during Cockpit Mode for clean canopy view) */}
+      {!cockpitAircraft && (
+        <HudBar
+          basemapMode={basemapMode}
+          onSetBasemapMode={setBasemapMode}
+          viewportBbox={viewportBbox}
+          isLoading={isLoading}
+          onOpenCommandPalette={() => setIsCommandOpen(true)}
+          onOpenSourceHealth={() => setIsSourceHealthOpen(true)}
+          onOpenRoutePlanner={() => setIsRoutePlannerOpen(true)}
+          onOpenAssistant={handleToggleAssistant}
+          isAssistantOpen={isAssistantOpen}
+          onTogglePlacesDeck={handleTogglePlacesDeck}
+          isPlacesDeckOpen={isPlacesDeckOpen}
+          onToggleNavigation={handleToggleNavigation}
+          isNavigationOpen={isNavigationOpen}
+          isNavActive={activeRoadRoute !== null || activeFlightPlan !== null}
+          isRouteActive={activeRoute !== null}
+          isDockCollapsed={isDockCollapsed}
+          onToggleDock={() => setIsDockCollapsed((prev) => !prev)}
+          aircraftCount={aircraft.length}
+          vesselCount={vessels.length}
+          satelliteCount={satellites.length}
+          cameraCount={cameras.length}
+          fireCount={thermalEvents.length}
+          infraCount={infrastructure.length}
+          cameras={cameras}
+          onJumpToCamera={handleJumpToCamera}
+        />
+      )}
 
       {/* Master Geospatial Viewport Stage */}
       <main className="viewport-stage" aria-label="Geospatial Tactical Viewport">
@@ -732,91 +736,102 @@ export default function App() {
         />
       </main>
 
-      {/* Floating Tactical Layer Dock */}
-      <LayerDock
-        layers={layers}
-        liveContext={liveContext}
-        contextError={liveContextError}
-        onToggleLayer={handleToggleLayer}
-        isCollapsed={isDockCollapsed}
-        onToggleCollapse={() => setIsDockCollapsed((prev) => !prev)}
-      />
+      {/* Floating Tactical Layer Dock (Hidden during Cockpit Mode) */}
+      {!cockpitAircraft && (
+        <LayerDock
+          layers={layers}
+          liveContext={liveContext}
+          contextError={liveContextError}
+          onToggleLayer={handleToggleLayer}
+          isCollapsed={isDockCollapsed}
+          onToggleCollapse={() => setIsDockCollapsed((prev) => !prev)}
+        />
+      )}
 
-      <AssistantPanel
-        isOpen={isAssistantOpen}
-        context={{
-          ...(selectedItem?.data?.entity_id ? { selected_entity_id: String(selectedItem.data.entity_id) } : {}),
-          ...(viewportBbox ? { map_bounds: viewportBbox } : {}),
-        }}
-        onClose={() => setIsAssistantOpen(false)}
-        onAction={handleAssistantAction}
-        onSearchStatusChange={setSearchHUD}
-        onOpenNavigation={(dest) => {
-          if (dest) setNavigationDestination(dest);
-          setIsNavigationOpen(true);
-          setIsAssistantOpen(false);
-          setIsPlacesDeckOpen(false);
-        }}
-      />
+      {!cockpitAircraft && (
+        <AssistantPanel
+          isOpen={isAssistantOpen}
+          context={{
+            ...(selectedItem?.data?.entity_id ? { selected_entity_id: String(selectedItem.data.entity_id) } : {}),
+            ...(viewportBbox ? { map_bounds: viewportBbox } : {}),
+          }}
+          onClose={() => setIsAssistantOpen(false)}
+          onAction={handleAssistantAction}
+          onSearchStatusChange={setSearchHUD}
+          onOpenNavigation={(dest) => {
+            if (dest) setNavigationDestination(dest);
+            setIsNavigationOpen(true);
+            setIsAssistantOpen(false);
+            setIsPlacesDeckOpen(false);
+          }}
+        />
+      )}
 
       {/* 13 by 4 Frosted Glassroom Brick Search HUD */}
-      <SearchHUD
-        active={searchHUD.active}
-        platform={searchHUD.platform}
-        query={searchHUD.query}
-        onDismiss={() => setSearchHUD((prev) => ({ ...prev, active: false }))}
-      />
+      {!cockpitAircraft && (
+        <SearchHUD
+          active={searchHUD.active}
+          platform={searchHUD.platform}
+          query={searchHUD.query}
+          onDismiss={() => setSearchHUD((prev) => ({ ...prev, active: false }))}
+        />
+      )}
 
       {/* Multimodal Places & Stays Discovery Deck (Google Places, Aerial View, YouTube) */}
-      <PlaceDiscoveryDeck
-        currentCoordinates={
-          targetLocation?.center ||
-          (viewportBbox
-            ? [(viewportBbox.min_lon + viewportBbox.max_lon) / 2, (viewportBbox.min_lat + viewportBbox.max_lat) / 2]
-            : [139.6917, 35.6895])
-        }
-        isOpen={isPlacesDeckOpen}
-        onToggle={handleTogglePlacesDeck}
-        onPlacesLoaded={(places) => {
-          setDiscoveredPlaces(places);
-        }}
-        onFlyToPlace={(lon, lat) => {
-          setTargetLocation({ center: [lon, lat], zoom: 17 });
-        }}
-        onSelectPlace={(place) => {
-          setSelectedPlace(place);
-          setSelectedItem({ type: 'place', data: place });
-          setTargetLocation({ center: [place.longitude, place.latitude], zoom: 17 });
-        }}
-        onAddToRoute={(place) => {
-          if (place) setNavigationDestination(place.name);
-          setIsNavigationOpen(true);
-          setIsPlacesDeckOpen(false);
-          setIsAssistantOpen(false);
-        }}
-        selectedPlace={selectedPlace}
-      />
-
-      {/* Entity & Event Details Dossier Drawer */}
-      <EntityDetailsPanel
-        selectedItem={selectedItem}
-        track={selectedTrack}
-        onClose={() => {
-          setSelectedItem(null);
-          setSelectedTrack(null);
-        }}
-        onEnterCockpit={(aircraft) => {
-          setCockpitAircraft(aircraft);
-          setSelectedItem(null);
-        }}
-        onFlyTo={(coords, zoom) => {
-          if (selectedItem?.type === 'satellite') {
-            setSelectedItem({ ...selectedItem });
-          } else {
-            setTargetLocation({ center: coords, zoom: zoom || 14 });
+      {!cockpitAircraft && (
+        <PlaceDiscoveryDeck
+          currentCoordinates={
+            targetLocation?.center ||
+            (viewportBbox
+              ? [(viewportBbox.min_lon + viewportBbox.max_lon) / 2, (viewportBbox.min_lat + viewportBbox.max_lat) / 2]
+              : [139.6917, 35.6895])
           }
-        }}
-      />
+          isOpen={isPlacesDeckOpen}
+          onToggle={handleTogglePlacesDeck}
+          onPlacesLoaded={(places) => {
+            setDiscoveredPlaces(places);
+          }}
+          onFlyToPlace={(lon, lat) => {
+            setTargetLocation({ center: [lon, lat], zoom: 17 });
+          }}
+          onSelectPlace={(place) => {
+            setSelectedPlace(place);
+            setSelectedItem({ type: 'place', data: place });
+            setTargetLocation({ center: [place.longitude, place.latitude], zoom: 17 });
+          }}
+          onAddToRoute={(place) => {
+            if (place) setNavigationDestination(place.name);
+            setIsNavigationOpen(true);
+            setIsPlacesDeckOpen(false);
+            setIsAssistantOpen(false);
+          }}
+          selectedPlace={selectedPlace}
+        />
+      )}
+
+      {/* Entity & Event Details Dossier Drawer (Hidden during Cockpit Mode) */}
+      {!cockpitAircraft && (
+        <EntityDetailsPanel
+          selectedItem={selectedItem}
+          track={selectedTrack}
+          onClose={() => {
+            setSelectedItem(null);
+            setSelectedTrack(null);
+          }}
+          onEnterCockpit={(aircraft) => {
+            setCockpitAircraft(aircraft);
+            setSelectedItem(null);
+            setSelectedTrack(null);
+          }}
+          onFlyTo={(coords, zoom) => {
+            if (selectedItem?.type === 'satellite') {
+              setSelectedItem({ ...selectedItem });
+            } else {
+              setTargetLocation({ center: coords, zoom: zoom || 14 });
+            }
+          }}
+        />
+      )}
 
       {/* Keyboard-Accessible Command Palette (cmdk) */}
       <CommandPalette
@@ -889,6 +904,7 @@ export default function App() {
       {cockpitAircraft && (
         <CockpitHUD
           aircraft={cockpitAircraft}
+          allAircraft={aircraft}
           onExitCockpit={handleExitCockpit}
         />
       )}

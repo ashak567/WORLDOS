@@ -2,6 +2,7 @@ import React, { useEffect, useRef } from 'react';
 import {
   Cartesian2,
   Cartesian3,
+  Billboard,
   BillboardCollection,
   BoundingSphere,
   Cesium3DTileset,
@@ -309,6 +310,15 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = false;
         if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = false;
 
+        // Hide distant aircraft billboards so no giant planes block the pilot windshield
+        if (aircraftBillboardsRef.current) aircraftBillboardsRef.current.show = false;
+
+        // Hide ground pin entities (seaports, places, fires, cameras) from floating in the sky
+        viewer.entities.show = false;
+
+        // Hide NASA night lights in cockpit view so land & terrain are 100% visible
+        if (nightImageryLayerRef.current) nightImageryLayerRef.current.show = false;
+
         // Maximize ground detail resolution and aerial texture sharpness directly below aircraft
         viewer.scene.globe.maximumScreenSpaceError = 1.0;
 
@@ -331,11 +341,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
       }
     } else {
-      // Re-enable camera controls and restore satellite visibility when exiting cockpit view
+      // Re-enable camera controls and restore visibility when exiting cockpit view
       if (!viewer.isDestroyed()) {
         viewer.scene.globe.maximumScreenSpaceError = 2.0;
         if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = true;
         if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = true;
+        if (aircraftBillboardsRef.current) aircraftBillboardsRef.current.show = true;
+        viewer.entities.show = true;
         viewer.scene.screenSpaceCameraController.enableRotate = true;
         viewer.scene.screenSpaceCameraController.enableTranslate = true;
         viewer.scene.screenSpaceCameraController.enableZoom = true;
@@ -384,15 +396,53 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     maxAge: number;
     trail: Array<{ lon: number; lat: number }>;
   }>>([]);
-  const cloudCollectionRef = useRef<CloudCollection | null>(null);
+  const nightImageryLayerRef = useRef<ImageryLayer | null>(null);
+  const cloudBillboardsRef = useRef<BillboardCollection | null>(null);
   const cloudImageryLayerRef = useRef<ImageryLayer | null>(null);
   const cloudsListRef = useRef<Array<{
-    primitive: any;
+    billboard: Billboard;
     lon: number;
     lat: number;
     altMeters: number;
+    isLocal?: boolean;
   }>>([]);
   const streamCancelRef = useRef<(() => void) | null>(null);
+
+  // High-performance procedural volumetric cloud texture (100% watermark-free, beautiful billowing cumulus lobes)
+  const getCloudTexture = (): string => {
+    if (typeof document === 'undefined') return '';
+    const canvas = document.createElement('canvas');
+    canvas.width = 512;
+    canvas.height = 256;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return '';
+    ctx.clearRect(0, 0, 512, 256);
+
+    const lobes = [
+      { x: 160, y: 140, r: 90, a: 0.92 },
+      { x: 256, y: 110, r: 115, a: 0.96 },
+      { x: 350, y: 135, r: 95, a: 0.92 },
+      { x: 105, y: 165, r: 75, a: 0.82 },
+      { x: 405, y: 160, r: 80, a: 0.85 },
+      { x: 210, y: 165, r: 85, a: 0.94 },
+      { x: 300, y: 160, r: 88, a: 0.94 },
+      { x: 256, y: 160, r: 90, a: 0.96 },
+    ];
+
+    for (const lobe of lobes) {
+      const grad = ctx.createRadialGradient(lobe.x, lobe.y, lobe.r * 0.15, lobe.x, lobe.y, lobe.r);
+      grad.addColorStop(0.0, `rgba(255, 255, 255, ${lobe.a})`);
+      grad.addColorStop(0.55, `rgba(244, 248, 255, ${lobe.a * 0.78})`);
+      grad.addColorStop(0.85, `rgba(220, 235, 255, ${lobe.a * 0.35})`);
+      grad.addColorStop(1.0, 'rgba(255, 255, 255, 0.0)');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(lobe.x, lobe.y, lobe.r, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    return canvas.toDataURL('image/png');
+  };
 
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
     const requestId = ++imageryRequestRef.current;
@@ -460,6 +510,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         nightLayer.dayAlpha = 0.0; // Completely hidden during daylight!
         nightLayer.nightAlpha = 1.0; // Authentic golden city lights and highway grids on night hemisphere!
         nightLayer.brightness = 2.0;
+        nightImageryLayerRef.current = nightLayer;
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
         viewer.scene.requestRender();
@@ -771,6 +822,27 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         } catch {}
       }
 
+      // NASA Earth at Night: STRICTLY visible only in outer space (> 1,800,000 meters / 1,800 km)!
+      // When zoomed into countries, cities, or cockpit mode, keep map 100% crystal clear with full roads, labels, and terrain.
+      if (nightImageryLayerRef.current) {
+        if (cockpitAircraftRef.current) {
+          nightImageryLayerRef.current.show = false;
+        } else {
+          try {
+            const camHeight = viewer.camera.positionCartographic.height;
+            if (camHeight < 1_800_000) {
+              nightImageryLayerRef.current.show = false;
+            } else {
+              nightImageryLayerRef.current.show = true;
+              const t = Math.max(0.0, Math.min(1.0, (camHeight - 1_800_000) / 1_700_000));
+              nightImageryLayerRef.current.nightAlpha = t * 0.95;
+            }
+          } catch {
+            nightImageryLayerRef.current.show = false;
+          }
+        }
+      }
+
       // 4. Atmospheric Real-Time Wind Streamlines (Shooting Star Meteor Tails with Luminous White Highlights)
       const windList = windParticlesRef.current;
       for (let i = 0; i < windList.length; i++) {
@@ -828,14 +900,33 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
       // 5. Active Live Atmospheric Clouds: majestic planetary drift along prevailing wind currents
       const cloudList = cloudsListRef.current;
+      const ac = cockpitAircraftRef.current;
       for (let i = 0; i < cloudList.length; i++) {
         const c = cloudList[i];
         const vec = getAtmosphericWindVector(c.lat, c.lon);
         const rad = (vec.headingDeg * Math.PI) / 180.0;
-        c.lon += Math.sin(rad) * vec.speed * dt * 4.5;
-        c.lat += Math.cos(rad) * vec.speed * dt * 4.5;
+        c.lon += Math.sin(rad) * vec.speed * dt * 6.5;
+        c.lat += Math.cos(rad) * vec.speed * dt * 6.5;
         c.lon = ((c.lon + 540.0) % 360.0) - 180.0;
-        c.primitive.position = Cartesian3.fromDegrees(c.lon, c.lat, c.altMeters);
+
+        // In Cockpit View: keep local clouds streaming around and alongside the aircraft
+        if (ac && c.isLocal && typeof ac.longitude === 'number' && typeof ac.latitude === 'number') {
+          const dLon = c.lon - ac.longitude;
+          const dLat = c.lat - ac.latitude;
+          const distDeg = Math.sqrt(dLon * dLon + dLat * dLat);
+          // If cloud drifted behind aircraft by more than 0.40 deg (~40 km), recycle ahead of the plane
+          if (distDeg > 0.40) {
+            const trackRad = ((ac.attributes?.true_track || 0) * Math.PI) / 180.0;
+            const forwardDistDeg = 0.15 + Math.random() * 0.25;
+            const lateralOffsetDeg = (Math.random() - 0.5) * 0.22;
+            c.lon = ac.longitude + Math.sin(trackRad) * forwardDistDeg - Math.cos(trackRad) * lateralOffsetDeg;
+            c.lat = ac.latitude + Math.cos(trackRad) * forwardDistDeg + Math.sin(trackRad) * lateralOffsetDeg;
+            const rawAlt = ac.attributes?.geo_altitude || ac.attributes?.baro_altitude || 10500;
+            c.altMeters = Math.max(1500, rawAlt + (Math.random() - 0.5) * 4000);
+          }
+        }
+
+        c.billboard.position = Cartesian3.fromDegrees(c.lon, c.lat, c.altMeters);
       }
     };
 
@@ -884,11 +975,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         } catch {}
         cloudImageryLayerRef.current = null;
       }
-      if (cloudCollectionRef.current && !viewer.isDestroyed()) {
+      if (cloudBillboardsRef.current && !viewer.isDestroyed()) {
         try {
-          viewer.scene.primitives.remove(cloudCollectionRef.current);
+          viewer.scene.primitives.remove(cloudBillboardsRef.current);
         } catch {}
-        cloudCollectionRef.current = null;
+        cloudBillboardsRef.current = null;
       }
       if (windPolylinesRef.current && !viewer.isDestroyed()) {
         try {
@@ -1097,43 +1188,62 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       viewer.imageryLayers.remove(cloudImageryLayerRef.current);
       cloudImageryLayerRef.current = null;
     }
-    if (cloudsEnabled) {
-      // Active 3D Volumetric Drifting Cumulus Clouds
-      const cloudCollection = cloudCollectionRef.current ?? viewer.scene.primitives.add(new CloudCollection());
-      cloudCollectionRef.current = cloudCollection;
-      if (cloudsListRef.current.length === 0) {
-        const cloudList = [];
-        const cloudCount = 85;
-        for (let i = 0; i < cloudCount; i++) {
-          const lon = (Math.random() - 0.5) * 360;
-          const latBand = Math.random();
-          const lat = latBand < 0.45
-            ? (Math.random() - 0.5) * 32 // Tropical / ITCZ storm belt
-            : latBand < 0.75
-            ? 35 + Math.random() * 25 // Mid-latitude Northern cyclone track
-            : -55 + Math.random() * 25; // Southern ocean storm track
-          const altMeters = 3500 + Math.random() * 4500;
-          const cloudPrim = cloudCollection.add({
-            position: Cartesian3.fromDegrees(lon, lat, altMeters),
-            scale: new Cartesian2(85000 + Math.random() * 75000, 38000 + Math.random() * 32000),
-            maximumSize: new Cartesian3(28000, 16000, 8000),
-            slice: 0.35,
-            color: Color.WHITE.withAlpha(0.68),
-          });
-          cloudList.push({
-            primitive: cloudPrim,
-            lon,
-            lat,
-            altMeters,
-          });
-        }
-        cloudsListRef.current = cloudList;
+
+    const cloudBillboards = cloudBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
+    cloudBillboardsRef.current = cloudBillboards;
+
+    if (!cloudsEnabled) {
+      cloudBillboards.removeAll();
+      cloudsListRef.current = [];
+    } else if (cloudsListRef.current.length === 0) {
+      const cloudTexture = getCloudTexture();
+      const cloudList: typeof cloudsListRef.current = [];
+
+      // A. Global Planetary Weather Formations (visible from space & orbital overview)
+      const planetaryCloudCount = 240;
+      for (let i = 0; i < planetaryCloudCount; i++) {
+        const lon = (Math.random() - 0.5) * 360;
+        const latBand = Math.random();
+        const lat = latBand < 0.45
+          ? (Math.random() - 0.5) * 26 // Tropical / ITCZ storm belt
+          : latBand < 0.75
+          ? 32 + Math.random() * 28 // Northern mid-latitude cyclone tracks
+          : -52 + Math.random() * 26; // Southern ocean storm tracks
+        const altMeters = 4000 + Math.random() * 6000;
+
+        const b = cloudBillboards.add({
+          position: Cartesian3.fromDegrees(lon, lat, altMeters),
+          image: cloudTexture,
+          width: 280000 + Math.random() * 200000,
+          height: 140000 + Math.random() * 100000,
+          sizeInMeters: true,
+          color: Color.WHITE.withAlpha(0.75 + Math.random() * 0.18),
+        });
+        cloudList.push({ billboard: b, lon, lat, altMeters, isLocal: false });
       }
-    } else {
-      if (cloudCollectionRef.current) {
-        cloudCollectionRef.current.removeAll();
-        cloudsListRef.current = [];
+
+      // B. Local Atmospheric Clouds for Close-Up & Cockpit View
+      const localCloudCount = 50;
+      const refLon = cockpitAircraft?.longitude ?? 20.0;
+      const refLat = cockpitAircraft?.latitude ?? 20.0;
+      const rawAlt = cockpitAircraft?.attributes?.geo_altitude || cockpitAircraft?.attributes?.baro_altitude || 10500;
+      for (let i = 0; i < localCloudCount; i++) {
+        const cLon = refLon + (Math.random() - 0.5) * 0.6;
+        const cLat = refLat + (Math.random() - 0.5) * 0.6;
+        const cAlt = Math.max(1500, rawAlt + (Math.random() - 0.5) * 4500);
+
+        const b = cloudBillboards.add({
+          position: Cartesian3.fromDegrees(cLon, cLat, cAlt),
+          image: cloudTexture,
+          width: 8000 + Math.random() * 14000,
+          height: 4000 + Math.random() * 7000,
+          sizeInMeters: true,
+          color: Color.WHITE.withAlpha(0.70 + Math.random() * 0.25),
+        });
+        cloudList.push({ billboard: b, lon: cLon, lat: cLat, altMeters: cAlt, isLocal: true });
       }
+
+      cloudsListRef.current = cloudList;
     }
 
     // 2. Global Wind Flow (Shooting Star Meteor Streamlines with Luminous Tapered Tails)

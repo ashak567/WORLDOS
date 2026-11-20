@@ -1,13 +1,35 @@
-import React, { useEffect, useState } from 'react';
+import React, { useState, useMemo } from 'react';
 import { AircraftState } from '../api';
-import { EyeOff, Compass, Gauge, ArrowUpRight, Plane } from 'lucide-react';
+import { EyeOff, Gauge, ArrowUpRight, Plane, Radio, AlertTriangle, ShieldCheck } from 'lucide-react';
 
 interface CockpitHUDProps {
   aircraft: AircraftState;
+  allAircraft?: AircraftState[];
   onExitCockpit: () => void;
 }
 
-export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit }) => {
+function getDistanceKm(lat1: number, lon1: number, lat2: number, lon2: number): number {
+  const R = 6371;
+  const dLat = ((lat2 - lat1) * Math.PI) / 180.0;
+  const dLon = ((lon2 - lon1) * Math.PI) / 180.0;
+  const a =
+    Math.sin(dLat / 2) * Math.sin(dLat / 2) +
+    Math.cos((lat1 * Math.PI) / 180.0) * Math.cos((lat2 * Math.PI) / 180.0) * Math.sin(dLon / 2) * Math.sin(dLon / 2);
+  const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+  return R * c;
+}
+
+function getRelativeBearing(lat1: number, lon1: number, lat2: number, lon2: number, currentHeading: number): number {
+  const y = Math.sin(((lon2 - lon1) * Math.PI) / 180.0) * Math.cos((lat2 * Math.PI) / 180.0);
+  const x =
+    Math.cos((lat1 * Math.PI) / 180.0) * Math.sin((lat2 * Math.PI) / 180.0) -
+    Math.sin((lat1 * Math.PI) / 180.0) * Math.cos((lat2 * Math.PI) / 180.0) * Math.cos(((lon2 - lon1) * Math.PI) / 180.0);
+  const brng = ((Math.atan2(y, x) * 180.0) / Math.PI + 360.0) % 360.0;
+  return (brng - currentHeading + 360.0) % 360.0;
+}
+
+export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, allAircraft = [], onExitCockpit }) => {
+  const [radarRangeKm, setRadarRangeKm] = useState<number>(5); // default tactical proximity range: 5 km (or 1.5 km / 15 km)
   const attr = aircraft?.attributes || {};
   const callsign = String(attr.callsign || aircraft?.canonical_name || aircraft?.id || 'N/A').trim().toUpperCase();
   const origin = String(attr.origin_country || 'International Airspace');
@@ -59,6 +81,57 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit 
     return { deg, offset, label };
   });
 
+  // Calculate nearby air traffic for Cockpit TCAS Collision Avoidance Radar
+  const myLon = aircraft?.longitude;
+  const myLat = aircraft?.latitude;
+
+  const nearbyTargets = useMemo(() => {
+    if (typeof myLon !== 'number' || typeof myLat !== 'number' || !allAircraft.length) return [];
+    const list: Array<{
+      id: string;
+      callsign: string;
+      distKm: number;
+      relBearing: number;
+      altDiffFt: number;
+      isDanger: boolean;
+      isWarning: boolean;
+      heading: number;
+    }> = [];
+
+    for (let i = 0; i < allAircraft.length; i++) {
+      const other = allAircraft[i];
+      if (other.id === aircraft.id || other.canonical_name === aircraft.canonical_name) continue;
+      if (typeof other.longitude !== 'number' || typeof other.latitude !== 'number') continue;
+
+      const dist = getDistanceKm(myLat, myLon, other.latitude, other.longitude);
+      if (dist <= radarRangeKm) {
+        const relBearing = getRelativeBearing(myLat, myLon, other.latitude, other.longitude, heading);
+        const otherAlt = other.attributes?.geo_altitude || other.attributes?.baro_altitude || 10000;
+        const altDiffFt = Math.round((otherAlt - altMeters) * 3.28084);
+        const otherCallsign = (other.attributes?.callsign || other.canonical_name || other.id || 'AC').trim().toUpperCase();
+        const otherHeading = other.attributes?.true_track || 0;
+        const isDanger = dist <= 1.5 && Math.abs(altDiffFt) <= 1500;
+        const isWarning = dist <= 3.5 && Math.abs(altDiffFt) <= 2500;
+
+        list.push({
+          id: other.id || `target-${i}`,
+          callsign: otherCallsign,
+          distKm: Math.round(dist * 10) / 10,
+          relBearing,
+          altDiffFt,
+          isDanger,
+          isWarning,
+          heading: otherHeading,
+        });
+      }
+    }
+    return list.sort((a, b) => a.distKm - b.distKm);
+  }, [allAircraft, aircraft, radarRangeKm, heading, altMeters, myLon, myLat]);
+
+  const closestTarget = nearbyTargets[0];
+  const hasDangerAlert = nearbyTargets.some((t) => t.isDanger);
+  const hasWarningAlert = nearbyTargets.some((t) => t.isWarning);
+
   return (
     <div className="cockpit-hud-overlay" aria-label="First-Person Aircraft Cockpit Heads-Up Display">
       {/* Windshield Subtle Vignette Frame */}
@@ -82,7 +155,6 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit 
 
       {/* Center Flight Director / Artificial Horizon Pitch Ladder */}
       <div className="cockpit-artificial-horizon">
-        {/* Pitch Ladders */}
         <div className="pitch-ladder ladder-pos-10">
           <div className="ladder-line left" />
           <span className="ladder-deg">10</span>
@@ -169,6 +241,20 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit 
           <span className="route-leg">{dest}</span>
         </div>
 
+        {/* TCAS Hazard Alert Banner */}
+        {hasDangerAlert && (
+          <div className="tcas-alert-pill danger pulse-danger">
+            <AlertTriangle size={14} />
+            <span>TRAFFIC ALERT: COLLISION HAZARD &lt; 1.5 KM!</span>
+          </div>
+        )}
+        {!hasDangerAlert && hasWarningAlert && (
+          <div className="tcas-alert-pill warning">
+            <AlertTriangle size={14} />
+            <span>TCAS ADVISORY: TRAFFIC NEARBY</span>
+          </div>
+        )}
+
         <button
           className="cockpit-exit-btn"
           onClick={onExitCockpit}
@@ -177,6 +263,107 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit 
           <EyeOff size={14} />
           <span>EXIT COCKPIT [ESC]</span>
         </button>
+      </div>
+
+      {/* Cockpit Tactical TCAS Air Traffic & Proximity Radar */}
+      <div className={`cockpit-tcas-radar ${hasDangerAlert ? 'danger-border' : ''}`}>
+        <div className="tcas-radar-header">
+          <div className="tcas-title-group">
+            <Radio size={13} className={hasDangerAlert ? 'pulse-icon red' : 'cyan'} />
+            <span className="tcas-title">TCAS RADAR</span>
+          </div>
+          <div className="tcas-range-controls">
+            <button
+              className={`tcas-range-btn ${radarRangeKm === 1.5 ? 'active' : ''}`}
+              onClick={() => setRadarRangeKm(1.5)}
+              title="Close 1.5 KM Collision Proximity Radar"
+            >
+              1.5 KM
+            </button>
+            <button
+              className={`tcas-range-btn ${radarRangeKm === 5 ? 'active' : ''}`}
+              onClick={() => setRadarRangeKm(5)}
+              title="Medium 5 KM Terminal Radar"
+            >
+              5 KM
+            </button>
+            <button
+              className={`tcas-range-btn ${radarRangeKm === 15 ? 'active' : ''}`}
+              onClick={() => setRadarRangeKm(15)}
+              title="Wide 15 KM En-Route Radar"
+            >
+              15 KM
+            </button>
+          </div>
+        </div>
+
+        <div className="tcas-radar-scope">
+          {/* Concentric Range Rings */}
+          <div className="tcas-ring ring-outer">
+            <span className="ring-label">{radarRangeKm}km</span>
+          </div>
+          <div className="tcas-ring ring-mid">
+            <span className="ring-label">{(radarRangeKm * 0.66).toFixed(1)}km</span>
+          </div>
+          <div className="tcas-ring ring-inner">
+            <span className="ring-label">{(radarRangeKm * 0.33).toFixed(1)}km</span>
+          </div>
+
+          {/* Crosshairs */}
+          <div className="tcas-crosshair horiz" />
+          <div className="tcas-crosshair vert" />
+
+          {/* Rotating Phosphor Radar Sweep Line */}
+          <div className="tcas-sweep-line" />
+
+          {/* Own Aircraft Center Chevron Symbol */}
+          <div className="tcas-own-aircraft">
+            <div className="tcas-own-nose" />
+          </div>
+
+          {/* Plotted Nearby Aircraft Targets */}
+          {nearbyTargets.map((target) => {
+            const rad = ((target.relBearing - 90) * Math.PI) / 180.0;
+            const rFraction = Math.min(0.96, target.distKm / radarRangeKm);
+            const xPct = 50 + Math.cos(rad) * rFraction * 45;
+            const yPct = 50 + Math.sin(rad) * rFraction * 45;
+            const targetRelHeading = (target.heading - heading + 360) % 360;
+
+            return (
+              <div
+                key={target.id}
+                className={`tcas-target-blip ${target.isDanger ? 'danger' : target.isWarning ? 'warning' : 'normal'}`}
+                style={{ left: `${xPct}%`, top: `${yPct}%` }}
+                title={`${target.callsign}: ${target.distKm} km, ${target.altDiffFt >= 0 ? '+' : ''}${target.altDiffFt} ft`}
+              >
+                <div
+                  className="tcas-blip-chevron"
+                  style={{ transform: `rotate(${targetRelHeading}deg)` }}
+                />
+                <div className="tcas-blip-tag">
+                  <span className="blip-callsign">{target.callsign}</span>
+                  <span className="blip-dist">{target.distKm}km</span>
+                  <span className="blip-alt">{target.altDiffFt >= 0 ? `+${Math.round(target.altDiffFt / 100)}` : Math.round(target.altDiffFt / 100)}</span>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+        <div className="tcas-radar-footer">
+          {closestTarget ? (
+            <span className={`tcas-status-text ${closestTarget.isDanger ? 'red' : closestTarget.isWarning ? 'amber' : 'green'}`}>
+              {closestTarget.isDanger
+                ? `COLLISION ALERT: ${closestTarget.callsign} AT ${closestTarget.distKm} KM`
+                : `${nearbyTargets.length} TRAFFIC IN RANGE (CLOSEST: ${closestTarget.distKm} KM)`}
+            </span>
+          ) : (
+            <span className="tcas-status-text green">
+              <ShieldCheck size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />
+              AIRSPACE CLEAR · NO TRAFFIC WITHIN {radarRangeKm} KM
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Bottom Avionics Status Bar */}
