@@ -11,8 +11,23 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit 
   const attr = aircraft?.attributes || {};
   const callsign = String(attr.callsign || aircraft?.canonical_name || aircraft?.id || 'N/A').trim().toUpperCase();
   const origin = String(attr.origin_country || 'International Airspace');
-  const dep = String(attr.departure_airport || (attr as any).origin || 'ORIGIN');
-  const dest = String(attr.destination_airport || (attr as any).destination || 'DEST');
+
+  const formatAirport = (val: any, fallback: string): string => {
+    if (!val) return fallback;
+    if (typeof val === 'string') {
+      const trimmed = val.trim();
+      return trimmed === '[object Object]' || !trimmed ? fallback : trimmed.toUpperCase();
+    }
+    if (typeof val === 'object') {
+      const code = val.iata || val.icao || val.code || val.name || val.city;
+      if (code && typeof code === 'string') return code.trim().toUpperCase();
+      return fallback;
+    }
+    return String(val).trim().toUpperCase() || fallback;
+  };
+
+  const dep = formatAirport(attr.departure_airport || (attr as any).origin, 'DEP');
+  const dest = formatAirport(attr.destination_airport || (attr as any).destination, 'ARR');
 
   // Live flight telemetries
   const rawAlt = attr.geo_altitude || attr.baro_altitude || 10500;

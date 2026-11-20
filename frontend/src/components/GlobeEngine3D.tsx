@@ -305,6 +305,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const alt = Math.max(200, Math.min(18000, Number.isFinite(rawAlt) ? rawAlt : 10500));
         const track = Number.isFinite(kine?.trackDeg) ? kine!.trackDeg : (ac.attributes?.true_track || 0);
 
+        // Hide satellites when inside atmosphere and flying cockpit POV (satellites belong in space!)
+        if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = false;
+        if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = false;
+
+        // Maximize ground detail resolution and aerial texture sharpness directly below aircraft
+        viewer.scene.globe.maximumScreenSpaceError = 1.0;
+
         // Temporarily lock camera controller to prevent mouse inputs from desyncing cockpit view
         viewer.scene.screenSpaceCameraController.enableRotate = false;
         viewer.scene.screenSpaceCameraController.enableTranslate = false;
@@ -312,24 +319,29 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         viewer.scene.screenSpaceCameraController.enableTilt = false;
         viewer.scene.screenSpaceCameraController.enableLook = false;
 
-        // Smooth transition into cockpit pilot perspective
+        // Smooth transition into cockpit pilot perspective with panoramic ground view
         viewer.camera.flyTo({
           destination: Cartesian3.fromDegrees(lon, lat, alt + 3.0),
           orientation: {
             heading: CesiumMath.toRadians(track),
-            pitch: CesiumMath.toRadians(-3.5),
+            pitch: CesiumMath.toRadians(-6.5),
             roll: 0.0,
           },
           duration: 1.2,
         });
       }
     } else {
-      // Re-enable camera controls when exiting cockpit view
-      viewer.scene.screenSpaceCameraController.enableRotate = true;
-      viewer.scene.screenSpaceCameraController.enableTranslate = true;
-      viewer.scene.screenSpaceCameraController.enableZoom = true;
-      viewer.scene.screenSpaceCameraController.enableTilt = true;
-      viewer.scene.screenSpaceCameraController.enableLook = true;
+      // Re-enable camera controls and restore satellite visibility when exiting cockpit view
+      if (!viewer.isDestroyed()) {
+        viewer.scene.globe.maximumScreenSpaceError = 2.0;
+        if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = true;
+        if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = true;
+        viewer.scene.screenSpaceCameraController.enableRotate = true;
+        viewer.scene.screenSpaceCameraController.enableTranslate = true;
+        viewer.scene.screenSpaceCameraController.enableZoom = true;
+        viewer.scene.screenSpaceCameraController.enableTilt = true;
+        viewer.scene.screenSpaceCameraController.enableLook = true;
+      }
     }
   }, [cockpitAircraft]);
   const onRainfallUpdateRef = useRef(onRainfallUpdate);
@@ -437,6 +449,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           maximumLevel: 20,
         });
         viewer.imageryLayers.addImageryProvider(refOverlay);
+
+        // NASA Earth at Night: VIIRS Black Marble City Lights (Auto-blends onto night side of Earth)
+        const nightLights = new UrlTemplateImageryProvider({
+          url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
+          maximumLevel: 8,
+          credit: 'NASA Earth at Night / VIIRS Black Marble City Lights',
+        });
+        const nightLayer = viewer.imageryLayers.addImageryProvider(nightLights);
+        nightLayer.dayAlpha = 0.0; // Completely hidden during daylight!
+        nightLayer.nightAlpha = 1.0; // Authentic golden city lights and highway grids on night hemisphere!
+        nightLayer.brightness = 2.0;
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
         viewer.scene.requestRender();
@@ -703,13 +726,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
             const alt = Math.max(200, Math.min(18000, Number.isFinite(rawAlt) ? rawAlt : 10500));
             const track = Number.isFinite(kine?.trackDeg) ? kine!.trackDeg : (ac.attributes?.true_track || 0);
 
-            // Position camera inside the aircraft cockpit looking forward over the horizon
+            // Position camera inside the aircraft cockpit looking forward over the terrain and landscape
             const eyePos = Cartesian3.fromDegrees(lon, lat, alt + 3.0);
             viewer.camera.setView({
               destination: eyePos,
               orientation: {
                 heading: CesiumMath.toRadians(track),
-                pitch: CesiumMath.toRadians(-3.5),
+                pitch: CesiumMath.toRadians(-6.5),
                 roll: 0.0,
               },
             });
@@ -760,15 +783,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           const vec = getAtmosphericWindVector(p.lat, p.lon);
           p.headingDeg = vec.headingDeg;
           p.speed = vec.speed;
-          const rad = (p.headingDeg * Math.PI) / 180.0;
-          const tailStep = 0.55;
-          p.trail = [
-            { lon: p.lon, lat: p.lat },
-            { lon: p.lon - Math.sin(rad) * tailStep * 1.0, lat: p.lat - Math.cos(rad) * tailStep * 1.0 },
-            { lon: p.lon - Math.sin(rad) * tailStep * 2.1, lat: p.lat - Math.cos(rad) * tailStep * 2.1 },
-            { lon: p.lon - Math.sin(rad) * tailStep * 3.3, lat: p.lat - Math.cos(rad) * tailStep * 3.3 },
-            { lon: p.lon - Math.sin(rad) * tailStep * 4.6, lat: p.lat - Math.cos(rad) * tailStep * 4.6 },
-          ];
         } else {
           // Continuously track curved streamline vector along atmospheric currents
           const vec = getAtmosphericWindVector(p.lat, p.lon);
@@ -778,26 +792,38 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           p.lon += Math.sin(rad) * p.speed * dt * 26.0;
           p.lat += Math.cos(rad) * p.speed * dt * 26.0;
           p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
-
-          // Propagate curved snake trail history behind the meteor head
-          for (let k = p.trail.length - 1; k > 0; k--) {
-            const prev = p.trail[k - 1];
-            const curr = p.trail[k];
-            curr.lon += (prev.lon - curr.lon) * Math.min(1.0, dt * 14.0);
-            curr.lat += (prev.lat - curr.lat) * Math.min(1.0, dt * 14.0);
-          }
-          p.trail[0].lon = p.lon;
-          p.trail[0].lat = p.lat;
         }
 
-        const cartTrail = p.trail.map((t) => Cartesian3.fromDegrees(t.lon, t.lat, p.altMeters));
-        p.line.positions = cartTrail;
-        p.head.position = cartTrail[0];
+        // Direct aerodynamic streamline vector calculation (anti-wrapping guard prevents cross-globe chords)
+        const rad = (p.headingDeg * Math.PI) / 180.0;
+        const tailDeg = Math.min(1.8, 0.4 + p.speed * 1.5);
+        const tailLon = p.lon - Math.sin(rad) * tailDeg;
+        const tailLat = p.lat - Math.cos(rad) * tailDeg;
+
+        // Anti-wrapping guard: suppress when crossing antimeridian (-180°/+180°)
+        if (Math.abs(p.lon - tailLon) > 4.0 || Math.abs(p.lat - tailLat) > 4.0) {
+          p.line.show = false;
+          p.head.show = false;
+          continue;
+        }
+
+        p.line.show = true;
+        p.head.show = true;
+
+        const midLon = (p.lon + tailLon) / 2.0;
+        const midLat = (p.lat + tailLat) / 2.0;
+
+        p.line.positions = [
+          Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters),
+          Cartesian3.fromDegrees(midLon, midLat, p.altMeters),
+          Cartesian3.fromDegrees(tailLon, tailLat, p.altMeters),
+        ];
+        p.head.position = Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters);
 
         // Smooth sinusoidal fade-in & fade-out creating aerodynamic meteor pulse
         const lifecycleRatio = p.age / p.maxAge;
         const alpha = Math.sin(lifecycleRatio * Math.PI);
-        p.head.color = Color.WHITE.withAlpha(Math.max(0.12, alpha * 0.95));
+        p.head.color = Color.WHITE.withAlpha(Math.max(0.15, alpha * 0.95));
       }
 
       // 5. Active Live Atmospheric Clouds: majestic planetary drift along prevailing wind currents
@@ -1065,26 +1091,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       radarImageryLayerRef.current = null;
     }
 
-    // 1. Live Satellite Cloud Deck & Volumetric Active Drift (SSEC / NOAA / EUMETSAT)
+    // 1. Live 3D Atmospheric Volumetric Clouds (Watermark-free, 100% crisp satellite clarity)
     const cloudsEnabled = layerMap.get('live-clouds') ?? true;
+    if (cloudImageryLayerRef.current) {
+      viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+      cloudImageryLayerRef.current = null;
+    }
     if (cloudsEnabled) {
-      if (!cloudImageryLayerRef.current) {
-        try {
-          const cloudProvider = new UrlTemplateImageryProvider({
-            url: 'https://realearth.ssec.wisc.edu/tiles/globalir/{z}/{x}/{y}.png',
-            maximumLevel: 8,
-            credit: 'SSEC RealEarth / NOAA / EUMETSAT Global Satellite Infrared Clouds',
-          });
-          const cLayer = viewer.imageryLayers.addImageryProvider(cloudProvider);
-          cLayer.alpha = 0.65;
-          cLayer.brightness = 1.25;
-          cLayer.contrast = 1.1;
-          cloudImageryLayerRef.current = cLayer;
-        } catch (err) {
-          console.warn('Could not add live cloud layer:', err);
-        }
-      }
-
       // Active 3D Volumetric Drifting Cumulus Clouds
       const cloudCollection = cloudCollectionRef.current ?? viewer.scene.primitives.add(new CloudCollection());
       cloudCollectionRef.current = cloudCollection;
@@ -1117,10 +1130,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         cloudsListRef.current = cloudList;
       }
     } else {
-      if (cloudImageryLayerRef.current) {
-        viewer.imageryLayers.remove(cloudImageryLayerRef.current);
-        cloudImageryLayerRef.current = null;
-      }
       if (cloudCollectionRef.current) {
         cloudCollectionRef.current.removeAll();
         cloudsListRef.current = [];
@@ -1148,16 +1157,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const { headingDeg, speed } = getAtmosphericWindVector(lat, lon);
         const rad = (headingDeg * Math.PI) / 180.0;
 
-        // Step backwards along wind vector to build curved shooting star tail
-        const tailStep = 0.55;
-        const trail = [
-          { lon, lat },
-          { lon: lon - Math.sin(rad) * tailStep * 1.0, lat: lat - Math.cos(rad) * tailStep * 1.0 },
-          { lon: lon - Math.sin(rad) * tailStep * 2.1, lat: lat - Math.cos(rad) * tailStep * 2.1 },
-          { lon: lon - Math.sin(rad) * tailStep * 3.3, lat: lat - Math.cos(rad) * tailStep * 3.3 },
-          { lon: lon - Math.sin(rad) * tailStep * 4.6, lat: lat - Math.cos(rad) * tailStep * 4.6 },
+        const tailDeg = Math.min(1.8, 0.4 + speed * 1.5);
+        const tailLon = lon - Math.sin(rad) * tailDeg;
+        const tailLat = lat - Math.cos(rad) * tailDeg;
+        const midLon = (lon + tailLon) / 2.0;
+        const midLat = (lat + tailLat) / 2.0;
+
+        const initialCart = [
+          Cartesian3.fromDegrees(lon, lat, altMeters),
+          Cartesian3.fromDegrees(midLon, midLat, altMeters),
+          Cartesian3.fromDegrees(tailLon, tailLat, altMeters),
         ];
-        const initialCart = trail.map((t) => Cartesian3.fromDegrees(t.lon, t.lat, altMeters));
 
         // Front glowing spark dot
         const pt = windPoints.add({
@@ -1187,7 +1197,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           headingDeg,
           age: Math.random() * 6.0,
           maxAge: 4.5 + Math.random() * 3.5,
-          trail,
+          trail: [],
         });
       }
       windParticlesRef.current = particles;
@@ -1199,84 +1209,119 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     aircraftBillboardsRef.current = aircraftBillboards;
     satelliteBillboardsRef.current = satelliteBillboards;
     cameraBillboardsRef.current = cameraBillboards;
-    aircraftBillboards.removeAll();
-    satelliteBillboards.removeAll();
+
     cameraBillboards.removeAll();
-    aircraftKinematicsRef.current = [];
-    satelliteKinematicsRef.current = [];
 
-    // GTA 6-Style Time-Sliced Streaming: 40 aircraft per animation frame
+    // Differential kinematic tracking for Aircraft: Re-use billboards and soft-blend coordinates to eliminate 15s snapping/jerkiness
+    const existingAircraftMap = new Map<string, typeof aircraftKinematicsRef.current[0]>();
+    for (const item of aircraftKinematicsRef.current) {
+      const id = item.billboard.id?._worldosData?.entity_id || item.billboard.id?._worldosData?.id || item.billboard.id?._worldosData?.canonical_name;
+      if (id) existingAircraftMap.set(id, item);
+    }
+
     if (layerMap.get('aircraft-states') && aircraft.length > 0) {
-      let acIdx = 0;
-      const acBatch = 40;
-      const streamAircraft = () => {
-        if (isCancelled || !viewer || viewer.isDestroyed()) return;
-        const end = Math.min(acIdx + acBatch, aircraft.length);
-        for (; acIdx < end; acIdx++) {
-          const a = aircraft[acIdx];
-          if (
-            typeof a.longitude !== 'number' ||
-            typeof a.latitude !== 'number' ||
-            isNaN(a.longitude) ||
-            isNaN(a.latitude)
-          ) {
-            continue;
+      const activeIds = new Set<string>();
+      const nextKinematics: typeof aircraftKinematicsRef.current = [];
+
+      for (let i = 0; i < aircraft.length; i++) {
+        const a = aircraft[i];
+        if (
+          typeof a.longitude !== 'number' ||
+          typeof a.latitude !== 'number' ||
+          isNaN(a.longitude) ||
+          isNaN(a.latitude)
+        ) {
+          continue;
+        }
+
+        const acId = a.entity_id || a.id || a.canonical_name || `ac-${i}`;
+        activeIds.add(acId);
+
+        const altMeters = Math.max(
+          150,
+          Math.min(15000, a.attributes?.geo_altitude || a.attributes?.baro_altitude || 10000)
+        );
+        const isGround = a.attributes?.on_ground ?? false;
+
+        const attr = a.attributes || {};
+        const callsign = (attr.callsign || a.canonical_name || '').trim().toUpperCase();
+        const origin = (attr.origin_country || '').trim().toLowerCase();
+        const alt = attr.baro_altitude ?? attr.geo_altitude ?? 0;
+        const vel = attr.velocity ?? 0;
+        const isInternational = (alt > 9500 && vel > 200) ||
+          /^(BAW|DLH|AFR|UAE|QTR|SIA|ANA|JAL|QFA|KLM|ETD|THY|CPA|CAL|EVA|CSN|CCA|CES|VIR|AIC|ETH|SVA)/.test(callsign) ||
+          (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
+        (a.attributes as any).is_international = isInternational;
+
+        // 3-Part Division: Military (Amber), Commercial (Sky Blue), Private / Other (Emerald Mint)
+        const classification = attr.classification || (isInternational ? 'commercial' : 'private');
+        const acImage = isGround
+          ? AIRPLANE_ICON_GROUND
+          : classification === 'military'
+          ? AIRPLANE_ICON_MILITARY
+          : classification === 'commercial'
+          ? AIRPLANE_ICON_COMMERCIAL
+          : AIRPLANE_ICON_PRIVATE;
+
+        const acVelocity = a.attributes?.velocity ?? 0;
+        const trueTrack = a.attributes?.true_track ?? 0;
+
+        const existing = existingAircraftMap.get(acId);
+        if (existing) {
+          // In-place reconciliation: update metadata and soft-blend coordinates
+          existing.billboard.id = { _worldosType: 'aircraft', _worldosData: a };
+          existing.billboard.image = acImage;
+          existing.billboard.rotation = CesiumMath.toRadians(360 - trueTrack);
+
+          const dLon = Math.abs(existing.lon - a.longitude);
+          const dLat = Math.abs(existing.lat - a.latitude);
+          if (dLon < 0.25 && dLat < 0.25) {
+            existing.lon = existing.lon * 0.82 + a.longitude * 0.18;
+            existing.lat = existing.lat * 0.82 + a.latitude * 0.18;
+          } else {
+            existing.lon = a.longitude;
+            existing.lat = a.latitude;
           }
-
-          const altMeters = Math.max(
-            150,
-            Math.min(15000, a.attributes?.geo_altitude || a.attributes?.baro_altitude || 10000)
-          );
+          existing.altMeters = altMeters;
+          existing.velocityMps = acVelocity;
+          existing.trackDeg = trueTrack;
+          existing.billboard.position = Cartesian3.fromDegrees(existing.lon, existing.lat, altMeters);
+          nextKinematics.push(existing);
+        } else {
           const position = Cartesian3.fromDegrees(a.longitude, a.latitude, altMeters);
-          const isGround = a.attributes?.on_ground ?? false;
-
-          const attr = a.attributes || {};
-          const callsign = (attr.callsign || a.canonical_name || '').trim().toUpperCase();
-          const origin = (attr.origin_country || '').trim().toLowerCase();
-          const alt = attr.baro_altitude ?? attr.geo_altitude ?? 0;
-          const vel = attr.velocity ?? 0;
-          const isInternational = (alt > 9500 && vel > 200) ||
-            /^(BAW|DLH|AFR|UAE|QTR|SIA|ANA|JAL|QFA|KLM|ETD|THY|CPA|CAL|EVA|CSN|CCA|CES|VIR|AIC|ETH|SVA)/.test(callsign) ||
-            (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
-          (a.attributes as any).is_international = isInternational;
-
-          // 3-Part Division: Military (Amber), Commercial (Sky Blue), Private / Other (Emerald Mint)
-          const classification = attr.classification || (isInternational ? 'commercial' : 'private');
-          const acImage = isGround
-            ? AIRPLANE_ICON_GROUND
-            : classification === 'military'
-            ? AIRPLANE_ICON_MILITARY
-            : classification === 'commercial'
-            ? AIRPLANE_ICON_COMMERCIAL
-            : AIRPLANE_ICON_PRIVATE;
-
           const acBillboard = aircraftBillboards.add({
             id: { _worldosType: 'aircraft', _worldosData: a },
             position,
             image: acImage,
-            rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
+            rotation: CesiumMath.toRadians(360 - trueTrack),
             width: 24,
             height: 24,
             scaleByDistance: new NearFarScalar(1.5e2, 1.2, 1.5e7, 0.45),
             distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.4e7),
           });
-          const acVelocity = a.attributes?.velocity ?? 0;
           if (!isGround && acVelocity > 10) {
-            aircraftKinematicsRef.current.push({
+            nextKinematics.push({
               billboard: acBillboard,
               lon: a.longitude,
               lat: a.latitude,
               altMeters,
               velocityMps: acVelocity,
-              trackDeg: a.attributes?.true_track ?? 0,
+              trackDeg: trueTrack,
             });
           }
         }
-        if (acIdx < aircraft.length) {
-          requestAnimationFrame(streamAircraft);
+      }
+
+      // Remove stale aircraft billboards
+      for (const [id, item] of existingAircraftMap) {
+        if (!activeIds.has(id)) {
+          aircraftBillboards.remove(item.billboard);
         }
-      };
-      streamAircraft();
+      }
+      aircraftKinematicsRef.current = nextKinematics;
+    } else {
+      aircraftBillboards.removeAll();
+      aircraftKinematicsRef.current = [];
     }
 
     // 2. Maritime Vessels: Water-clamped at altitude 0 with Heading Rotation
@@ -1391,32 +1436,61 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       } catch {}
     }
 
-    // 3. Space Satellites: GTA 6 Time-Sliced Streaming (50 per animation frame)
+    // 3. Space Satellites: Differential update with soft-blending (eliminates 15s jumping & jerkiness)
+    const existingSatMap = new Map<string, typeof satelliteKinematicsRef.current[0]>();
+    for (const item of satelliteKinematicsRef.current) {
+      const id = item.billboard.id?._worldosData?.entity_id || item.billboard.id?._worldosData?.id || item.billboard.id?._worldosData?.canonical_name;
+      if (id) existingSatMap.set(id, item);
+    }
+
     if (layerMap.get('space-satellites') && satellites.length > 0) {
-      let satIdx = 0;
-      const satBatch = 50;
-      const streamSatellites = () => {
-        if (isCancelled || !viewer || viewer.isDestroyed()) return;
-        const end = Math.min(satIdx + satBatch, satellites.length);
-        for (; satIdx < end; satIdx++) {
-          const s = satellites[satIdx];
-          const altitudeKm = s.attributes?.altitude_km;
-          if (!Number.isFinite(altitudeKm)) continue;
-          const altMeters = (altitudeKm as number) * 1000;
+      const activeSatIds = new Set<string>();
+      const nextSatKinematics: typeof satelliteKinematicsRef.current = [];
+
+      for (let i = 0; i < satellites.length; i++) {
+        const s = satellites[i];
+        const altitudeKm = s.attributes?.altitude_km;
+        if (!Number.isFinite(altitudeKm)) continue;
+        const satId = s.entity_id || s.id || s.canonical_name || `sat-${i}`;
+        activeSatIds.add(satId);
+
+        const altMeters = (altitudeKm as number) * 1000;
+        const incDeg = s.attributes?.inclination_deg || 51.6;
+        const periodMin = s.attributes?.period_min || 92.8;
+
+        // Differentiated by Orbit Tier:
+        // LEO (< 2000 km) -> Electric Cyan (#00e5ff)
+        // MEO (2000 - 30000 km, GPS/Nav) -> Amber Gold (#fbbf24)
+        // GEO (> 30000 km, Weather/Telecom) -> Emerald Green (#10b981)
+        const satImage =
+          (altitudeKm as number) < 2000
+            ? SATELLITE_ICON_LEO
+            : (altitudeKm as number) < 30000
+            ? SATELLITE_ICON_MEO
+            : SATELLITE_ICON_GEO;
+
+        const existing = existingSatMap.get(satId);
+        if (existing) {
+          existing.billboard.id = { _worldosType: 'satellite', _worldosData: s };
+          existing.billboard.image = satImage;
+          existing.billboard.rotation = CesiumMath.toRadians(360 - incDeg);
+
+          const dLon = Math.abs(existing.lon - s.longitude);
+          const dLat = Math.abs(existing.lat - s.latitude);
+          if (dLon < 2.0 && dLat < 2.0) {
+            existing.lon = existing.lon * 0.82 + s.longitude * 0.18;
+            existing.lat = existing.lat * 0.82 + s.latitude * 0.18;
+          } else {
+            existing.lon = s.longitude;
+            existing.lat = s.latitude;
+          }
+          existing.altMeters = altMeters;
+          existing.periodMin = periodMin;
+          existing.inclinationDeg = incDeg;
+          existing.billboard.position = Cartesian3.fromDegrees(existing.lon, existing.lat, altMeters);
+          nextSatKinematics.push(existing);
+        } else {
           const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
-          const incDeg = s.attributes?.inclination_deg || 51.6;
-
-          // Hybrid Solar-Wing Array + Tangential Orbital Vector differentiated by Orbit Tier:
-          // LEO (< 2000 km) -> Electric Cyan (#00e5ff)
-          // MEO (2000 - 30000 km, GPS/Nav) -> Amber Gold (#fbbf24)
-          // GEO (> 30000 km, Weather/Telecom) -> Emerald Green (#10b981)
-          const satImage =
-            (altitudeKm as number) < 2000
-              ? SATELLITE_ICON_LEO
-              : (altitudeKm as number) < 30000
-              ? SATELLITE_ICON_MEO
-              : SATELLITE_ICON_GEO;
-
           const satBillboard = satelliteBillboards.add({
             id: { _worldosType: 'satellite', _worldosData: s },
             position,
@@ -1425,21 +1499,30 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
             width: 20,
             height: 20,
             scaleByDistance: new NearFarScalar(1.0e6, 1.3, 8.0e7, 0.75),
+            // SATELLITES ONLY VISIBLE IN SPACE (> 400 KM ALTITUDE)!
+            distanceDisplayCondition: new DistanceDisplayCondition(400_000.0, 1.0e8),
           });
-          satelliteKinematicsRef.current.push({
+          nextSatKinematics.push({
             billboard: satBillboard,
             lon: s.longitude,
             lat: s.latitude,
             altMeters,
-            periodMin: s.attributes?.period_min || 92.8,
-            inclinationDeg: s.attributes?.inclination_deg || 51.6,
+            periodMin,
+            inclinationDeg: incDeg,
           });
         }
-        if (satIdx < satellites.length) {
-          requestAnimationFrame(streamSatellites);
+      }
+
+      // Remove stale satellites
+      for (const [id, item] of existingSatMap) {
+        if (!activeSatIds.has(id)) {
+          satelliteBillboards.remove(item.billboard);
         }
-      };
-      streamSatellites();
+      }
+      satelliteKinematicsRef.current = nextSatKinematics;
+    } else {
+      satelliteBillboards.removeAll();
+      satelliteKinematicsRef.current = [];
     }
 
     if (layerMap.get('natural-hazards') && naturalEvents.length > 0) {

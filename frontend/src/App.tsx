@@ -873,8 +873,8 @@ export default function App() {
         />
       )}
 
-      {/* Live Atmospheric Rainfall Tactical HUD */}
-      {rainfallData && !isRainHudDismissed && (layers.find((l) => l.id === 'weather-radar')?.enabled || rainfallData.precipitation_mm_h > 0) && (
+      {/* Live Atmospheric Rainfall Tactical HUD (Suppressed during entity inspection & cockpit view to prevent blocking cards) */}
+      {rainfallData && !isRainHudDismissed && !selectedItem && !cockpitAircraft && (layers.find((l) => l.id === 'weather-radar')?.enabled || rainfallData.precipitation_mm_h > 0) && (
         <RainfallHUD
           rainfallData={rainfallData}
           isZoomedIn={isRainZoomedIn}
