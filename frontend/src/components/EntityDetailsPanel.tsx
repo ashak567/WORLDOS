@@ -29,13 +29,14 @@ import {
   Activity,
   Layers,
 } from 'lucide-react';
-import { AircraftTrackPoint, TruthClass, fetchCameraLiveStream, CameraLiveStreamResponse } from '../api';
+import { AircraftTrackPoint, AircraftState, TruthClass, fetchCameraLiveStream, CameraLiveStreamResponse } from '../api';
 
 interface EntityDetailsPanelProps {
   selectedItem: SelectedItemPayload | null;
   track?: AircraftTrackPoint[] | null;
   onClose: () => void;
   onFlyTo?: (coords: [number, number], zoom?: number) => void;
+  onEnterCockpit?: (aircraft: AircraftState) => void;
 }
 
 const resolveCameraVideoSource = (cameraId: string, name: string) => {
@@ -331,6 +332,7 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
   track,
   onClose,
   onFlyTo,
+  onEnterCockpit,
 }) => {
   const [copiedHash, setCopiedHash] = useState(false);
 
@@ -707,6 +709,32 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
         </div>
 
         <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          {type === 'aircraft' && (
+            <button
+              className="details-cockpit-btn"
+              onClick={() => onEnterCockpit?.(data as AircraftState)}
+              title="Enter First-Person Pilot Cockpit View"
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                gap: '5px',
+                background: 'rgba(56, 189, 248, 0.2)',
+                border: '1px solid #38bdf8',
+                color: '#38bdf8',
+                borderRadius: '4px',
+                padding: '4px 10px',
+                fontSize: '11px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                boxShadow: '0 0 10px rgba(56, 189, 248, 0.3)',
+                transition: 'all 0.15s ease',
+              }}
+            >
+              <Plane size={13} />
+              <span>COCKPIT VIEW</span>
+            </button>
+          )}
+
           {typeof entityLon === 'number' && typeof entityLat === 'number' && (
             <button
               className="details-flyto-btn"

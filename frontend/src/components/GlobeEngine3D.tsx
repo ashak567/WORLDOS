@@ -239,6 +239,8 @@ interface GlobeEngine3DProps {
   onUserPannedCamera?: () => void;
   rainFxEnabled?: boolean;
   onRainfallUpdate?: (data: LiveRainfallData, isZoomedIn: boolean) => void;
+  cockpitAircraft?: AircraftState | null;
+  onExitCockpit?: () => void;
   onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -270,12 +272,18 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   onUserPannedCamera,
   rainFxEnabled = false,
   onRainfallUpdate,
+  cockpitAircraft = null,
+  onExitCockpit,
   onViewportChange,
   onSelectItem,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
   const rainPostProcessRef = useRef<PostProcessStage | null>(null);
+  const cockpitAircraftRef = useRef<AircraftState | null>(null);
+  useEffect(() => {
+    cockpitAircraftRef.current = cockpitAircraft;
+  }, [cockpitAircraft]);
   const onRainfallUpdateRef = useRef(onRainfallUpdate);
   useEffect(() => {
     onRainfallUpdateRef.current = onRainfallUpdate;
@@ -459,6 +467,22 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     if (viewer.scene.moon) viewer.scene.moon.show = true;
     if (viewer.scene.sun) viewer.scene.sun.show = true;
 
+    // Cinematic Earth Atmosphere: Rayleigh Blue Light Scattering & Fog Depth
+    viewer.scene.globe.showGroundAtmosphere = true;
+    viewer.scene.globe.atmosphereLightIntensity = 10.0;
+    viewer.scene.globe.atmosphereRayleighCoefficient = new Cartesian3(5.5e-6, 13.0e-6, 22.4e-6);
+    viewer.scene.globe.atmosphereMieCoefficient = new Cartesian3(21e-6, 21e-6, 21e-6);
+    if (viewer.scene.skyAtmosphere) {
+      viewer.scene.skyAtmosphere.show = true;
+      viewer.scene.skyAtmosphere.atmosphereLightIntensity = 10.0;
+      viewer.scene.skyAtmosphere.brightnessShift = 0.15;
+    }
+    if (viewer.scene.fog) {
+      viewer.scene.fog.enabled = true;
+      viewer.scene.fog.density = 0.00018;
+      viewer.scene.fog.screenSpaceErrorFactor = 2.0;
+    }
+
     // Initial camera view
     viewer.camera.setView({
       destination: Cartesian3.fromDegrees(20.0, 20.0, 18_000_000),
@@ -600,6 +624,29 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         item.lat += dLat;
         item.lon = ((item.lon + dLon + 540.0) % 360.0) - 180.0;
         item.billboard.position = Cartesian3.fromDegrees(item.lon, item.lat, item.altMeters);
+      }
+
+      // Live First-Person Cockpit Camera Locking (Pilot View at 60 FPS)
+      if (cockpitAircraftRef.current) {
+        const ac = cockpitAircraftRef.current;
+        const kine = aircraftKinematicsRef.current.find(
+          (k) => k.billboard?.id?._worldosData?.id === ac.id || k.billboard?.id?._worldosData?.canonical_name === ac.canonical_name
+        );
+        const lon = kine ? kine.lon : (ac.longitude ?? 0);
+        const lat = kine ? kine.lat : (ac.latitude ?? 0);
+        const alt = kine ? kine.altMeters : (ac.attributes?.geo_altitude || ac.attributes?.baro_altitude || 10500);
+        const track = kine ? kine.trackDeg : (ac.attributes?.true_track || 0);
+
+        // Position camera inside the aircraft cockpit looking forward over the horizon
+        const eyePos = Cartesian3.fromDegrees(lon, lat, alt + 3.0);
+        viewer.camera.setView({
+          destination: eyePos,
+          orientation: {
+            heading: CesiumMath.toRadians(track),
+            pitch: CesiumMath.toRadians(-3.5),
+            roll: 0.0,
+          },
+        });
       }
 
       // 2. Advance active satellites smoothly along their Keplerian orbital velocity in space

@@ -51,6 +51,7 @@ import { NavigationDeck } from './components/NavigationDeck';
 import { LiveNavigationHUD } from './components/LiveNavigationHUD';
 import { SearchHUD } from './components/SearchHUD';
 import { RainfallHUD } from './components/RainfallHUD';
+import { CockpitHUD } from './components/CockpitHUD';
 import { useNavigationTracking } from './useNavigationTracking';
 import './styles.css';
 
@@ -165,6 +166,18 @@ export default function App() {
     setRainfallData(data);
     setIsRainZoomedIn(isZoomed);
   }, []);
+
+  // First-Person Live Aircraft Cockpit Mode
+  const [cockpitAircraft, setCockpitAircraft] = useState<AircraftState | null>(null);
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && cockpitAircraft) {
+        setCockpitAircraft(null);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [cockpitAircraft]);
 
   // Live Google Maps-Style Navigation Tracking Engine
   const {
@@ -693,6 +706,8 @@ export default function App() {
           onUserPannedCamera={onUserPannedCamera}
           rainFxEnabled={rainFxEnabled}
           onRainfallUpdate={handleRainfallUpdate}
+          cockpitAircraft={cockpitAircraft}
+          onExitCockpit={() => setCockpitAircraft(null)}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
@@ -771,6 +786,10 @@ export default function App() {
           setSelectedItem(null);
           setSelectedTrack(null);
         }}
+        onEnterCockpit={(aircraft) => {
+          setCockpitAircraft(aircraft);
+          setSelectedItem(null);
+        }}
         onFlyTo={(coords, zoom) => {
           if (selectedItem?.type === 'satellite') {
             setSelectedItem({ ...selectedItem });
@@ -842,6 +861,14 @@ export default function App() {
           isZoomedIn={isRainZoomedIn}
           rainFxEnabled={rainFxEnabled}
           onToggleRainFx={() => setRainFxEnabled((prev) => !prev)}
+        />
+      )}
+
+      {/* Live First-Person Aircraft Cockpit Mode */}
+      {cockpitAircraft && (
+        <CockpitHUD
+          aircraft={cockpitAircraft}
+          onExitCockpit={() => setCockpitAircraft(null)}
         />
       )}
 
