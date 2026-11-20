@@ -11,7 +11,8 @@ export type LayerId =
   | 'natural-hazards'
   | 'thermal-fires'
   | 'weather-radar'
-  | 'wind-streamlines';
+  | 'wind-streamlines'
+  | 'live-clouds';
 
 export type LayerCategory =
   | 'geography'
@@ -184,6 +185,18 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     description: 'Real-time global atmospheric wind vectors and animated streamlines derived from live NOAA GFS & Open-Meteo forecast models.',
     source: 'Open-Meteo Atmospheric Grid (No key required)',
     color: '#a78bfa', // Purple / Violet
+    enabled: true,
+    count: 1,
+    truthClass: 'OBSERVED',
+    loading: false,
+  },
+  {
+    id: 'live-clouds',
+    name: 'Live Satellite Clouds (SSEC / NOAA)',
+    category: 'weather',
+    description: 'Hourly real-time global infrared & visible satellite cloud mosaic showing active Earth cloud cover and atmospheric drift.',
+    source: 'SSEC RealEarth / NOAA / EUMETSAT Global Constellation (No key required)',
+    color: '#e2e8f0', // Crisp Cloud White
     enabled: true,
     count: 1,
     truthClass: 'OBSERVED',

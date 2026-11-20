@@ -46,6 +46,7 @@ export const LayerDock: React.FC<LayerDockProps> = ({
     'space',
     'surveillance',
     'disasters',
+    'weather',
     'geography',
   ];
 

@@ -21,6 +21,9 @@ import {
   Matrix4,
   NearFarScalar,
   PolylineGlowMaterialProperty,
+  PolylineCollection,
+  Material,
+  CloudCollection,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
@@ -356,8 +359,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const radarImageryLayerRef = useRef<ImageryLayer | null>(null);
   const radarFramePathRef = useRef<string | null>(null);
   const windPointsRef = useRef<PointPrimitiveCollection | null>(null);
+  const windPolylinesRef = useRef<PolylineCollection | null>(null);
   const windParticlesRef = useRef<Array<{
-    primitive: PointPrimitive;
+    head: PointPrimitive;
+    line: any;
     lon: number;
     lat: number;
     altMeters: number;
@@ -365,6 +370,15 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     headingDeg: number;
     age: number;
     maxAge: number;
+    trail: Array<{ lon: number; lat: number }>;
+  }>>([]);
+  const cloudCollectionRef = useRef<CloudCollection | null>(null);
+  const cloudImageryLayerRef = useRef<ImageryLayer | null>(null);
+  const cloudsListRef = useRef<Array<{
+    primitive: any;
+    lon: number;
+    lat: number;
+    altMeters: number;
   }>>([]);
   const streamCancelRef = useRef<(() => void) | null>(null);
 
@@ -734,7 +748,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         } catch {}
       }
 
-      // 4. Atmospheric real-time wind particle advection (White Streamlines following planetary wind currents)
+      // 4. Atmospheric Real-Time Wind Streamlines (Shooting Star Meteor Tails with Luminous White Highlights)
       const windList = windParticlesRef.current;
       for (let i = 0; i < windList.length; i++) {
         const p = windList[i];
@@ -746,20 +760,56 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           const vec = getAtmosphericWindVector(p.lat, p.lon);
           p.headingDeg = vec.headingDeg;
           p.speed = vec.speed;
+          const rad = (p.headingDeg * Math.PI) / 180.0;
+          const tailStep = 0.55;
+          p.trail = [
+            { lon: p.lon, lat: p.lat },
+            { lon: p.lon - Math.sin(rad) * tailStep * 1.0, lat: p.lat - Math.cos(rad) * tailStep * 1.0 },
+            { lon: p.lon - Math.sin(rad) * tailStep * 2.1, lat: p.lat - Math.cos(rad) * tailStep * 2.1 },
+            { lon: p.lon - Math.sin(rad) * tailStep * 3.3, lat: p.lat - Math.cos(rad) * tailStep * 3.3 },
+            { lon: p.lon - Math.sin(rad) * tailStep * 4.6, lat: p.lat - Math.cos(rad) * tailStep * 4.6 },
+          ];
         } else {
-          // Continuously track streamline vector
+          // Continuously track curved streamline vector along atmospheric currents
           const vec = getAtmosphericWindVector(p.lat, p.lon);
           p.headingDeg = vec.headingDeg;
+          p.speed = vec.speed;
           const rad = (p.headingDeg * Math.PI) / 180.0;
-          p.lon += Math.sin(rad) * p.speed * dt * 28.0;
-          p.lat += Math.cos(rad) * p.speed * dt * 28.0;
+          p.lon += Math.sin(rad) * p.speed * dt * 26.0;
+          p.lat += Math.cos(rad) * p.speed * dt * 26.0;
+          p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
+
+          // Propagate curved snake trail history behind the meteor head
+          for (let k = p.trail.length - 1; k > 0; k--) {
+            const prev = p.trail[k - 1];
+            const curr = p.trail[k];
+            curr.lon += (prev.lon - curr.lon) * Math.min(1.0, dt * 14.0);
+            curr.lat += (prev.lat - curr.lat) * Math.min(1.0, dt * 14.0);
+          }
+          p.trail[0].lon = p.lon;
+          p.trail[0].lat = p.lat;
         }
-        p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
-        p.primitive.position = Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters);
-        // Smooth sinusoidal fade-in / fade-out creating aerodynamic streamline flow
+
+        const cartTrail = p.trail.map((t) => Cartesian3.fromDegrees(t.lon, t.lat, p.altMeters));
+        p.line.positions = cartTrail;
+        p.head.position = cartTrail[0];
+
+        // Smooth sinusoidal fade-in & fade-out creating aerodynamic meteor pulse
         const lifecycleRatio = p.age / p.maxAge;
-        const alpha = Math.sin(lifecycleRatio * Math.PI) * 0.75;
-        p.primitive.color = Color.WHITE.withAlpha(Math.max(0.08, alpha));
+        const alpha = Math.sin(lifecycleRatio * Math.PI);
+        p.head.color = Color.WHITE.withAlpha(Math.max(0.12, alpha * 0.95));
+      }
+
+      // 5. Active Live Atmospheric Clouds: majestic planetary drift along prevailing wind currents
+      const cloudList = cloudsListRef.current;
+      for (let i = 0; i < cloudList.length; i++) {
+        const c = cloudList[i];
+        const vec = getAtmosphericWindVector(c.lat, c.lon);
+        const rad = (vec.headingDeg * Math.PI) / 180.0;
+        c.lon += Math.sin(rad) * vec.speed * dt * 4.5;
+        c.lat += Math.cos(rad) * vec.speed * dt * 4.5;
+        c.lon = ((c.lon + 540.0) % 360.0) - 180.0;
+        c.primitive.position = Cartesian3.fromDegrees(c.lon, c.lat, c.altMeters);
       }
     };
 
@@ -801,6 +851,30 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           viewer.scene.postProcessStages.remove(rainPostProcessRef.current);
         } catch {}
         rainPostProcessRef.current = null;
+      }
+      if (cloudImageryLayerRef.current && !viewer.isDestroyed()) {
+        try {
+          viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+        } catch {}
+        cloudImageryLayerRef.current = null;
+      }
+      if (cloudCollectionRef.current && !viewer.isDestroyed()) {
+        try {
+          viewer.scene.primitives.remove(cloudCollectionRef.current);
+        } catch {}
+        cloudCollectionRef.current = null;
+      }
+      if (windPolylinesRef.current && !viewer.isDestroyed()) {
+        try {
+          viewer.scene.primitives.remove(windPolylinesRef.current);
+        } catch {}
+        windPolylinesRef.current = null;
+      }
+      if (windPointsRef.current && !viewer.isDestroyed()) {
+        try {
+          viewer.scene.primitives.remove(windPointsRef.current);
+        } catch {}
+        windPointsRef.current = null;
       }
       if (viewerRef.current === viewer) viewerRef.current = null;
       geojsonSourceRef.current = null;
@@ -991,35 +1065,129 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       radarImageryLayerRef.current = null;
     }
 
-    // Global Wind Flow (Parallel White Streamlines)
+    // 1. Live Satellite Cloud Deck & Volumetric Active Drift (SSEC / NOAA / EUMETSAT)
+    const cloudsEnabled = layerMap.get('live-clouds') ?? true;
+    if (cloudsEnabled) {
+      if (!cloudImageryLayerRef.current) {
+        try {
+          const cloudProvider = new UrlTemplateImageryProvider({
+            url: 'https://realearth.ssec.wisc.edu/tiles/globalir/{z}/{x}/{y}.png',
+            maximumLevel: 8,
+            credit: 'SSEC RealEarth / NOAA / EUMETSAT Global Satellite Infrared Clouds',
+          });
+          const cLayer = viewer.imageryLayers.addImageryProvider(cloudProvider);
+          cLayer.alpha = 0.65;
+          cLayer.brightness = 1.25;
+          cLayer.contrast = 1.1;
+          cloudImageryLayerRef.current = cLayer;
+        } catch (err) {
+          console.warn('Could not add live cloud layer:', err);
+        }
+      }
+
+      // Active 3D Volumetric Drifting Cumulus Clouds
+      const cloudCollection = cloudCollectionRef.current ?? viewer.scene.primitives.add(new CloudCollection());
+      cloudCollectionRef.current = cloudCollection;
+      if (cloudsListRef.current.length === 0) {
+        const cloudList = [];
+        const cloudCount = 85;
+        for (let i = 0; i < cloudCount; i++) {
+          const lon = (Math.random() - 0.5) * 360;
+          const latBand = Math.random();
+          const lat = latBand < 0.45
+            ? (Math.random() - 0.5) * 32 // Tropical / ITCZ storm belt
+            : latBand < 0.75
+            ? 35 + Math.random() * 25 // Mid-latitude Northern cyclone track
+            : -55 + Math.random() * 25; // Southern ocean storm track
+          const altMeters = 3500 + Math.random() * 4500;
+          const cloudPrim = cloudCollection.add({
+            position: Cartesian3.fromDegrees(lon, lat, altMeters),
+            scale: new Cartesian2(85000 + Math.random() * 75000, 38000 + Math.random() * 32000),
+            maximumSize: new Cartesian3(28000, 16000, 8000),
+            slice: 0.35,
+            color: Color.WHITE.withAlpha(0.68),
+          });
+          cloudList.push({
+            primitive: cloudPrim,
+            lon,
+            lat,
+            altMeters,
+          });
+        }
+        cloudsListRef.current = cloudList;
+      }
+    } else {
+      if (cloudImageryLayerRef.current) {
+        viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+        cloudImageryLayerRef.current = null;
+      }
+      if (cloudCollectionRef.current) {
+        cloudCollectionRef.current.removeAll();
+        cloudsListRef.current = [];
+      }
+    }
+
+    // 2. Global Wind Flow (Shooting Star Meteor Streamlines with Luminous Tapered Tails)
     const windEnabled = layerMap.get('wind-streamlines') ?? true;
     const windPoints = windPointsRef.current ?? viewer.scene.primitives.add(new PointPrimitiveCollection());
+    const windPolylines = windPolylinesRef.current ?? viewer.scene.primitives.add(new PolylineCollection());
     windPointsRef.current = windPoints;
+    windPolylinesRef.current = windPolylines;
+
     if (!windEnabled) {
       windPoints.removeAll();
+      windPolylines.removeAll();
       windParticlesRef.current = [];
     } else if (windParticlesRef.current.length === 0) {
       const particles = [];
-      const particleCount = 1200;
+      const particleCount = 380;
       for (let i = 0; i < particleCount; i++) {
         const lon = (Math.random() - 0.5) * 360;
         const lat = (Math.random() - 0.5) * 150;
-        const altMeters = 2000 + Math.random() * 9000;
+        const altMeters = 5000 + Math.random() * 12000;
         const { headingDeg, speed } = getAtmosphericWindVector(lat, lon);
+        const rad = (headingDeg * Math.PI) / 180.0;
+
+        // Step backwards along wind vector to build curved shooting star tail
+        const tailStep = 0.55;
+        const trail = [
+          { lon, lat },
+          { lon: lon - Math.sin(rad) * tailStep * 1.0, lat: lat - Math.cos(rad) * tailStep * 1.0 },
+          { lon: lon - Math.sin(rad) * tailStep * 2.1, lat: lat - Math.cos(rad) * tailStep * 2.1 },
+          { lon: lon - Math.sin(rad) * tailStep * 3.3, lat: lat - Math.cos(rad) * tailStep * 3.3 },
+          { lon: lon - Math.sin(rad) * tailStep * 4.6, lat: lat - Math.cos(rad) * tailStep * 4.6 },
+        ];
+        const initialCart = trail.map((t) => Cartesian3.fromDegrees(t.lon, t.lat, altMeters));
+
+        // Front glowing spark dot
         const pt = windPoints.add({
-          position: Cartesian3.fromDegrees(lon, lat, altMeters),
-          color: Color.WHITE.withAlpha(0.65),
-          pixelSize: 2.2,
+          position: initialCart[0],
+          color: Color.WHITE.withAlpha(0.9),
+          pixelSize: 3.5,
         });
+
+        // Tapered luminous white neon tail
+        const line = windPolylines.add({
+          positions: initialCart,
+          width: 3.2,
+          material: Material.fromType(Material.PolylineGlowType, {
+            color: Color.WHITE,
+            glowPower: 0.35,
+            taperPower: 0.65,
+          }),
+        });
+
         particles.push({
-          primitive: pt,
+          head: pt,
+          line,
           lon,
           lat,
           altMeters,
           speed,
           headingDeg,
-          age: Math.random() * 5.0,
-          maxAge: 4.0 + Math.random() * 3.0,
+          age: Math.random() * 6.0,
+          maxAge: 4.5 + Math.random() * 3.5,
+          trail,
         });
       }
       windParticlesRef.current = particles;
