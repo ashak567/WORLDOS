@@ -111,7 +111,7 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     category: 'space',
     description: 'Active CelesTrak catalog positions propagated from current orbital elements; selected satellite ground track is computed on demand.',
     source: 'CelesTrak Active GP Elements · SGP4',
-    color: '#ff1744', // Neon Red
+    color: '#00e5ff', // Electric Cyan Solar Array
     enabled: true,
     count: 0,
     truthClass: 'DERIVED',

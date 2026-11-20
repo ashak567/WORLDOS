@@ -244,6 +244,19 @@ export const LayerDock: React.FC<LayerDockProps> = ({
                       </span>
                     </div>
                   )}
+                  {layer.id === 'space-satellites' && layer.enabled && (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', padding: '2px 14px 6px', fontSize: '9px' }}>
+                      <span style={{ color: '#00e5ff', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#00e5ff', display: 'inline-block' }} /> LEO (&lt;2k km)
+                      </span>
+                      <span style={{ color: '#fbbf24', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#fbbf24', display: 'inline-block' }} /> MEO (GPS)
+                      </span>
+                      <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} /> GEO (36k km)
+                      </span>
+                    </div>
+                  )}
                   {layer.feedStatus && (
                     <div style={{ fontSize: '9px', padding: '2px 14px 4px', color: layer.feedStatus === 'fresh' ? '#34d399' : layer.feedStatus === 'unavailable' ? '#f87171' : '#fbbf24' }}>
                       {layer.feedStatus === 'fresh' ? 'FRESH SOURCE DATA' : layer.feedStatus === 'stale' ? 'SOURCE DATA · STALE' : layer.feedStatus === 'partial' ? 'PARTIAL FEEDS' : 'FEED UNAVAILABLE'}

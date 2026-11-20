@@ -35,11 +35,59 @@ const VESSEL_PATH = `<path d="M12 2L4 9v7l8 6 8-6V9l-8-7zm0 3.5l5 4.38v4.24l-5 3
 export const VESSEL_ICON_CYAN = createSvgDataUrl(VESSEL_PATH, '#06b6d4');
 export const VESSEL_ICON_WHITE = createSvgDataUrl(VESSEL_PATH, '#ffffff');
 
-// 3. Satellite (Orbital Solar Array) - Glowing Neon Red Space Beacon
-const SATELLITE_PATH = `<circle cx="12" cy="12" r="3.5"/><path d="M4 10h3v4H4zm13 0h3v4h-3zM10 4h4v3h-4zm0 13h4v3h-4zM2 11h2v2H2zm18 0h2v2h-2zM11 2h2v2h-2zm0 18h2v2h-2z"/>`;
-export const SATELLITE_ICON_NEON_RED = `data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" width="32" height="32"><defs><filter id="glow" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur in="SourceGraphic" stdDeviation="1.8" result="blur"/><feMerge><feMergeNode in="blur"/><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge></filter></defs><circle cx="16" cy="16" r="12" fill="%23ff003b" fill-opacity="0.28"/><circle cx="16" cy="16" r="10" fill="none" stroke="%23ff003b" stroke-width="1.8" filter="url(%23glow)"/><circle cx="16" cy="16" r="5.5" fill="%23ff1744" filter="url(%23glow)"/><circle cx="16" cy="16" r="2.5" fill="%23ffffff"/><line x1="16" y1="2" x2="16" y2="8" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="16" y1="24" x2="16" y2="30" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="2" y1="16" x2="8" y2="16" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/><line x1="24" y1="16" x2="30" y2="16" stroke="%23ff1744" stroke-width="2.5" stroke-linecap="round"/></svg>`;
-export const SATELLITE_ICON_PURPLE = SATELLITE_ICON_NEON_RED;
-export const SATELLITE_ICON_WHITE = createSvgDataUrl(SATELLITE_PATH, '#ffffff');
+// 3. Satellite (Orbital Solar Array + Directional Tangent Velocity Vector)
+// Combines authentic dual photovoltaic solar wings with a forward velocity vector arrow
+function createSatelliteHybridSvg(wingColorHex: string): string {
+  const cleanId = wingColorHex.replace('#', '');
+  const svg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 40 40" width="40" height="40">
+  <defs>
+    <filter id="satglow_${cleanId}" x="-20%" y="-20%" width="140%" height="140%">
+      <feDropShadow dx="0" dy="0" stdDeviation="1.5" flood-color="${wingColorHex}" flood-opacity="0.8"/>
+    </filter>
+  </defs>
+  <!-- Forward Directional Velocity Vector Arrow (Tangential Orbital Motion) -->
+  <path d="M20 2 L24 9 L20 7.5 L16 9 Z" fill="${wingColorHex}" opacity="0.95"/>
+  <line x1="20" y1="7.5" x2="20" y2="13" stroke="${wingColorHex}" stroke-width="1.5" stroke-dasharray="2,1.5" opacity="0.8"/>
+  <!-- Left Solar Array Wing -->
+  <rect x="2" y="16" width="12" height="8" rx="1" fill="${wingColorHex}" stroke="#ffffff" stroke-width="0.8" filter="url(#satglow_${cleanId})"/>
+  <line x1="6" y1="16" x2="6" y2="24" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <line x1="10" y1="16" x2="10" y2="24" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <line x1="2" y1="20" x2="14" y2="20" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <!-- Wing Boom Mount Left -->
+  <line x1="14" y1="20" x2="16" y2="20" stroke="#ffffff" stroke-width="1.8"/>
+  <!-- Right Solar Array Wing -->
+  <rect x="26" y="16" width="12" height="8" rx="1" fill="${wingColorHex}" stroke="#ffffff" stroke-width="0.8" filter="url(#satglow_${cleanId})"/>
+  <line x1="30" y1="16" x2="30" y2="24" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <line x1="34" y1="16" x2="34" y2="24" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <line x1="26" y1="20" x2="38" y2="20" stroke="#ffffff" stroke-width="0.6" opacity="0.7"/>
+  <!-- Wing Boom Mount Right -->
+  <line x1="24" y1="20" x2="26" y2="20" stroke="#ffffff" stroke-width="1.8"/>
+  <!-- Central Satellite Avionics Bus -->
+  <rect x="16" y="15" width="8" height="10" rx="1.5" fill="#f8fafc" stroke="${wingColorHex}" stroke-width="1.2"/>
+  <circle cx="20" cy="20" r="2.2" fill="${wingColorHex}"/>
+  <!-- Parabolic Communication Antenna Dish -->
+  <path d="M17.5 28 C17.5 25.5, 22.5 25.5, 22.5 28" fill="none" stroke="#f8fafc" stroke-width="1.4" stroke-linecap="round"/>
+  <line x1="20" y1="25" x2="20" y2="28" stroke="#f8fafc" stroke-width="1.2"/>
+</svg>`;
+  return `data:image/svg+xml;utf8,${encodeURIComponent(svg)}`;
+}
+
+// Low Earth Orbit (LEO, 200 - 2,000 km, Starlink / ISS / Earth Observation) - Electric Cyan
+export const SATELLITE_ICON_LEO = createSatelliteHybridSvg('#00e5ff');
+
+// Medium Earth Orbit (MEO, 2,000 - 30,000 km, GPS / Galileo / Navigation) - Amber Gold
+export const SATELLITE_ICON_MEO = createSatelliteHybridSvg('#fbbf24');
+
+// Geostationary Orbit (GEO, > 30,000 km, Weather & Telecom) - Emerald Green
+export const SATELLITE_ICON_GEO = createSatelliteHybridSvg('#10b981');
+
+// Lunar & Cislunar Spacecraft - Deep Space Rose
+export const SATELLITE_ICON_LUNAR = createSatelliteHybridSvg('#f43f5e');
+
+export const SATELLITE_ICON_CYAN = SATELLITE_ICON_LEO;
+export const SATELLITE_ICON_NEON_RED = SATELLITE_ICON_LEO; // Deprecated neon red alias mapped to Electric Cyan
+export const SATELLITE_ICON_PURPLE = SATELLITE_ICON_MEO;
+export const SATELLITE_ICON_WHITE = createSatelliteHybridSvg('#ffffff');
 
 // 4. Surveillance / Traffic Camera
 const CAMERA_PATH = `<path d="M12 15c1.66 0 3-1.34 3-3s-1.34-3-3-3-3 1.34-3 3 1.34 3 3 3zm0-4c.55 0 1 .45 1 1s-.45 1-1 1-1-.45-1-1 .45-1 1-1zm9-2h-3.17l-1.83-2H8L6.17 9H3c-1.1 0-2 .9-2 2v9c0 1.1.9 2 2 2h18c1.1 0 2-.9 2-2v-9c0-1.1-.9-2-2-2zm0 11H3v-9h3.83l1.83-2h6.68l1.83 2H21v9z"/>`;

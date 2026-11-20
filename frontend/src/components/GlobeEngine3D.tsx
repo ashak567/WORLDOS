@@ -45,6 +45,10 @@ import {
   AIRPLANE_ICON_DOMESTIC,
   AIRPLANE_ICON_GROUND,
   VESSEL_ICON_CYAN,
+  SATELLITE_ICON_LEO,
+  SATELLITE_ICON_MEO,
+  SATELLITE_ICON_GEO,
+  SATELLITE_ICON_LUNAR,
   SATELLITE_ICON_PURPLE,
   SATELLITE_ICON_NEON_RED,
   CAMERA_ICON_EMERALD,
@@ -1142,9 +1146,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
               name: lo.name,
               position: pos,
               billboard: {
-                image: SATELLITE_ICON_NEON_RED,
-                width: 24,
-                height: 24,
+                image: SATELLITE_ICON_LUNAR,
+                width: 22,
+                height: 22,
                 scaleByDistance: new NearFarScalar(1.0e6, 1.2, 5.0e8, 0.4),
               },
             });
@@ -1180,14 +1184,27 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           if (!Number.isFinite(altitudeKm)) continue;
           const altMeters = (altitudeKm as number) * 1000;
           const position = Cartesian3.fromDegrees(s.longitude, s.latitude, altMeters);
+          const incDeg = s.attributes?.inclination_deg || 51.6;
+
+          // Hybrid Solar-Wing Array + Tangential Orbital Vector differentiated by Orbit Tier:
+          // LEO (< 2000 km) -> Electric Cyan (#00e5ff)
+          // MEO (2000 - 30000 km, GPS/Nav) -> Amber Gold (#fbbf24)
+          // GEO (> 30000 km, Weather/Telecom) -> Emerald Green (#10b981)
+          const satImage =
+            (altitudeKm as number) < 2000
+              ? SATELLITE_ICON_LEO
+              : (altitudeKm as number) < 30000
+              ? SATELLITE_ICON_MEO
+              : SATELLITE_ICON_GEO;
 
           const satBillboard = satelliteBillboards.add({
             id: { _worldosType: 'satellite', _worldosData: s },
             position,
-            image: SATELLITE_ICON_NEON_RED,
-            width: 14,
-            height: 14,
-            scaleByDistance: new NearFarScalar(1.0e6, 1.4, 8.0e7, 0.85),
+            image: satImage,
+            rotation: CesiumMath.toRadians(360 - incDeg),
+            width: 20,
+            height: 20,
+            scaleByDistance: new NearFarScalar(1.0e6, 1.3, 8.0e7, 0.75),
           });
           satelliteKinematicsRef.current.push({
             billboard: satBillboard,
