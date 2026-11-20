@@ -1271,6 +1271,31 @@ def _enrich_aircraft_payload(rec: dict[str, Any]) -> dict[str, Any]:
     except Exception as exc:
         logger.debug("Failed to resolve route for aircraft %s: %s", callsign or icao24, exc)
 
+    # 3-Way Classification: Military, Commercial, Private / General Aviation
+    cs = str(callsign or "").strip().upper()
+    mil_prefixes = (
+        "RCH", "CNV", "FORTE", "JAKE", "VIPER", "LAGR", "ASY", "RRR", "BAF", "IAM", "CFC", "GAF",
+        "NAF", "UAF", "ROF", "SAM", "EXEC", "AF1", "TITAN", "SWORD", "REAPER", "COBRA", "HAWK",
+        "TOPCAT", "PAT", "NAVY", "ARMY", "USAF", "REACH", "EVAC", "NATO", "DRAGO", "KNIFE", "VALKY"
+    )
+    comm_prefixes = (
+        "AAL", "DAL", "UAL", "SWA", "BAW", "AFR", "DLH", "KLM", "IBE", "QTR", "UAE", "ETD", "SIA",
+        "CPA", "ANA", "JAL", "KAL", "AIC", "IGO", "CES", "CCA", "CSN", "QFA", "VOZ", "ANZ", "TAM",
+        "GLO", "ARG", "AVA", "LAN", "THY", "SAS", "FIN", "LOT", "TAP", "EZY", "RYR", "WZZ", "JBU",
+        "ASA", "FFT", "FDX", "UPS", "GTI", "AZU", "VIV", "VOI", "AMX", "CMP", "SKW", "ENY", "RPA"
+    )
+    if any(cs.startswith(p) for p in mil_prefixes) or attr.get("squawk") in ("7777", "5100", "5200"):
+        classification = "military"
+    elif any(cs.startswith(p) for p in comm_prefixes) or (attr.get("is_international") and float(baro_altitude or 0) > 8500):
+        classification = "commercial"
+    elif cs.startswith(("N", "VH-", "G-", "D-", "F-")) and not any(cs.startswith(p) for p in comm_prefixes):
+        classification = "private"
+    elif float(baro_altitude or 0) > 8500:
+        classification = "commercial"
+    else:
+        classification = "private"
+    attr["classification"] = classification
+
     return rec
 
 
@@ -1446,15 +1471,18 @@ def list_maritime_vessels(
     max_lat_v = _clean_param(max_lat)
     limit_v = _clean_param(limit, 200)
 
-    db_vessels = WorldRepository().maritime_vessels(
-        min_lon=float(min_lon_v) if min_lon_v is not None else None,
-        min_lat=float(min_lat_v) if min_lat_v is not None else None,
-        max_lon=float(max_lon_v) if max_lon_v is not None else None,
-        max_lat=float(max_lat_v) if max_lat_v is not None else None,
-        limit=limit_v,
-    )
-    if db_vessels:
-        return db_vessels
+    try:
+        db_vessels = WorldRepository().maritime_vessels(
+            min_lon=float(min_lon_v) if min_lon_v is not None else None,
+            min_lat=float(min_lat_v) if min_lat_v is not None else None,
+            max_lon=float(max_lon_v) if max_lon_v is not None else None,
+            max_lat=float(max_lat_v) if max_lat_v is not None else None,
+            limit=limit_v,
+        )
+        if db_vessels:
+            return db_vessels
+    except Exception as exc:
+        logger.warning("Could not query DB maritime vessels: %s; serving global sample fleet", exc)
 
     # Fall back to sample/simulated maritime vessels if database has no stored AIS observations yet
     sample_records = load_sample_vessels()
@@ -1672,6 +1700,72 @@ def ingest_cameras() -> dict[str, Any]:
         repo.ingest(bundle)
         persisted += 1
     return {"status": "completed", "records_fetched": len(records), "records_persisted": persisted}
+
+
+@app.get("/weather/live")
+def get_live_rainfall(
+    lat: float = Query(..., ge=-90.0, le=90.0),
+    lon: float = Query(..., ge=-180.0, le=180.0),
+) -> dict[str, Any]:
+    """Retrieve real-time precipitation rate, probability, and flood danger assessment via Open-Meteo."""
+    import json
+    import urllib.request
+    url = f"https://api.open-meteo.com/v1/forecast?latitude={lat:.4f}&longitude={lon:.4f}&current=precipitation,rain,showers,weather_code&hourly=precipitation_probability&forecast_hours=1"
+    req = urllib.request.Request(url, headers={"User-Agent": "WORLDOS-Weather/1.0"})
+    try:
+        with urllib.request.urlopen(req, timeout=5) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+            current = data.get("current", {})
+            prec = float(current.get("precipitation") or current.get("rain") or 0.0)
+            prob_list = data.get("hourly", {}).get("precipitation_probability", [0])
+            prob = int(prob_list[0] if prob_list else (85 if prec > 0 else 10))
+            code = int(current.get("weather_code") or 0)
+
+            if prec >= 8.0:
+                danger_level = "DANGER"
+                danger_label = "DANGER: HEAVY RAINFALL / FLASH FLOOD"
+                danger_color = "#ef4444"
+                condition = "Heavy Torrential Rain"
+            elif prec >= 2.5:
+                danger_level = "MODERATE"
+                danger_label = "MODERATE RAINFALL WATCH"
+                danger_color = "#f59e0b"
+                condition = "Moderate Steady Rain"
+            elif prec > 0.0:
+                danger_level = "LOW"
+                danger_label = "LIGHT PRECIPITATION"
+                danger_color = "#38bdf8"
+                condition = "Light Showers / Drizzle"
+            else:
+                danger_level = "NONE"
+                danger_label = "CLEAR / NO RAINFALL"
+                danger_color = "#94a3b8"
+                condition = "Dry / Clear"
+
+            return {
+                "latitude": lat,
+                "longitude": lon,
+                "precipitation_mm_h": prec,
+                "precipitation_probability": prob,
+                "weather_code": code,
+                "condition": condition,
+                "danger_level": danger_level,
+                "danger_label": danger_label,
+                "danger_color": danger_color,
+            }
+    except Exception as exc:
+        logger.warning("Failed to fetch Open-Meteo live rainfall: %s", exc)
+        return {
+            "latitude": lat,
+            "longitude": lon,
+            "precipitation_mm_h": 0.0,
+            "precipitation_probability": 0,
+            "weather_code": 0,
+            "condition": "Dry / Sensor Offline",
+            "danger_level": "NONE",
+            "danger_label": "NO RADAR ECHO",
+            "danger_color": "#64748b",
+        }
 
 
 @app.get("/events/thermal")

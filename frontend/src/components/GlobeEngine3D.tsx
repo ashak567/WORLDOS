@@ -32,11 +32,15 @@ import {
   createGooglePhotorealistic3DTileset,
   createWorldTerrainAsync,
   defined,
+  PostProcessStage,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import {
   AIRPLANE_ICON_BLUE,
   AIRPLANE_ICON_AMBER,
+  AIRPLANE_ICON_COMMERCIAL,
+  AIRPLANE_ICON_MILITARY,
+  AIRPLANE_ICON_PRIVATE,
   AIRPLANE_ICON_INTERNATIONAL,
   AIRPLANE_ICON_DOMESTIC,
   AIRPLANE_ICON_GROUND,
@@ -78,6 +82,8 @@ import {
   InboundFlightPlan,
   UserNavigationState,
   splitTrackAtAntimeridian,
+  LiveRainfallData,
+  fetchLiveRainfall,
 } from '../api';
 import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
 
@@ -85,6 +91,62 @@ import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/laye
 (window as any).CESIUM_BASE_URL = '/cesium/';
 Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN ?? '';
 GoogleMaps.defaultApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
+
+// Major Strategic Deep-Water Seaports (Global Chokepoints and Maritime Gateways)
+interface GlobalSeaport {
+  id: string;
+  name: string;
+  code: string;
+  city: string;
+  country: string;
+  latitude: number;
+  longitude: number;
+  teu: string;
+}
+
+const GLOBAL_SEAPORTS: GlobalSeaport[] = [
+  { id: 'PORT-RTM', name: 'Port of Rotterdam', code: 'NLRTM', city: 'Rotterdam', country: 'Netherlands', latitude: 51.95, longitude: 4.13, teu: '14.5M TEU' },
+  { id: 'PORT-SIN', name: 'Port of Singapore', code: 'SGSIN', city: 'Singapore', country: 'Singapore', latitude: 1.27, longitude: 103.77, teu: '37.3M TEU' },
+  { id: 'PORT-SHA', name: 'Port of Shanghai / Ningbo', code: 'CNNGB', city: 'Shanghai', country: 'China', latitude: 29.89, longitude: 121.84, teu: '47.3M TEU' },
+  { id: 'PORT-PUS', name: 'Port of Busan', code: 'KRPUS', city: 'Busan', country: 'South Korea', latitude: 35.10, longitude: 129.04, teu: '22.7M TEU' },
+  { id: 'PORT-HKG', name: 'Port of Hong Kong', code: 'HKHKG', city: 'Hong Kong', country: 'Hong Kong SAR', latitude: 22.33, longitude: 114.12, teu: '17.8M TEU' },
+  { id: 'PORT-LAX', name: 'Port of Los Angeles & Long Beach', code: 'USLAX', city: 'Los Angeles', country: 'USA', latitude: 33.74, longitude: -118.26, teu: '19.0M TEU' },
+  { id: 'PORT-NYC', name: 'Port of New York & New Jersey', code: 'USNYC', city: 'New York', country: 'USA', latitude: 40.67, longitude: -74.12, teu: '9.0M TEU' },
+  { id: 'PORT-DXB', name: 'Port of Jebel Ali', code: 'AEJEA', city: 'Dubai', country: 'UAE', latitude: 24.99, longitude: 55.06, teu: '14.0M TEU' },
+  { id: 'PORT-ANR', name: 'Port of Antwerp-Bruges', code: 'BEANR', city: 'Antwerp', country: 'Belgium', latitude: 51.28, longitude: 4.33, teu: '13.5M TEU' },
+  { id: 'PORT-HAM', name: 'Port of Hamburg', code: 'DEHAM', city: 'Hamburg', country: 'Germany', latitude: 53.54, longitude: 9.97, teu: '8.3M TEU' },
+  { id: 'PORT-PSD', name: 'Suez Canal / Port Said', code: 'EGPSD', city: 'Port Said', country: 'Egypt', latitude: 31.26, longitude: 32.31, teu: '4.2M TEU' },
+  { id: 'PORT-CMB', name: 'Port of Colombo', code: 'LKCMB', city: 'Colombo', country: 'Sri Lanka', latitude: 6.95, longitude: 79.85, teu: '7.2M TEU' },
+  { id: 'PORT-SSZ', name: 'Port of Santos', code: 'BRSSZ', city: 'Santos', country: 'Brazil', latitude: -23.96, longitude: -46.30, teu: '4.8M TEU' },
+  { id: 'PORT-YOK', name: 'Port of Yokohama & Tokyo', code: 'JPYOK', city: 'Yokohama', country: 'Japan', latitude: 35.45, longitude: 139.67, teu: '8.1M TEU' },
+  { id: 'PORT-BLB', name: 'Panama Canal / Balboa', code: 'PABLB', city: 'Balboa', country: 'Panama', latitude: 8.95, longitude: -79.56, teu: '3.6M TEU' },
+  { id: 'PORT-GIB', name: 'Strait of Gibraltar Marine Hub', code: 'GIJBS', city: 'Gibraltar', country: 'Gibraltar', latitude: 36.14, longitude: -5.35, teu: '3.0M TEU' },
+  { id: 'PORT-CPT', name: 'Port of Cape Town', code: 'ZACPT', city: 'Cape Town', country: 'South Africa', latitude: -33.91, longitude: 18.44, teu: '1.2M TEU' },
+  { id: 'PORT-BOM', name: 'Jawaharlal Nehru Port (JNPT)', code: 'INBOM', city: 'Mumbai', country: 'India', latitude: 18.95, longitude: 72.95, teu: '5.6M TEU' },
+  { id: 'PORT-SYD', name: 'Port Botany / Sydney', code: 'AUBNE', city: 'Sydney', country: 'Australia', latitude: -33.97, longitude: 151.21, teu: '2.8M TEU' },
+  { id: 'PORT-ALG', name: 'Port of Algeciras', code: 'ESALG', city: 'Algeciras', country: 'Spain', latitude: 36.13, longitude: -5.43, teu: '4.8M TEU' },
+  { id: 'PORT-PIR', name: 'Port of Piraeus', code: 'GRPIR', city: 'Athens', country: 'Greece', latitude: 37.94, longitude: 23.63, teu: '5.3M TEU' },
+  { id: 'PORT-TPP', name: 'Port of Tanjung Pelepas', code: 'MYTPP', city: 'Johor', country: 'Malaysia', latitude: 1.36, longitude: 103.55, teu: '10.5M TEU' },
+  { id: 'PORT-MAN', name: 'Port of Manaus (Amazon River)', code: 'BRMAO', city: 'Manaus', country: 'Brazil', latitude: -3.14, longitude: -60.02, teu: 'Amazon Inland Terminal' },
+];
+
+// Atmospheric parallel wind streamline model (Harmonic Rossby planetary wave flow)
+function getAtmosphericWindVector(lat: number, lon: number): { headingDeg: number; speed: number } {
+  const absLat = Math.abs(lat);
+  const wave = Math.sin((lon * Math.PI) / 60.0) * 16.0 + Math.cos((lat * Math.PI) / 25.0) * 10.0;
+  if (absLat < 28) {
+    // Tropical Trade Winds: flowing East -> West with slight equatorial convergence
+    const heading = lat >= 0 ? 250 + wave * 0.4 : 290 - wave * 0.4;
+    return { headingDeg: heading, speed: 0.12 };
+  } else if (absLat < 62) {
+    // Mid-Latitude Westerlies & Jet Stream: flowing West -> East in smooth parallel streamlines
+    const heading = 80 + wave;
+    return { headingDeg: heading, speed: 0.22 };
+  } else {
+    // Polar Easterlies
+    return { headingDeg: 260 + wave * 0.3, speed: 0.10 };
+  }
+}
 
 interface AircraftKinematicState {
   billboard: any;
@@ -175,6 +237,8 @@ interface GlobeEngine3DProps {
   selectedItem?: SelectedItemPayload | null;
   userNavState?: UserNavigationState | null;
   onUserPannedCamera?: () => void;
+  rainFxEnabled?: boolean;
+  onRainfallUpdate?: (data: LiveRainfallData, isZoomedIn: boolean) => void;
   onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -204,11 +268,19 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   selectedItem = null,
   userNavState = null,
   onUserPannedCamera,
+  rainFxEnabled = false,
+  onRainfallUpdate,
   onViewportChange,
   onSelectItem,
 }) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const viewerRef = useRef<Viewer | null>(null);
+  const rainPostProcessRef = useRef<PostProcessStage | null>(null);
+  const onRainfallUpdateRef = useRef(onRainfallUpdate);
+  useEffect(() => {
+    onRainfallUpdateRef.current = onRainfallUpdate;
+  }, [onRainfallUpdate]);
+  const lastRainQueryTimeRef = useRef<number>(0);
   const googleTilesetRef = useRef<Cesium3DTileset | null>(null);
   const userNavSourceRef = useRef<CustomDataSource | null>(null);
   const isCameraLockedToNavRef = useRef<boolean>(false);
@@ -393,9 +465,47 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     });
     viewer.scene.requestRender();
 
+    // Real-Time 3D Falling Rain Post-Processing FX
+    const rainFragmentShader = `
+      uniform sampler2D colorTexture;
+      in vec2 v_textureCoordinates;
+      float hashRain(float x) {
+        return fract(sin(x * 133.3) * 43758.5453123);
+      }
+      void main() {
+        vec4 color = texture(colorTexture, v_textureCoordinates);
+        vec2 p = v_textureCoordinates;
+        // Natural atmospheric wind-slanted vector
+        p.x += p.y * 0.16;
+        // Frame-rate advected vertical streak drop
+        p.y += czm_frameNumber * 0.038;
+        vec2 grid = vec2(floor(p.x * 260.0), floor(p.y * 36.0));
+        float rnd = hashRain(grid.x + grid.y * 57.0);
+        if (rnd > 0.976) {
+          float streak = clamp((fract(p.y * 36.0) - 0.22) * 1.9, 0.0, 1.0);
+          vec3 rainColor = vec3(0.75, 0.88, 1.0);
+          color.rgb = mix(color.rgb, rainColor, streak * 0.60);
+        }
+        out_FragColor = color;
+      }
+    `;
+    try {
+      const rainStage = new PostProcessStage({
+        name: 'czm_rainfall_fx',
+        fragmentShader: rainFragmentShader,
+      });
+      rainStage.enabled = false;
+      viewer.scene.postProcessStages.add(rainStage);
+      rainPostProcessRef.current = rainStage;
+    } catch (e) {
+      console.warn('Cesium PostProcessStage rain init:', e);
+    }
+
     const emitCameraBounds = () => {
       try {
         const rectangle = viewer.camera.computeViewRectangle();
+        const camHeight = viewer.camera.positionCartographic.height;
+        const isZoomed = camHeight < 500_000;
         if (rectangle) {
           const west = CesiumMath.toDegrees(rectangle.west);
           const south = CesiumMath.toDegrees(rectangle.south);
@@ -406,7 +516,28 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
             min_lat: Math.max(-85, Math.min(85, south)),
             max_lon: Math.max(-180, Math.min(180, east)),
             max_lat: Math.max(-85, Math.min(85, north)),
-          }, 1 + Math.log2(20_000_000 / Math.max(viewer.camera.positionCartographic.height, 1)));
+          }, 1 + Math.log2(20_000_000 / Math.max(camHeight, 1)));
+        }
+
+        // Live Rainfall Detection when zoomed into region / city (< 500 km altitude)
+        const centerLon = CesiumMath.toDegrees(viewer.camera.positionCartographic.longitude);
+        const centerLat = CesiumMath.toDegrees(viewer.camera.positionCartographic.latitude);
+        const now = Date.now();
+        if (isZoomed && now - lastRainQueryTimeRef.current > 3500) {
+          lastRainQueryTimeRef.current = now;
+          fetchLiveRainfall(centerLat, centerLon)
+            .then((data) => {
+              onRainfallUpdateRef.current?.(data, isZoomed);
+              if (rainPostProcessRef.current) {
+                // If live precipitation > 0.1 mm/h, automatically activate falling rain particles
+                if (data.precipitation_mm_h > 0.1) {
+                  rainPostProcessRef.current.enabled = true;
+                }
+              }
+            })
+            .catch(() => {});
+        } else if (!isZoomed && rainPostProcessRef.current && !rainFxEnabled) {
+          rainPostProcessRef.current.enabled = false;
         }
       } catch {
         // computeViewRectangle may return undefined if camera looking away from horizon
@@ -500,7 +631,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         } catch {}
       }
 
-      // 4. Atmospheric real-time wind particle advection (Open-Meteo model)
+      // 4. Atmospheric real-time wind particle advection (White Streamlines following planetary wind currents)
       const windList = windParticlesRef.current;
       for (let i = 0; i < windList.length; i++) {
         const p = windList[i];
@@ -508,16 +639,24 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         if (p.age >= p.maxAge) {
           p.age = 0;
           p.lon = (Math.random() - 0.5) * 360;
-          p.lat = (Math.random() - 0.5) * 140;
+          p.lat = (Math.random() - 0.5) * 150;
+          const vec = getAtmosphericWindVector(p.lat, p.lon);
+          p.headingDeg = vec.headingDeg;
+          p.speed = vec.speed;
         } else {
+          // Continuously track streamline vector
+          const vec = getAtmosphericWindVector(p.lat, p.lon);
+          p.headingDeg = vec.headingDeg;
           const rad = (p.headingDeg * Math.PI) / 180.0;
-          p.lon += Math.sin(rad) * p.speed * dt * 25.0;
-          p.lat += Math.cos(rad) * p.speed * dt * 25.0;
+          p.lon += Math.sin(rad) * p.speed * dt * 28.0;
+          p.lat += Math.cos(rad) * p.speed * dt * 28.0;
         }
         p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
         p.primitive.position = Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters);
-        const alpha = Math.max(0.12, 0.85 * (1.0 - p.age / p.maxAge));
-        p.primitive.color = Color.fromCssColorString('#a78bfa').withAlpha(alpha);
+        // Smooth sinusoidal fade-in / fade-out creating aerodynamic streamline flow
+        const lifecycleRatio = p.age / p.maxAge;
+        const alpha = Math.sin(lifecycleRatio * Math.PI) * 0.75;
+        p.primitive.color = Color.WHITE.withAlpha(Math.max(0.08, alpha));
       }
     };
 
@@ -554,6 +693,12 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         handlerRef.current.destroy();
         handlerRef.current = null;
       }
+      if (rainPostProcessRef.current && !viewer.isDestroyed()) {
+        try {
+          viewer.scene.postProcessStages.remove(rainPostProcessRef.current);
+        } catch {}
+        rainPostProcessRef.current = null;
+      }
       if (viewerRef.current === viewer) viewerRef.current = null;
       geojsonSourceRef.current = null;
       googleTilesetRef.current = null;
@@ -572,6 +717,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       viewer.destroy();
     };
   }, []);
+
+  // Sync 3D Falling Rain Post-Processing FX with State
+  useEffect(() => {
+    if (rainPostProcessRef.current) {
+      rainPostProcessRef.current.enabled = rainFxEnabled;
+    }
+  }, [rainFxEnabled]);
 
   // Update imagery provider on basemapMode changes
   useEffect(() => {
@@ -736,7 +888,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       radarImageryLayerRef.current = null;
     }
 
-    // Global Wind Flow (Open-Meteo Atmospheric Vector Model)
+    // Global Wind Flow (Parallel White Streamlines)
     const windEnabled = layerMap.get('wind-streamlines') ?? true;
     const windPoints = windPointsRef.current ?? viewer.scene.primitives.add(new PointPrimitiveCollection());
     windPointsRef.current = windPoints;
@@ -745,17 +897,16 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       windParticlesRef.current = [];
     } else if (windParticlesRef.current.length === 0) {
       const particles = [];
-      for (let i = 0; i < 280; i++) {
+      const particleCount = 1200;
+      for (let i = 0; i < particleCount; i++) {
         const lon = (Math.random() - 0.5) * 360;
-        const lat = (Math.random() - 0.5) * 140;
-        const altMeters = 2500 + Math.random() * 8500;
-        const isWesterly = Math.abs(lat) > 28 && Math.abs(lat) < 62;
-        const headingDeg = isWesterly ? 70 + Math.random() * 35 : 250 + Math.random() * 35;
-        const speed = 0.09 + Math.random() * 0.14;
+        const lat = (Math.random() - 0.5) * 150;
+        const altMeters = 2000 + Math.random() * 9000;
+        const { headingDeg, speed } = getAtmosphericWindVector(lat, lon);
         const pt = windPoints.add({
           position: Cartesian3.fromDegrees(lon, lat, altMeters),
-          color: Color.fromCssColorString('#a78bfa').withAlpha(0.75),
-          pixelSize: 3,
+          color: Color.WHITE.withAlpha(0.65),
+          pixelSize: 2.2,
         });
         particles.push({
           primitive: pt,
@@ -764,8 +915,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           altMeters,
           speed,
           headingDeg,
-          age: Math.random() * 4.0,
-          maxAge: 3.5 + Math.random() * 2.5,
+          age: Math.random() * 5.0,
+          maxAge: 4.0 + Math.random() * 3.0,
         });
       }
       windParticlesRef.current = particles;
@@ -818,14 +969,20 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
             (origin && origin !== 'united states' && (a.longitude > -125 && a.longitude < -68 && a.latitude > 25 && a.latitude < 49));
           (a.attributes as any).is_international = isInternational;
 
+          // 3-Part Division: Military (Amber), Commercial (Sky Blue), Private / Other (Emerald Mint)
+          const classification = attr.classification || (isInternational ? 'commercial' : 'private');
+          const acImage = isGround
+            ? AIRPLANE_ICON_GROUND
+            : classification === 'military'
+            ? AIRPLANE_ICON_MILITARY
+            : classification === 'commercial'
+            ? AIRPLANE_ICON_COMMERCIAL
+            : AIRPLANE_ICON_PRIVATE;
+
           const acBillboard = aircraftBillboards.add({
             id: { _worldosType: 'aircraft', _worldosData: a },
             position,
-            image: isGround
-              ? AIRPLANE_ICON_GROUND
-              : isInternational
-              ? AIRPLANE_ICON_AMBER
-              : AIRPLANE_ICON_BLUE,
+            image: acImage,
             rotation: CesiumMath.toRadians(360 - (a.attributes?.true_track || 0)),
             width: 24,
             height: 24,
@@ -868,6 +1025,48 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         });
         (ent as any)._worldosType = 'vessel';
         (ent as any)._worldosData = v;
+      }
+    }
+
+    // 2.2 Global Marine Deep-Water Seaports & Gateways
+    if (layerMap.get('maritime-vessels')) {
+      for (const port of GLOBAL_SEAPORTS) {
+        const position = Cartesian3.fromDegrees(port.longitude, port.latitude, 0);
+        const ent = viewer.entities.add({
+          position,
+          billboard: {
+            image: PORT_ICON_TEAL,
+            width: 24,
+            height: 24,
+            scaleByDistance: new NearFarScalar(1.5e2, 1.2, 8.0e6, 0.4),
+            distanceDisplayCondition: new DistanceDisplayCondition(100.0, 1.2e7),
+          },
+          label: {
+            text: `⚓ ${port.name}`,
+            font: '10px "JetBrains Mono", sans-serif',
+            fillColor: Color.fromCssColorString('#14b8a6'),
+            outlineColor: Color.BLACK,
+            outlineWidth: 2,
+            style: LabelStyle.FILL_AND_OUTLINE,
+            verticalOrigin: VerticalOrigin.BOTTOM,
+            pixelOffset: new Cartesian2(0, -16),
+            distanceDisplayCondition: new DistanceDisplayCondition(100.0, 3.5e6),
+          },
+        });
+        (ent as any)._worldosType = 'place';
+        (ent as any)._worldosData = {
+          entity_id: port.id,
+          canonical_name: port.name,
+          category: 'seaport',
+          latitude: port.latitude,
+          longitude: port.longitude,
+          attributes: {
+            country: port.country,
+            city: port.city,
+            code: port.code,
+            annual_teu: port.teu,
+          },
+        };
       }
     }
 

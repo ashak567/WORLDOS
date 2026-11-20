@@ -225,6 +225,7 @@ export type AircraftState = {
     remaining_distance_km?: number;
     total_distance_km?: number;
     is_international?: boolean;
+    classification?: 'military' | 'commercial' | 'private';
   };
 };
 
@@ -1459,6 +1460,94 @@ export async function fetchPlaceAerialView(address: string, lat = 0, lon = 0): P
   }
   return null;
 }
+
+export interface LiveRainfallData {
+  latitude: number;
+  longitude: number;
+  location_name?: string;
+  precipitation_mm_h: number;
+  precipitation_probability: number;
+  weather_code: number;
+  condition: string;
+  danger_level: 'NONE' | 'LOW' | 'MODERATE' | 'DANGER';
+  danger_label: string;
+  danger_color: string;
+}
+
+export async function fetchLiveRainfall(lat: number, lon: number): Promise<LiveRainfallData> {
+  const query = new URLSearchParams({ lat: lat.toFixed(4), lon: lon.toFixed(4) });
+  try {
+    const response = await fetch(`${apiBase}/weather/live?${query.toString()}`);
+    if (response.ok) {
+      return await response.json();
+    }
+  } catch (err) {
+    console.warn('Backend live rainfall API error, falling back to Open-Meteo direct:', err);
+  }
+
+  // Resilient direct fallback to Open-Meteo public forecast endpoint
+  try {
+    const res = await fetch(
+      `https://api.open-meteo.com/v1/forecast?latitude=${lat.toFixed(4)}&longitude=${lon.toFixed(4)}&current=precipitation,rain,showers,weather_code&hourly=precipitation_probability&forecast_hours=1`
+    );
+    if (res.ok) {
+      const data = await res.json();
+      const current = data.current || {};
+      const prec = Number(current.precipitation ?? current.rain ?? 0);
+      const prob = Number(data.hourly?.precipitation_probability?.[0] ?? (prec > 0 ? 85 : 10));
+      const code = Number(current.weather_code ?? 0);
+
+      let dangerLevel: 'NONE' | 'LOW' | 'MODERATE' | 'DANGER' = 'NONE';
+      let dangerLabel = 'CLEAR / NO RAINFALL';
+      let dangerColor = '#94a3b8';
+      let condition = 'Dry / Clear';
+
+      if (prec >= 8.0) {
+        dangerLevel = 'DANGER';
+        dangerLabel = 'DANGER: HEAVY RAINFALL / FLASH FLOOD';
+        dangerColor = '#ef4444';
+        condition = 'Heavy Torrential Rain';
+      } else if (prec >= 2.5) {
+        dangerLevel = 'MODERATE';
+        dangerLabel = 'MODERATE RAINFALL WATCH';
+        dangerColor = '#f59e0b';
+        condition = 'Moderate Steady Rain';
+      } else if (prec > 0) {
+        dangerLevel = 'LOW';
+        dangerLabel = 'LIGHT PRECIPITATION';
+        dangerColor = '#38bdf8';
+        condition = 'Light Showers / Drizzle';
+      }
+
+      return {
+        latitude: lat,
+        longitude: lon,
+        precipitation_mm_h: prec,
+        precipitation_probability: prob,
+        weather_code: code,
+        condition,
+        danger_level: dangerLevel,
+        danger_label: dangerLabel,
+        danger_color: dangerColor,
+      };
+    }
+  } catch (directErr) {
+    console.warn('Direct Open-Meteo fallback error:', directErr);
+  }
+
+  return {
+    latitude: lat,
+    longitude: lon,
+    precipitation_mm_h: 0,
+    precipitation_probability: 0,
+    weather_code: 0,
+    condition: 'Sensor Offline',
+    danger_level: 'NONE',
+    danger_label: 'NO RADAR ECHO',
+    danger_color: '#64748b',
+  };
+}
+
 
 
 

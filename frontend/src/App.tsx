@@ -34,6 +34,7 @@ import {
   PlaceItem,
   RoadRouteResponse,
   InboundFlightPlan,
+  LiveRainfallData,
 } from './api';
 import { BasemapMode, INITIAL_LAYERS, LayerDefinition, LayerId } from './types/layers';
 import { SelectedItemPayload } from './types/layers';
@@ -49,6 +50,7 @@ import { PlaceDiscoveryDeck } from './components/PlaceDiscoveryDeck';
 import { NavigationDeck } from './components/NavigationDeck';
 import { LiveNavigationHUD } from './components/LiveNavigationHUD';
 import { SearchHUD } from './components/SearchHUD';
+import { RainfallHUD } from './components/RainfallHUD';
 import { useNavigationTracking } from './useNavigationTracking';
 import './styles.css';
 
@@ -154,6 +156,15 @@ export default function App() {
     platform: 'reddit',
     query: '',
   });
+
+  // Live Rainfall Detection & Tactical 3D Weather FX
+  const [rainfallData, setRainfallData] = useState<LiveRainfallData | null>(null);
+  const [isRainZoomedIn, setIsRainZoomedIn] = useState<boolean>(false);
+  const [rainFxEnabled, setRainFxEnabled] = useState<boolean>(false);
+  const handleRainfallUpdate = useCallback((data: LiveRainfallData, isZoomed: boolean) => {
+    setRainfallData(data);
+    setIsRainZoomedIn(isZoomed);
+  }, []);
 
   // Live Google Maps-Style Navigation Tracking Engine
   const {
@@ -680,6 +691,8 @@ export default function App() {
           selectedItem={selectedItem}
           userNavState={navState}
           onUserPannedCamera={onUserPannedCamera}
+          rainFxEnabled={rainFxEnabled}
+          onRainfallUpdate={handleRainfallUpdate}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
@@ -819,6 +832,16 @@ export default function App() {
           onToggleSimulate={toggleSimulate}
           onChangeSimSpeed={setSimSpeed}
           onRecenter={recenterCamera}
+        />
+      )}
+
+      {/* Live Atmospheric Rainfall Tactical HUD */}
+      {rainfallData && (layers.find((l) => l.id === 'weather-radar')?.enabled || rainfallData.precipitation_mm_h > 0) && (
+        <RainfallHUD
+          rainfallData={rainfallData}
+          isZoomedIn={isRainZoomedIn}
+          rainFxEnabled={rainFxEnabled}
+          onToggleRainFx={() => setRainFxEnabled((prev) => !prev)}
         />
       )}
 

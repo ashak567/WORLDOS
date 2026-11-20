@@ -9,14 +9,26 @@ function createSvgDataUrl(svgContent: string, fillColorHex: string): string {
   return `data:image/svg+xml;utf8,${encodeURIComponent(fullSvg)}`;
 }
 
-// 1. Aircraft (Jet / Airplane)
-const AIRPLANE_PATH = `<path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>`;
-export const AIRPLANE_ICON_BLUE = createSvgDataUrl(AIRPLANE_PATH, '#38bdf8');
-export const AIRPLANE_ICON_AMBER = createSvgDataUrl(AIRPLANE_PATH, '#f59e0b');
-export const AIRPLANE_ICON_INTERNATIONAL = AIRPLANE_ICON_AMBER;
-export const AIRPLANE_ICON_DOMESTIC = AIRPLANE_ICON_BLUE;
-export const AIRPLANE_ICON_GROUND = createSvgDataUrl(AIRPLANE_PATH, '#94a3b8');
-export const AIRPLANE_ICON_WHITE = createSvgDataUrl(AIRPLANE_PATH, '#ffffff');
+// 1. Aircraft (Jet / Airplane) - Divided into Commercial, Military, and Private
+// Commercial Airliner (Swept wings, long passenger fuselage, twin turbines)
+const AIRPLANE_PATH_COMMERCIAL = `<path d="M21 16v-2l-8-5V3.5c0-.83-.67-1.5-1.5-1.5S10 2.67 10 3.5V9l-8 5v2l8-2.5V19l-2 1.5V22l3.5-1 3.5 1v-1.5L13 19v-5.5l8 2.5z"/>`;
+
+// Military Fighter / Interceptor (Aggressive delta-wing stealth fighter silhouette)
+const AIRPLANE_PATH_MILITARY = `<path d="M12 2L9 8l-6 5 2 1.5 5-1.5V17l-3 2v2l5-1.5 5 1.5v-2l-3-2v-4l5 1.5 2-1.5-6-5-3-6z"/>`;
+
+// Private & Executive Jet (Twin-engine business jet with tapered swept wings)
+const AIRPLANE_PATH_PRIVATE = `<path d="M12 3c-.55 0-1 .45-1 1v5.5L4 13v1.5l7-2v4l-2 1.5v1.5l3-.8 3 .8v-1.5L13 16.5v-4l7 2V13l-7-3.5V4c0-.55-.45-1-1-1z"/>`;
+
+export const AIRPLANE_ICON_COMMERCIAL = createSvgDataUrl(AIRPLANE_PATH_COMMERCIAL, '#38bdf8');
+export const AIRPLANE_ICON_MILITARY = createSvgDataUrl(AIRPLANE_PATH_MILITARY, '#f59e0b');
+export const AIRPLANE_ICON_PRIVATE = createSvgDataUrl(AIRPLANE_PATH_PRIVATE, '#10b981');
+
+export const AIRPLANE_ICON_BLUE = AIRPLANE_ICON_COMMERCIAL;
+export const AIRPLANE_ICON_AMBER = AIRPLANE_ICON_MILITARY;
+export const AIRPLANE_ICON_INTERNATIONAL = AIRPLANE_ICON_COMMERCIAL;
+export const AIRPLANE_ICON_DOMESTIC = AIRPLANE_ICON_PRIVATE;
+export const AIRPLANE_ICON_GROUND = createSvgDataUrl(AIRPLANE_PATH_COMMERCIAL, '#94a3b8');
+export const AIRPLANE_ICON_WHITE = createSvgDataUrl(AIRPLANE_PATH_COMMERCIAL, '#ffffff');
 
 // 2. Maritime Vessel (Ship)
 const VESSEL_PATH = `<path d="M12 2L4 9v7l8 6 8-6V9l-8-7zm0 3.5l5 4.38v4.24l-5 3.75-5-3.75V9.88l5-4.38z"/>`;

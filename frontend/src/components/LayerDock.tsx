@@ -221,6 +221,29 @@ export const LayerDock: React.FC<LayerDockProps> = ({
                       </span>
                     </div>
                   </div>
+                  {layer.id === 'aircraft-states' && layer.enabled && (
+                    <div style={{ display: 'flex', gap: '8px', padding: '2px 14px 6px', fontSize: '9px' }}>
+                      <span style={{ color: '#38bdf8', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#38bdf8', display: 'inline-block' }} /> Commercial
+                      </span>
+                      <span style={{ color: '#f59e0b', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#f59e0b', display: 'inline-block' }} /> Military
+                      </span>
+                      <span style={{ color: '#10b981', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#10b981', display: 'inline-block' }} /> Private
+                      </span>
+                    </div>
+                  )}
+                  {layer.id === 'maritime-vessels' && layer.enabled && (
+                    <div style={{ display: 'flex', gap: '10px', padding: '2px 14px 6px', fontSize: '9px' }}>
+                      <span style={{ color: '#06b6d4', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#06b6d4', display: 'inline-block' }} /> 180+ Vessels
+                      </span>
+                      <span style={{ color: '#14b8a6', display: 'flex', alignItems: 'center', gap: '3px' }}>
+                        <span style={{ width: 6, height: 6, borderRadius: '50%', background: '#14b8a6', display: 'inline-block' }} /> Global Seaports
+                      </span>
+                    </div>
+                  )}
                   {layer.feedStatus && (
                     <div style={{ fontSize: '9px', padding: '2px 14px 4px', color: layer.feedStatus === 'fresh' ? '#34d399' : layer.feedStatus === 'unavailable' ? '#f87171' : '#fbbf24' }}>
                       {layer.feedStatus === 'fresh' ? 'FRESH SOURCE DATA' : layer.feedStatus === 'stale' ? 'SOURCE DATA · STALE' : layer.feedStatus === 'partial' ? 'PARTIAL FEEDS' : 'FEED UNAVAILABLE'}
