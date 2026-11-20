@@ -8,21 +8,25 @@ interface CockpitHUDProps {
 }
 
 export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, onExitCockpit }) => {
-  const attr = aircraft.attributes || {};
-  const callsign = (attr.callsign || aircraft.canonical_name || aircraft.id || 'N/A').trim().toUpperCase();
-  const origin = attr.origin_country || 'International Airspace';
-  const dep = attr.departure_airport || (attr as any).origin || 'ORIGIN';
-  const dest = attr.destination_airport || (attr as any).destination || 'DEST';
+  const attr = aircraft?.attributes || {};
+  const callsign = String(attr.callsign || aircraft?.canonical_name || aircraft?.id || 'N/A').trim().toUpperCase();
+  const origin = String(attr.origin_country || 'International Airspace');
+  const dep = String(attr.departure_airport || (attr as any).origin || 'ORIGIN');
+  const dest = String(attr.destination_airport || (attr as any).destination || 'DEST');
 
   // Live flight telemetries
-  const altMeters = attr.geo_altitude || attr.baro_altitude || 10500;
+  const rawAlt = attr.geo_altitude || attr.baro_altitude || 10500;
+  const altMeters = Number.isFinite(Number(rawAlt)) ? Number(rawAlt) : 10500;
   const altFeet = Math.round(altMeters * 3.28084);
   const flightLevel = Math.round(altFeet / 100);
-  const velMps = attr.velocity || 240;
+  const rawVel = attr.velocity || 240;
+  const velMps = Number.isFinite(Number(rawVel)) ? Number(rawVel) : 240;
   const airspeedKnots = Math.round(velMps * 1.94384);
   const mach = (velMps / 295.0).toFixed(2);
-  const heading = Math.round(attr.true_track || 0);
-  const vertRateFpm = Math.round((attr.vertical_rate || 0) * 196.85);
+  const rawHeading = attr.true_track || 0;
+  const heading = Math.round(Number.isFinite(Number(rawHeading)) ? Number(rawHeading) : 0);
+  const rawVert = attr.vertical_rate || 0;
+  const vertRateFpm = Math.round((Number.isFinite(Number(rawVert)) ? Number(rawVert) : 0) * 196.85);
 
   // Compass tape headings (render 5 marks centered around current heading)
   const headingMarks = [-40, -20, 0, 20, 40].map((offset) => {

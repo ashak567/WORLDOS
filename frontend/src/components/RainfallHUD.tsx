@@ -1,5 +1,5 @@
 import React from 'react';
-import { CloudRain, AlertTriangle, Droplets, Eye, Activity } from 'lucide-react';
+import { CloudRain, AlertTriangle, Droplets, Eye, Activity, X } from 'lucide-react';
 import { LiveRainfallData } from '../api';
 
 interface RainfallHUDProps {
@@ -8,6 +8,7 @@ interface RainfallHUDProps {
   rainFxEnabled: boolean;
   onToggleRainFx: () => void;
   onDismiss?: () => void;
+  hasRightPanelOpen?: boolean;
 }
 
 export const RainfallHUD: React.FC<RainfallHUDProps> = ({
@@ -15,6 +16,8 @@ export const RainfallHUD: React.FC<RainfallHUDProps> = ({
   isZoomedIn,
   rainFxEnabled,
   onToggleRainFx,
+  onDismiss,
+  hasRightPanelOpen = false,
 }) => {
   if (!rainfallData) return null;
 
@@ -23,23 +26,39 @@ export const RainfallHUD: React.FC<RainfallHUDProps> = ({
   const isModerate = rainfallData.danger_level === 'MODERATE';
 
   return (
-    <div className={`rainfall-tactical-hud ${isDanger ? 'danger' : isModerate ? 'warning' : ''}`}>
+    <div
+      className={`rainfall-tactical-hud ${isDanger ? 'danger' : isModerate ? 'warning' : ''} ${
+        hasRightPanelOpen ? 'shifted-left' : ''
+      }`}
+    >
       <div className="rainfall-hud-header">
         <div className="rainfall-hud-title-group">
           <CloudRain size={14} color={rainfallData.danger_color} className={isRaining ? 'pulse-icon' : ''} />
           <span className="rainfall-hud-label">LIVE ATMOSPHERIC PRECIPITATION</span>
         </div>
-        <span
-          className="rainfall-danger-badge"
-          style={{
-            backgroundColor: `${rainfallData.danger_color}22`,
-            color: rainfallData.danger_color,
-            borderColor: `${rainfallData.danger_color}66`,
-          }}
-        >
-          {isDanger && <AlertTriangle size={10} className="mr-1" />}
-          {rainfallData.danger_label}
-        </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+          <span
+            className="rainfall-danger-badge"
+            style={{
+              backgroundColor: `${rainfallData.danger_color}22`,
+              color: rainfallData.danger_color,
+              borderColor: `${rainfallData.danger_color}66`,
+            }}
+          >
+            {isDanger && <AlertTriangle size={10} className="mr-1" />}
+            {rainfallData.danger_label}
+          </span>
+          {onDismiss && (
+            <button
+              className="rainfall-close-btn"
+              onClick={onDismiss}
+              title="Dismiss Precipitation Overlay"
+              aria-label="Close precipitation overlay"
+            >
+              <X size={13} />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="rainfall-hud-body">

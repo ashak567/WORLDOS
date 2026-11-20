@@ -287,6 +287,47 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const cockpitAircraftRef = useRef<AircraftState | null>(null);
   useEffect(() => {
     cockpitAircraftRef.current = cockpitAircraft;
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    if (cockpitAircraft) {
+      const ac = cockpitAircraft;
+      const kine = aircraftKinematicsRef.current.find(
+        (k) => k.billboard?.id?._worldosData?.id === ac.id || k.billboard?.id?._worldosData?.canonical_name === ac.canonical_name
+      );
+      const lon = kine ? kine.lon : (ac.longitude ?? 0);
+      const lat = kine ? kine.lat : (ac.latitude ?? 0);
+      if (Number.isFinite(lon) && Number.isFinite(lat)) {
+        const rawAlt = kine ? kine.altMeters : (ac.attributes?.geo_altitude || ac.attributes?.baro_altitude || 10500);
+        const alt = Math.max(200, Math.min(18000, Number.isFinite(rawAlt) ? rawAlt : 10500));
+        const track = Number.isFinite(kine?.trackDeg) ? kine!.trackDeg : (ac.attributes?.true_track || 0);
+
+        // Temporarily lock camera controller to prevent mouse inputs from desyncing cockpit view
+        viewer.scene.screenSpaceCameraController.enableRotate = false;
+        viewer.scene.screenSpaceCameraController.enableTranslate = false;
+        viewer.scene.screenSpaceCameraController.enableZoom = false;
+        viewer.scene.screenSpaceCameraController.enableTilt = false;
+        viewer.scene.screenSpaceCameraController.enableLook = false;
+
+        // Smooth transition into cockpit pilot perspective
+        viewer.camera.flyTo({
+          destination: Cartesian3.fromDegrees(lon, lat, alt + 3.0),
+          orientation: {
+            heading: CesiumMath.toRadians(track),
+            pitch: CesiumMath.toRadians(-3.5),
+            roll: 0.0,
+          },
+          duration: 1.2,
+        });
+      }
+    } else {
+      // Re-enable camera controls when exiting cockpit view
+      viewer.scene.screenSpaceCameraController.enableRotate = true;
+      viewer.scene.screenSpaceCameraController.enableTranslate = true;
+      viewer.scene.screenSpaceCameraController.enableZoom = true;
+      viewer.scene.screenSpaceCameraController.enableTilt = true;
+      viewer.scene.screenSpaceCameraController.enableLook = true;
+    }
   }, [cockpitAircraft]);
   const onRainfallUpdateRef = useRef(onRainfallUpdate);
   useEffect(() => {
@@ -530,6 +571,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     }
 
     const emitCameraBounds = () => {
+      // Guard: do not compute or emit bounds if in Cockpit Mode or following navigation
+      if (cockpitAircraftRef.current) return;
+      if (isCameraLockedToNavRef.current) return;
+
       try {
         const rectangle = viewer.camera.computeViewRectangle();
         const camHeight = viewer.camera.positionCartographic.height;
@@ -632,25 +677,32 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
 
       // Live First-Person Cockpit Camera Locking (Pilot View at 60 FPS)
       if (cockpitAircraftRef.current) {
-        const ac = cockpitAircraftRef.current;
-        const kine = aircraftKinematicsRef.current.find(
-          (k) => k.billboard?.id?._worldosData?.id === ac.id || k.billboard?.id?._worldosData?.canonical_name === ac.canonical_name
-        );
-        const lon = kine ? kine.lon : (ac.longitude ?? 0);
-        const lat = kine ? kine.lat : (ac.latitude ?? 0);
-        const alt = kine ? kine.altMeters : (ac.attributes?.geo_altitude || ac.attributes?.baro_altitude || 10500);
-        const track = kine ? kine.trackDeg : (ac.attributes?.true_track || 0);
+        try {
+          const ac = cockpitAircraftRef.current;
+          const kine = aircraftKinematicsRef.current.find(
+            (k) => k.billboard?.id?._worldosData?.id === ac.id || k.billboard?.id?._worldosData?.canonical_name === ac.canonical_name
+          );
+          const lon = kine ? kine.lon : (ac.longitude ?? 0);
+          const lat = kine ? kine.lat : (ac.latitude ?? 0);
+          if (Number.isFinite(lon) && Number.isFinite(lat)) {
+            const rawAlt = kine ? kine.altMeters : (ac.attributes?.geo_altitude || ac.attributes?.baro_altitude || 10500);
+            const alt = Math.max(200, Math.min(18000, Number.isFinite(rawAlt) ? rawAlt : 10500));
+            const track = Number.isFinite(kine?.trackDeg) ? kine!.trackDeg : (ac.attributes?.true_track || 0);
 
-        // Position camera inside the aircraft cockpit looking forward over the horizon
-        const eyePos = Cartesian3.fromDegrees(lon, lat, alt + 3.0);
-        viewer.camera.setView({
-          destination: eyePos,
-          orientation: {
-            heading: CesiumMath.toRadians(track),
-            pitch: CesiumMath.toRadians(-3.5),
-            roll: 0.0,
-          },
-        });
+            // Position camera inside the aircraft cockpit looking forward over the horizon
+            const eyePos = Cartesian3.fromDegrees(lon, lat, alt + 3.0);
+            viewer.camera.setView({
+              destination: eyePos,
+              orientation: {
+                heading: CesiumMath.toRadians(track),
+                pitch: CesiumMath.toRadians(-3.5),
+                roll: 0.0,
+              },
+            });
+          }
+        } catch (e) {
+          console.warn('Cockpit camera tracking:', e);
+        }
       }
 
       // 2. Advance active satellites smoothly along their Keplerian orbital velocity in space

@@ -162,6 +162,7 @@ export default function App() {
   const [rainfallData, setRainfallData] = useState<LiveRainfallData | null>(null);
   const [isRainZoomedIn, setIsRainZoomedIn] = useState<boolean>(false);
   const [rainFxEnabled, setRainFxEnabled] = useState<boolean>(false);
+  const [isRainHudDismissed, setIsRainHudDismissed] = useState<boolean>(false);
   const handleRainfallUpdate = useCallback((data: LiveRainfallData, isZoomed: boolean) => {
     setRainfallData(data);
     setIsRainZoomedIn(isZoomed);
@@ -169,15 +170,26 @@ export default function App() {
 
   // First-Person Live Aircraft Cockpit Mode
   const [cockpitAircraft, setCockpitAircraft] = useState<AircraftState | null>(null);
+  const handleExitCockpit = useCallback(() => {
+    if (cockpitAircraft) {
+      const lon = cockpitAircraft.longitude;
+      const lat = cockpitAircraft.latitude;
+      if (typeof lon === 'number' && typeof lat === 'number' && Number.isFinite(lon) && Number.isFinite(lat)) {
+        setTargetLocation({ center: [lon, lat], zoom: 7 });
+      }
+    }
+    setCockpitAircraft(null);
+  }, [cockpitAircraft]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape' && cockpitAircraft) {
-        setCockpitAircraft(null);
+        handleExitCockpit();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [cockpitAircraft]);
+  }, [cockpitAircraft, handleExitCockpit]);
 
   // Live Google Maps-Style Navigation Tracking Engine
   const {
@@ -234,9 +246,16 @@ export default function App() {
   // Toggle layer visibility
   const handleToggleLayer = useCallback((id: LayerId) => {
     setLayers((prev) =>
-      prev.map((layer) =>
-        layer.id === id ? { ...layer, enabled: !layer.enabled } : layer
-      )
+      prev.map((layer) => {
+        if (layer.id === id) {
+          const next = !layer.enabled;
+          if (id === 'weather-radar' && next) {
+            setIsRainHudDismissed(false);
+          }
+          return { ...layer, enabled: next };
+        }
+        return layer;
+      })
     );
   }, []);
 
@@ -707,7 +726,7 @@ export default function App() {
           rainFxEnabled={rainFxEnabled}
           onRainfallUpdate={handleRainfallUpdate}
           cockpitAircraft={cockpitAircraft}
-          onExitCockpit={() => setCockpitAircraft(null)}
+          onExitCockpit={handleExitCockpit}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
@@ -855,12 +874,14 @@ export default function App() {
       )}
 
       {/* Live Atmospheric Rainfall Tactical HUD */}
-      {rainfallData && (layers.find((l) => l.id === 'weather-radar')?.enabled || rainfallData.precipitation_mm_h > 0) && (
+      {rainfallData && !isRainHudDismissed && (layers.find((l) => l.id === 'weather-radar')?.enabled || rainfallData.precipitation_mm_h > 0) && (
         <RainfallHUD
           rainfallData={rainfallData}
           isZoomedIn={isRainZoomedIn}
           rainFxEnabled={rainFxEnabled}
           onToggleRainFx={() => setRainFxEnabled((prev) => !prev)}
+          onDismiss={() => setIsRainHudDismissed(true)}
+          hasRightPanelOpen={Boolean(selectedItem || isAssistantOpen || isPlacesDeckOpen || isNavigationOpen)}
         />
       )}
 
@@ -868,7 +889,7 @@ export default function App() {
       {cockpitAircraft && (
         <CockpitHUD
           aircraft={cockpitAircraft}
-          onExitCockpit={() => setCockpitAircraft(null)}
+          onExitCockpit={handleExitCockpit}
         />
       )}
 
