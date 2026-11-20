@@ -610,8 +610,14 @@ def fetch_aircraft_states(
     mgr = token_manager or get_token_manager()
     token = mgr.get_token()
 
-    # Always query global /states/all so we populate the in-memory cache for all viewport queries
-    locator = OPENSKY_STATES_URL
+    # Build request locator with bounding box query params when provided
+    if has_bbox:
+        locator = (
+            f"{OPENSKY_STATES_URL}?lamin={lamin:.4f}&lomin={lomin:.4f}&lamax={lamax:.4f}&lomax={lomax:.4f}"
+        )
+    else:
+        locator = OPENSKY_STATES_URL
+
     req = Request(
         locator,
         headers={
