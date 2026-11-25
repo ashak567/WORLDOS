@@ -15,6 +15,9 @@ import {
   Star,
   Sparkles,
   Navigation,
+  ExternalLink,
+  CheckCircle2,
+  Search,
 } from 'lucide-react';
 import {
   AssistantAction,
@@ -22,6 +25,8 @@ import {
   fetchAssistantMapContext,
   getAssistantSession,
   fetchTravelPlan,
+  fetchIntelligenceSearch,
+  IntelligenceSearchResponse,
   TravelPlanResponse,
 } from '../api';
 
@@ -36,6 +41,14 @@ interface AssistantPanelProps {
 
 type TravelPreferences = NonNullable<AssistantContext['travel_preferences']>;
 type AssistantMessage = { role: 'user' | 'ai'; message: string };
+type ToolExecutionProof = {
+  id: string;
+  toolName: string;
+  query: string;
+  timestamp: string;
+  source: string;
+  urls: Array<{ title: string; url: string }>;
+};
 const PREFERENCES_KEY = 'worldos-assistant-preferences-v1';
 const SAFE_LAYER_IDS = new Set([
   'country-boundaries', 'population-observations', 'aircraft-states', 'maritime-vessels',
@@ -208,6 +221,8 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   const [activeTravelPlan, setActiveTravelPlan] = useState<TravelPlanResponse | null>(null);
   const [activeDayIndex, setActiveDayIndex] = useState<number>(0);
   const [loadingPlan, setLoadingPlan] = useState<boolean>(false);
+  const [liveWebResults, setLiveWebResults] = useState<IntelligenceSearchResponse | null>(null);
+  const [toolExecutions, setToolExecutions] = useState<ToolExecutionProof[]>([]);
 
   const transcriptRef = useRef<HTMLDivElement>(null);
   const contextRef = useRef(context);
@@ -217,6 +232,63 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   contextRef.current = context;
   preferencesRef.current = preferences;
   onActionRef.current = onAction;
+
+  const recordToolExecution = useCallback(
+    (toolName: string, query: string, source: string, urls: Array<{ title: string; url: string }>) => {
+      const cleanedUrls = urls
+        .filter((item) => Boolean(item?.url))
+        .slice(0, 6);
+      setToolExecutions((prev) => [
+        {
+          id: `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+          toolName,
+          query,
+          timestamp: new Date().toLocaleTimeString(),
+          source,
+          urls: cleanedUrls,
+        },
+        ...prev.slice(0, 5),
+      ]);
+    },
+    []
+  );
+
+  const runLiveWebSearch = useCallback(
+    async (query: string, platform: string = 'auto', limit: number = 5): Promise<IntelligenceSearchResponse> => {
+      setMessage(`Searching live web intelligence for "${query}"...`);
+      onSearchStatusChange?.({ active: true, platform, query });
+      try {
+        const res = await fetchIntelligenceSearch(query, platform, limit);
+        setLiveWebResults(res);
+        const urls = (res.results || []).map((r) => ({ title: r.title || r.url, url: r.url }));
+        recordToolExecution('search_live_web', query, `Exa / ${res.platform || platform}`, urls);
+        if (urls.length > 0) {
+          setMessages((prev) => [
+            ...prev.slice(-29),
+            {
+              role: 'ai',
+              message: `Live web search for "${query}" returned ${urls.length} sources:\n${res.results
+                .slice(0, 3)
+                .map((r) => `- ${r.title} (${r.url})`)
+                .join('\n')}`,
+            },
+          ]);
+          setMessage(`Retrieved ${urls.length} live web results with source URLs.`);
+        } else {
+          setMessage(`Live web search completed for "${query}" (no external hits returned).`);
+        }
+        return res;
+      } catch (err) {
+        setMessage(`Web search failed: ${err instanceof Error ? err.message : 'Unknown error'}`);
+        throw err;
+      } finally {
+        window.setTimeout(() => {
+          onSearchStatusChange?.({ active: false, platform, query: '' });
+        }, 3000);
+      }
+    },
+    [onSearchStatusChange, recordToolExecution]
+  );
 
   const fetchPlanForDestination = useCallback(async (destName: string) => {
     setLoadingPlan(true);
@@ -231,6 +303,10 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
       );
       setActiveTravelPlan(plan);
       setActiveDayIndex(0);
+      const urls = [...(plan.web_intelligence || []), ...(plan.social_intelligence || [])]
+        .filter((item) => Boolean(item?.url))
+        .map((item) => ({ title: item.title || item.url, url: item.url }));
+      recordToolExecution('search_internet_travel_intelligence', destName, plan.source || 'WORLDOS Travel Intelligence', urls);
       if (plan.center && plan.center.length === 2) {
         onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
       }
@@ -252,7 +328,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
     } finally {
       setLoadingPlan(false);
     }
-  }, [onSearchStatusChange]);
+  }, [onSearchStatusChange, recordToolExecution]);
 
   const handleMessage = useCallback((item: AssistantMessage) => {
     if (!item.message.trim()) return;
@@ -299,8 +375,10 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
       }
 
       // Check for world location navigation commands
+      let matchedLocation = false;
       for (const loc of POPULAR_LOCATIONS) {
         if (loc.keywords.some((k) => matchesKeyword(lower, k))) {
+          matchedLocation = true;
           onActionRef.current({
             type: 'fly_to',
             center: loc.center,
@@ -319,14 +397,37 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
       }
 
       // Check for standalone layer toggle keywords
+      let matchedLayerCommand = false;
       if (lower.includes('satellite') || lower.includes('orbit')) {
+        matchedLayerCommand = true;
         onActionRef.current({ type: 'set_layer_visibility', layer_id: 'space-satellites', visible: true });
       }
       if (lower.includes('vessel') || lower.includes('ship') || lower.includes('boat') || lower.includes('maritime')) {
+        matchedLayerCommand = true;
         onActionRef.current({ type: 'set_layer_visibility', layer_id: 'maritime-vessels', visible: true });
       }
+
+      // In typed text mode (when voice isn't connected), route general web/news/research questions
+      // through live web search so the user sees verified tool output and clickable URLs.
+      const isLiveWebQuery =
+        lower.includes('search') ||
+        lower.includes('web') ||
+        lower.includes('internet') ||
+        lower.includes('news') ||
+        lower.includes('weather') ||
+        lower.includes('latest') ||
+        lower.includes('what') ||
+        lower.includes('who') ||
+        lower.includes('why') ||
+        lower.includes('how') ||
+        lower.includes('?') ||
+        (!matchedLocation && !matchedLayerCommand && item.message.trim().split(/\s+/).length >= 3);
+
+      if (isLiveWebQuery && conversationRef.current?.status !== 'connected') {
+        void runLiveWebSearch(item.message.trim(), 'auto', 5).catch(() => {});
+      }
     }
-  }, [fetchPlanForDestination]);
+  }, [fetchPlanForDestination, runLiveWebSearch]);
 
   const conversation = useConversation({
     onMessage: ({ message: text, role, source }) => {
@@ -356,6 +457,18 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
             ...(Object.keys(preferencesRef.current).length ? { travel_preferences: preferencesRef.current } : {}),
           });
           setEvidence(data.evidence || []);
+          const intelUrls: Array<{ title: string; url: string }> = [
+            ...((data as any).travel_intelligence?.web_intelligence || []),
+            ...((data as any).travel_intelligence?.social_intelligence || []),
+          ]
+            .filter((item: any) => Boolean(item?.url))
+            .map((item: any) => ({ title: item.title || item.url, url: item.url }));
+          recordToolExecution(
+            'get_worldos_map_context',
+            (data as any).travel_intelligence?.destination || 'Current Viewport',
+            'WORLDOS Map Context + Live Travel Intel',
+            intelUrls
+          );
           return JSON.stringify(data);
         } catch (error) {
           return JSON.stringify({ error: error instanceof Error ? error.message : 'Map context unavailable' });
@@ -445,6 +558,15 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
           );
           setActiveTravelPlan(plan);
           setActiveDayIndex(0);
+          const sourceUrls = [...(plan.web_intelligence || []), ...(plan.social_intelligence || [])]
+            .filter((item) => Boolean(item?.url))
+            .map((item) => ({ title: item.title || item.url, url: item.url }));
+          recordToolExecution(
+            'search_internet_travel_intelligence',
+            args.location,
+            plan.source || 'WORLDOS Travel Intelligence',
+            sourceUrls
+          );
           if (plan.center && plan.center.length === 2) {
             onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
           }
@@ -457,7 +579,11 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
             famous_attractions: plan.famous_attractions,
             local_food_recommendations: plan.local_food_recommendations,
             pro_tips: plan.pro_tips,
-            instruction: 'Present this concrete travel plan directly to the user. Do NOT ask more questions.',
+            web_intelligence: plan.web_intelligence || [],
+            social_intelligence: plan.social_intelligence || [],
+            source: plan.source,
+            source_urls: sourceUrls.map((item) => item.url),
+            instruction: 'Present this concrete travel plan and cite the verified source URLs directly. Do NOT ask more questions.',
           });
         } catch (err) {
           return JSON.stringify({ error: err instanceof Error ? err.message : 'Travel search failed' });
@@ -473,16 +599,45 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
           );
           setActiveTravelPlan(plan);
           setActiveDayIndex(0);
+          const sourceUrls = [...(plan.web_intelligence || []), ...(plan.social_intelligence || [])]
+            .filter((item) => Boolean(item?.url))
+            .map((item) => ({ title: item.title || item.url, url: item.url }));
+          recordToolExecution(
+            'create_travel_itinerary',
+            args.destination,
+            plan.source || 'WORLDOS Travel Intelligence',
+            sourceUrls
+          );
           if (plan.center && plan.center.length === 2) {
             onActionRef.current({ type: 'fly_to', center: plan.center, zoom: plan.zoom || 13 });
           }
           return JSON.stringify({
             success: true,
             spoken_summary: plan.spoken_summary,
+            source: plan.source,
+            source_urls: sourceUrls.map((item) => item.url),
             plan,
           });
         } catch (err) {
           return JSON.stringify({ error: err instanceof Error ? err.message : 'Itinerary creation failed' });
+        }
+      },
+      search_live_web: async (args: { query: string; platform?: string; limit?: number }) => {
+        if (!args?.query?.trim()) {
+          return JSON.stringify({ error: 'Search query is required' });
+        }
+        try {
+          const res = await runLiveWebSearch(args.query.trim(), args.platform || 'auto', args.limit || 5);
+          return JSON.stringify({
+            status: res.status,
+            query: res.query,
+            platform: res.platform,
+            count: res.count,
+            results: res.results,
+            source_urls: (res.results || []).map((r) => r.url).filter(Boolean),
+          });
+        } catch (err) {
+          return JSON.stringify({ error: err instanceof Error ? err.message : 'Live web search failed' });
         }
       },
     },
@@ -757,14 +912,78 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
           </div>
         )}
 
+        {liveWebResults && liveWebResults.results.length > 0 && (
+          <div className="assistant-web-results" data-testid="assistant-live-web-results">
+            <div className="assistant-tool-proof-header">
+              <span><Search size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />LIVE WEB RESULTS: {liveWebResults.query}</span>
+              <span>{liveWebResults.count} hits</span>
+            </div>
+            {liveWebResults.results.slice(0, 5).map((item, idx) => (
+              <div className="assistant-tool-proof-item" key={`${item.url}-${idx}`}>
+                <a
+                  href={item.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="assistant-tool-url-link"
+                >
+                  <ExternalLink size={10} />
+                  <span>{item.title || item.url}</span>
+                </a>
+                {item.snippet && (
+                  <p style={{ margin: '2px 0 0 0', fontSize: '10px', color: '#94a3b8' }}>
+                    {item.snippet.length > 180 ? `${item.snippet.slice(0, 180)}…` : item.snippet}
+                  </p>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {toolExecutions.length > 0 && (
+          <div className="assistant-tool-proof" data-testid="assistant-tool-proof">
+            <div className="assistant-tool-proof-header">
+              <span><CheckCircle2 size={11} style={{ display: 'inline', marginRight: 4, verticalAlign: 'middle' }} />VERIFIED LIVE TOOL CALLS</span>
+              <span>{toolExecutions.length} recent</span>
+            </div>
+            {toolExecutions.map((proof) => (
+              <div className="assistant-tool-proof-item" key={proof.id}>
+                <div>
+                  <strong>{proof.toolName}</strong> · {proof.query} · <time>{proof.timestamp}</time>
+                </div>
+                <div style={{ fontSize: '10px', color: '#94a3b8' }}>{proof.source}</div>
+                {proof.urls.length > 0 && (
+                  <div className="assistant-tool-urls">
+                    {proof.urls.map((link, idx) => (
+                      <a
+                        key={`${proof.id}-url-${idx}`}
+                        href={link.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="assistant-tool-url-link"
+                      >
+                        <ExternalLink size={9} />
+                        <span>{link.url}</span>
+                      </a>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
+
         <div className="assistant-transcript-section">
           <div className="assistant-transcript-bar">
             <span className="assistant-transcript-title">TRANSCRIPT</span>
-            {messages.length > 0 && (
+            {(messages.length > 0 || toolExecutions.length > 0 || liveWebResults) && (
               <button
                 className="assistant-clear-button"
                 type="button"
-                onClick={() => setMessages([])}
+                onClick={() => {
+                  setMessages([]);
+                  setToolExecutions([]);
+                  setLiveWebResults(null);
+                }}
                 title="Clear transcript history"
               >
                 <Trash2 size={12} /> Clear

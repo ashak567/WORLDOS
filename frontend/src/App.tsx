@@ -52,6 +52,7 @@ import { LiveNavigationHUD } from './components/LiveNavigationHUD';
 import { SearchHUD } from './components/SearchHUD';
 import { RainfallHUD } from './components/RainfallHUD';
 import { CockpitHUD } from './components/CockpitHUD';
+import { SatelliteClouds, CloudBrightnessEstimate, CloudFrameInfo } from './components/SatelliteClouds';
 import { useNavigationTracking } from './useNavigationTracking';
 import './styles.css';
 
@@ -143,7 +144,10 @@ export default function App() {
   const [isRoutePlannerOpen, setIsRoutePlannerOpen] = useState(false);
   const [isAssistantOpen, setIsAssistantOpen] = useState(false);
   const [activeRoute, setActiveRoute] = useState<RoutePlanResponse | null>(null);
-  const [isDockCollapsed, setIsDockCollapsed] = useState(false);
+  const [isDockCollapsed, setIsDockCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false;
+    return /Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const [isPlacesDeckOpen, setIsPlacesDeckOpen] = useState(false);
   const [isNavigationOpen, setIsNavigationOpen] = useState(false);
@@ -163,6 +167,9 @@ export default function App() {
   const [isRainZoomedIn, setIsRainZoomedIn] = useState<boolean>(false);
   const [rainFxEnabled, setRainFxEnabled] = useState<boolean>(false);
   const [isRainHudDismissed, setIsRainHudDismissed] = useState<boolean>(false);
+  const [activeCloudFrame, setActiveCloudFrame] = useState<CloudFrameInfo | null>(null);
+  const [cloudTileErrorCount, setCloudTileErrorCount] = useState<number>(0);
+  const [cockpitCloudEstimate, setCockpitCloudEstimate] = useState<CloudBrightnessEstimate | null>(null);
   const handleRainfallUpdate = useCallback((data: LiveRainfallData, isZoomed: boolean) => {
     setRainfallData(data);
     setIsRainZoomedIn(isZoomed);
@@ -663,8 +670,8 @@ export default function App() {
 
   return (
     <div className="worldos-app">
-      {/* Background Tactical Grid */}
-      <div className="tactical-grid-bg" />
+      {/* Background Tactical Grid (Hidden during Cockpit Mode for clean canopy view) */}
+      {!cockpitAircraft && <div className="tactical-grid-bg" />}
 
       {/* Mission Control HUD Bar (Hidden during Cockpit Mode for clean canopy view) */}
       {!cockpitAircraft && (
@@ -729,12 +736,24 @@ export default function App() {
           onUserPannedCamera={onUserPannedCamera}
           rainFxEnabled={rainFxEnabled}
           onRainfallUpdate={handleRainfallUpdate}
+          cloudFrame={activeCloudFrame}
+          onCloudTileErrorChange={setCloudTileErrorCount}
+          onCockpitCloudEstimate={setCockpitCloudEstimate}
           cockpitAircraft={cockpitAircraft}
           onExitCockpit={handleExitCockpit}
           onViewportChange={handleViewportChange}
           onSelectItem={handleSelectItem}
         />
       </main>
+
+      {/* Hourly SSEC RealEarth Infrared Satellite Clouds HUD */}
+      <SatelliteClouds
+        enabled={Boolean(layers.find((l) => l.id === 'live-clouds')?.enabled)}
+        inCockpit={Boolean(cockpitAircraft)}
+        tileErrorCount={cloudTileErrorCount}
+        activeFrame={activeCloudFrame}
+        onActiveFrameChange={setActiveCloudFrame}
+      />
 
       {/* Floating Tactical Layer Dock (Hidden during Cockpit Mode) */}
       {!cockpitAircraft && (
@@ -905,6 +924,7 @@ export default function App() {
         <CockpitHUD
           aircraft={cockpitAircraft}
           allAircraft={aircraft}
+          cloudEstimate={cockpitCloudEstimate}
           onExitCockpit={handleExitCockpit}
         />
       )}

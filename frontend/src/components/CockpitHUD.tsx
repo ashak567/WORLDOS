@@ -1,10 +1,12 @@
 import React, { useState, useMemo } from 'react';
 import { AircraftState } from '../api';
-import { EyeOff, Gauge, ArrowUpRight, Plane, Radio, AlertTriangle, ShieldCheck } from 'lucide-react';
+import { EyeOff, Gauge, ArrowUpRight, Plane, Radio, AlertTriangle, ShieldCheck, Cloud } from 'lucide-react';
+import { CloudBrightnessEstimate } from './SatelliteClouds';
 
 interface CockpitHUDProps {
   aircraft: AircraftState;
   allAircraft?: AircraftState[];
+  cloudEstimate?: CloudBrightnessEstimate | null;
   onExitCockpit: () => void;
 }
 
@@ -28,7 +30,7 @@ function getRelativeBearing(lat1: number, lon1: number, lat2: number, lon2: numb
   return (brng - currentHeading + 360.0) % 360.0;
 }
 
-export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, allAircraft = [], onExitCockpit }) => {
+export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, allAircraft = [], cloudEstimate = null, onExitCockpit }) => {
   const [radarRangeKm, setRadarRangeKm] = useState<number>(5); // default tactical proximity range: 5 km (or 1.5 km / 15 km)
   const attr = aircraft?.attributes || {};
   const callsign = String(attr.callsign || aircraft?.canonical_name || aircraft?.id || 'N/A').trim().toUpperCase();
@@ -240,6 +242,20 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, allAircraft = 
           <span className="route-arrow">⟶</span>
           <span className="route-leg">{dest}</span>
         </div>
+
+        {cloudEstimate && (
+          <div
+            className="cockpit-cloud-estimate-badge"
+            title="3D cloud layers rendered in cockpit view are visual height/density estimates derived from SSEC RealEarth satellite IR brightness."
+          >
+            <Cloud size={12} color="#e2e8f0" />
+            <span>
+              {cloudEstimate.hasClouds
+                ? `3D clouds: visual estimate from satellite IR brightness (~${Math.round(cloudEstimate.estimatedBaseMeters)}–${Math.round(cloudEstimate.estimatedTopMeters)}m)`
+                : '3D clouds: clear IR estimate from satellite brightness'}
+            </span>
+          </div>
+        )}
 
         {/* TCAS Hazard Alert Banner */}
         {hasDangerAlert && (

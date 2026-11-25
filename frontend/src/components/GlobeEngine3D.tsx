@@ -1,5 +1,6 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
+  ArcGISTiledElevationTerrainProvider,
   Cartesian2,
   Cartesian3,
   Billboard,
@@ -8,6 +9,7 @@ import {
   Cesium3DTileset,
   Color,
   CustomDataSource,
+  GeographicTilingScheme,
   JulianDate,
   Simon1994PlanetaryPositions,
   ConstantProperty,
@@ -16,27 +18,25 @@ import {
   GoogleMaps,
   HeadingPitchRange,
   Ion,
-  IonGeocodeProviderType,
   LabelStyle,
   Math as CesiumMath,
   Matrix4,
   NearFarScalar,
+  PerspectiveFrustum,
   PolylineGlowMaterialProperty,
   PolylineCollection,
   Material,
-  CloudCollection,
   ScreenSpaceEventHandler,
   ScreenSpaceEventType,
   UrlTemplateImageryProvider,
   ImageryLayer,
-  PointPrimitiveCollection,
-  PointPrimitive,
   VerticalOrigin,
   Viewer,
   createGooglePhotorealistic3DTileset,
   createWorldTerrainAsync,
   defined,
   PostProcessStage,
+  TerrainProvider,
 } from 'cesium';
 import 'cesium/Build/Cesium/Widgets/widgets.css';
 import {
@@ -94,11 +94,54 @@ import {
   fetchLiveRainfall,
 } from '../api';
 import { BasemapMode, LayerDefinition, SelectedItemPayload } from '../types/layers';
+import {
+  CloudFrameInfo,
+  CloudBrightnessEstimate,
+  sampleSatelliteCloudBrightness,
+} from './SatelliteClouds';
 
 // Cesium asset base path configuration
 (window as any).CESIUM_BASE_URL = '/cesium/';
 Ion.defaultAccessToken = import.meta.env.VITE_CESIUM_ION_TOKEN ?? '';
 GoogleMaps.defaultApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY ?? '';
+
+function detectWebglSupport(): { supported: boolean; hasWebgl2: boolean; hasWebgl1: boolean } {
+  if (typeof document === 'undefined') {
+    return { supported: false, hasWebgl2: false, hasWebgl1: false };
+  }
+  try {
+    const canvas = document.createElement('canvas');
+    const gl2 = canvas.getContext('webgl2', { failIfMajorPerformanceCaveat: false });
+    if (gl2) return { supported: true, hasWebgl2: true, hasWebgl1: true };
+    const gl1 =
+      canvas.getContext('webgl', { failIfMajorPerformanceCaveat: false }) ||
+      canvas.getContext('experimental-webgl', { failIfMajorPerformanceCaveat: false });
+    if (gl1) return { supported: true, hasWebgl2: false, hasWebgl1: true };
+  } catch {
+    // WebGL blocked or unavailable
+  }
+  return { supported: false, hasWebgl2: false, hasWebgl1: false };
+}
+
+function createBundledEarthProvider(): UrlTemplateImageryProvider {
+  return new UrlTemplateImageryProvider({
+    url: '/cesium/Assets/Textures/NaturalEarthII/{z}/{x}/{reverseY}.jpg',
+    tilingScheme: new GeographicTilingScheme(),
+    maximumLevel: 2,
+    tileWidth: 256,
+    tileHeight: 256,
+    credit: 'Natural Earth II (Offline Fallback)',
+  });
+}
+
+function computeSolarNoonJulianDate(lonDeg: number): JulianDate {
+  const now = new Date();
+  const utcHoursAtNoon = ((12 - lonDeg / 15) % 24 + 24) % 24;
+  const h = Math.floor(utcHoursAtNoon);
+  const m = Math.floor((utcHoursAtNoon - h) * 60);
+  const solarNoon = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate(), h, m, 0));
+  return JulianDate.fromDate(solarNoon);
+}
 
 // Major Strategic Deep-Water Seaports (Global Chokepoints and Maritime Gateways)
 interface GlobalSeaport {
@@ -249,6 +292,9 @@ interface GlobeEngine3DProps {
   onRainfallUpdate?: (data: LiveRainfallData, isZoomedIn: boolean) => void;
   cockpitAircraft?: AircraftState | null;
   onExitCockpit?: () => void;
+  cloudFrame?: CloudFrameInfo | null;
+  onCloudTileErrorChange?: (count: number) => void;
+  onCockpitCloudEstimate?: (estimate: CloudBrightnessEstimate | null) => void;
   onViewportChange: (bbox: BoundingBox, zoom?: number) => void;
   onSelectItem: (item: SelectedItemPayload) => void;
 }
@@ -282,6 +328,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   onRainfallUpdate,
   cockpitAircraft = null,
   onExitCockpit,
+  cloudFrame = null,
+  onCloudTileErrorChange,
+  onCockpitCloudEstimate,
   onViewportChange,
   onSelectItem,
 }) => {
@@ -289,10 +338,32 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const viewerRef = useRef<Viewer | null>(null);
   const rainPostProcessRef = useRef<PostProcessStage | null>(null);
   const cockpitAircraftRef = useRef<AircraftState | null>(null);
+  const [webglStatus, setWebglStatus] = useState<'checking' | 'ready' | 'unavailable' | 'render-error'>('checking');
+  const [webglErrorMessage, setWebglErrorMessage] = useState<string | null>(null);
+  const [viewerResetCounter, setViewerResetCounter] = useState(0);
+  const [forceWebgl1Retry, setForceWebgl1Retry] = useState(false);
+  const [surfaceNotice, setSurfaceNotice] = useState<string | null>(null);
+  const [basemapGeneration, setBasemapGeneration] = useState(0);
+  const referenceOverlayLayersRef = useRef<ImageryLayer[]>([]);
+  const onCloudTileErrorRef = useRef(onCloudTileErrorChange);
+  onCloudTileErrorRef.current = onCloudTileErrorChange;
+  const onCockpitCloudEstimateRef = useRef(onCockpitCloudEstimate);
+  onCockpitCloudEstimateRef.current = onCockpitCloudEstimate;
+  const cloudFrameRef = useRef<CloudFrameInfo | null>(cloudFrame);
+  cloudFrameRef.current = cloudFrame;
+
+  const isMobileRef = useRef(false);
+  if (typeof window !== 'undefined') {
+    isMobileRef.current = /Android/i.test(navigator.userAgent) || window.innerWidth <= 768;
+  }
+
   useEffect(() => {
     cockpitAircraftRef.current = cockpitAircraft;
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
+
+    const cloudsEnabled = layers.find((l) => l.id === 'live-clouds')?.enabled ?? true;
+    const windEnabled = layers.find((l) => l.id === 'wind-streamlines')?.enabled ?? true;
 
     if (cockpitAircraft) {
       const ac = cockpitAircraft;
@@ -306,48 +377,136 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const alt = Math.max(200, Math.min(18000, Number.isFinite(rawAlt) ? rawAlt : 10500));
         const track = Number.isFinite(kine?.trackDeg) ? kine!.trackDeg : (ac.attributes?.true_track || 0);
 
-        // Hide satellites when inside atmosphere and flying cockpit POV (satellites belong in space!)
+        // Cancel any competing flyTo animations before locking pilot cockpit camera
+        try {
+          viewer.camera.cancelFlight();
+          viewer.camera.lookAtTransform(Matrix4.IDENTITY);
+        } catch {}
+
+        // Hide wind streaks, oversized aircraft icons, satellite tracks, borders, and map labels from windshield
         if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = false;
         if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = false;
-
-        // Hide distant aircraft billboards so no giant planes block the pilot windshield
         if (aircraftBillboardsRef.current) aircraftBillboardsRef.current.show = false;
-
-        // Hide ground pin entities (seaports, places, fires, cameras) from floating in the sky
+        if (cameraBillboardsRef.current) cameraBillboardsRef.current.show = false;
+        if (windPolylinesRef.current) windPolylinesRef.current.show = false;
+        if (geojsonSourceRef.current) geojsonSourceRef.current.show = false;
         viewer.entities.show = false;
 
-        // Hide NASA night lights in cockpit view so land & terrain are 100% visible
+        // Hide 2D map label & road reference overlays in cockpit view for authentic natural terrain
+        for (const refLayer of referenceOverlayLayersRef.current) {
+          refLayer.show = false;
+        }
+
+        // Hide night lights overlay & illuminate aircraft's longitude at solar noon for clear daylight sky + terrain relief
         if (nightImageryLayerRef.current) nightImageryLayerRef.current.show = false;
+        viewer.scene.globe.enableLighting = true;
+        viewer.clock.currentTime = computeSolarNoonJulianDate(lon);
 
-        // Maximize ground detail resolution and aerial texture sharpness directly below aircraft
-        viewer.scene.globe.maximumScreenSpaceError = 1.0;
+        // Maximize terrain/imagery sharpness & set realistic distant horizon haze (instead of thick obscuring fog)
+        viewer.scene.globe.maximumScreenSpaceError = isMobileRef.current ? 1.8 : 1.35;
+        viewer.scene.globe.preloadSiblings = true;
+        viewer.scene.globe.preloadAncestors = true;
+        if (viewer.scene.fog) {
+          viewer.scene.fog.density = 0.000016;
+          viewer.scene.fog.visualDensityScalar = 0.12;
+          viewer.scene.fog.screenSpaceErrorFactor = 1.0;
+          viewer.scene.fog.minimumBrightness = 0.25;
+        }
+        if (viewer.camera.frustum instanceof PerspectiveFrustum) {
+          viewer.camera.frustum.fov = CesiumMath.toRadians(68);
+        }
 
-        // Temporarily lock camera controller to prevent mouse inputs from desyncing cockpit view
+        // Lock camera controller to prevent stray touch/mouse drags while in pilot view
         viewer.scene.screenSpaceCameraController.enableRotate = false;
         viewer.scene.screenSpaceCameraController.enableTranslate = false;
         viewer.scene.screenSpaceCameraController.enableZoom = false;
         viewer.scene.screenSpaceCameraController.enableTilt = false;
         viewer.scene.screenSpaceCameraController.enableLook = false;
 
-        // Smooth transition into cockpit pilot perspective with panoramic ground view
-        viewer.camera.flyTo({
+        // Immediately jump to pilot view without starting a competing flyTo animation
+        viewer.camera.setView({
           destination: Cartesian3.fromDegrees(lon, lat, alt + 3.0),
           orientation: {
             heading: CesiumMath.toRadians(track),
-            pitch: CesiumMath.toRadians(-6.5),
+            pitch: CesiumMath.toRadians(-8.0),
             roll: 0.0,
           },
-          duration: 1.2,
         });
+
+        // Estimate local 3D clouds based on SSEC RealEarth satellite IR brightness at aircraft coordinates
+        if (cloudsEnabled) {
+          void sampleSatelliteCloudBrightness(lon, lat, cloudFrameRef.current?.rawTime).then((estimate) => {
+            if (!cockpitAircraftRef.current) return;
+            onCockpitCloudEstimateRef.current?.(estimate);
+            if (cloudBillboardsRef.current) {
+              const shouldShow = estimate ? estimate.hasClouds : true;
+              cloudBillboardsRef.current.show = shouldShow;
+              if (shouldShow) {
+                const cloudTexture = getCloudTexture();
+                cloudBillboardsRef.current.removeAll();
+                const list: typeof cloudsListRef.current = [];
+                const baseM = estimate?.estimatedBaseMeters ?? 3800;
+                const topM = estimate?.estimatedTopMeters ?? 7800;
+                const densityCount = estimate ? Math.max(12, Math.round(estimate.brightness * 36)) : 20;
+                for (let i = 0; i < densityCount; i++) {
+                  const trackRad = CesiumMath.toRadians(track);
+                  const fwd = 0.06 + Math.random() * 0.35;
+                  const latOff = (Math.random() - 0.5) * 0.28;
+                  const cLon = lon + Math.sin(trackRad) * fwd - Math.cos(trackRad) * latOff;
+                  const cLat = lat + Math.cos(trackRad) * fwd + Math.sin(trackRad) * latOff;
+                  const cAlt = baseM + Math.random() * Math.max(1200, topM - baseM);
+                  const b = cloudBillboardsRef.current.add({
+                    position: Cartesian3.fromDegrees(cLon, cLat, cAlt),
+                    image: cloudTexture,
+                    width: 4500 + Math.random() * 9000,
+                    height: 2200 + Math.random() * 4500,
+                    sizeInMeters: true,
+                    color: Color.WHITE.withAlpha(0.38 + (estimate?.brightness ?? 0.5) * 0.32),
+                  });
+                  list.push({ billboard: b, lon: cLon, lat: cLat, altMeters: cAlt, isLocal: true });
+                }
+                cloudsListRef.current = list;
+              }
+            }
+          });
+        } else {
+          onCockpitCloudEstimateRef.current?.(null);
+          if (cloudBillboardsRef.current) cloudBillboardsRef.current.show = false;
+        }
       }
     } else {
-      // Re-enable camera controls and restore visibility when exiting cockpit view
+      onCockpitCloudEstimateRef.current?.(null);
       if (!viewer.isDestroyed()) {
-        viewer.scene.globe.maximumScreenSpaceError = 2.0;
+        try {
+          viewer.camera.cancelFlight();
+          viewer.clock.currentTime = JulianDate.now();
+        } catch {}
+        viewer.scene.globe.maximumScreenSpaceError = isMobileRef.current ? 2.5 : 2.0;
+        viewer.scene.globe.preloadSiblings = false;
+        viewer.scene.globe.preloadAncestors = false;
+        if (viewer.scene.fog) {
+          viewer.scene.fog.density = 0.000035;
+          viewer.scene.fog.visualDensityScalar = 0.15;
+          viewer.scene.fog.screenSpaceErrorFactor = 2.0;
+        }
+        if (viewer.camera.frustum instanceof PerspectiveFrustum) {
+          viewer.camera.frustum.fov = CesiumMath.toRadians(60);
+        }
+        if (cloudBillboardsRef.current) {
+          cloudBillboardsRef.current.show = false;
+          cloudBillboardsRef.current.removeAll();
+          cloudsListRef.current = [];
+        }
         if (satelliteBillboardsRef.current) satelliteBillboardsRef.current.show = true;
         if (satelliteTracksSourceRef.current) satelliteTracksSourceRef.current.show = true;
         if (aircraftBillboardsRef.current) aircraftBillboardsRef.current.show = true;
+        if (cameraBillboardsRef.current) cameraBillboardsRef.current.show = true;
+        if (windPolylinesRef.current) windPolylinesRef.current.show = windEnabled;
+        if (geojsonSourceRef.current) geojsonSourceRef.current.show = true;
         viewer.entities.show = true;
+        for (const refLayer of referenceOverlayLayersRef.current) {
+          refLayer.show = true;
+        }
         viewer.scene.screenSpaceCameraController.enableRotate = true;
         viewer.scene.screenSpaceCameraController.enableTranslate = true;
         viewer.scene.screenSpaceCameraController.enableZoom = true;
@@ -369,7 +528,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     onUserPannedCameraRef.current = onUserPannedCamera;
   }, [onUserPannedCamera]);
   const imageryRequestRef = useRef(0);
-  const terrainPromiseRef = useRef<ReturnType<typeof createWorldTerrainAsync> | null>(null);
+  const terrainPromiseRef = useRef<Promise<TerrainProvider> | null>(null);
   const geojsonSourceRef = useRef<GeoJsonDataSource | null>(null);
   const handlerRef = useRef<ScreenSpaceEventHandler | null>(null);
   const selectedHighlightRef = useRef<{ entity: any; billboard?: any; width: number; height: number; tracks: any[] } | null>(null);
@@ -382,10 +541,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   const cameraBillboardsRef = useRef<BillboardCollection | null>(null);
   const radarImageryLayerRef = useRef<ImageryLayer | null>(null);
   const radarFramePathRef = useRef<string | null>(null);
-  const windPointsRef = useRef<PointPrimitiveCollection | null>(null);
   const windPolylinesRef = useRef<PolylineCollection | null>(null);
   const windParticlesRef = useRef<Array<{
-    head: PointPrimitive;
     line: any;
     lon: number;
     lat: number;
@@ -394,7 +551,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     headingDeg: number;
     age: number;
     maxAge: number;
-    trail: Array<{ lon: number; lat: number }>;
   }>>([]);
   const nightImageryLayerRef = useRef<ImageryLayer | null>(null);
   const cloudBillboardsRef = useRef<BillboardCollection | null>(null);
@@ -444,14 +600,25 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     return canvas.toDataURL('image/png');
   };
 
+  const surfaceMode: BasemapMode = cockpitAircraft && basemapMode !== 'google-3d' ? 'satellite-hybrid' : basemapMode;
+
   const applyImageryLayers = (viewer: Viewer, mode: BasemapMode, allowGoogleTiles = true) => {
-    const requestId = ++imageryRequestRef.current;
+    ++imageryRequestRef.current;
+    setSurfaceNotice(null);
     try {
       if (googleTilesetRef.current) {
         viewer.scene.primitives.remove(googleTilesetRef.current);
         googleTilesetRef.current = null;
       }
       viewer.imageryLayers.removeAll();
+      radarImageryLayerRef.current = null;
+      cloudImageryLayerRef.current = null;
+      nightImageryLayerRef.current = null;
+      referenceOverlayLayersRef.current = [];
+
+      // Always keep the bundled offline Natural Earth II layer as Layer 0 so Earth appears instantaneously
+      // even if external tiles are slow or blocked on mobile connections.
+      viewer.imageryLayers.addImageryProvider(createBundledEarthProvider());
 
       const googleMapsApiKey = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
       if (mode === 'google-3d' && allowGoogleTiles) {
@@ -471,7 +638,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           viewer.scene.primitives.add(tileset);
           viewer.scene.requestRender();
         }).catch((err) => {
+          if (viewer.isDestroyed() || googleRequestId !== imageryRequestRef.current) return;
           console.warn('Google 3D Tiles load issue, falling back to raster satellite:', err);
+          setSurfaceNotice('Photorealistic 3D tiles unavailable · showing satellite terrain');
           applyImageryLayers(viewer, 'satellite-hybrid', false);
         });
         return;
@@ -491,34 +660,40 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Transportation/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
         });
-        viewer.imageryLayers.addImageryProvider(transOverlay);
+        const transLayer = viewer.imageryLayers.addImageryProvider(transOverlay);
 
         // World administrative boundaries and places (no API key required)
         const refOverlay = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 20,
         });
-        viewer.imageryLayers.addImageryProvider(refOverlay);
+        const refLayer = viewer.imageryLayers.addImageryProvider(refOverlay);
+        referenceOverlayLayersRef.current = [transLayer, refLayer];
+        if (cockpitAircraftRef.current) {
+          transLayer.show = false;
+          refLayer.show = false;
+        }
 
-        // NASA Earth at Night: VIIRS Black Marble City Lights (Auto-blends onto night side of Earth)
+        // NASA Earth at Night: VIIRS Black Marble City Lights (Auto-blends onto night side of Earth in space only)
         const nightLights = new UrlTemplateImageryProvider({
           url: 'https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/VIIRS_CityLights_2012/default/GoogleMapsCompatible_Level8/{z}/{y}/{x}.jpg',
           maximumLevel: 8,
           credit: 'NASA Earth at Night / VIIRS Black Marble City Lights',
         });
         const nightLayer = viewer.imageryLayers.addImageryProvider(nightLights);
-        nightLayer.dayAlpha = 0.0; // Completely hidden during daylight!
-        nightLayer.nightAlpha = 1.0; // Authentic golden city lights and highway grids on night hemisphere!
+        nightLayer.dayAlpha = 0.0;
+        nightLayer.nightAlpha = 0.95;
         nightLayer.brightness = 2.0;
+        nightLayer.show = !cockpitAircraftRef.current;
         nightImageryLayerRef.current = nightLayer;
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#020617');
+        setBasemapGeneration((g) => g + 1);
         viewer.scene.requestRender();
         return;
       }
 
       if (mode === 'streets') {
-        // High-detail cartographic street map with roads, buildings, restaurants, motels, shops, and transit (no API key required)
         const streetBase = new UrlTemplateImageryProvider({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 19,
@@ -527,6 +702,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         viewer.imageryLayers.addImageryProvider(streetBase);
 
         viewer.scene.globe.baseColor = Color.fromCssColorString('#f8fafc');
+        setBasemapGeneration((g) => g + 1);
         viewer.scene.requestRender();
         return;
       }
@@ -547,8 +723,10 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Ocean/World_Ocean_Reference/MapServer/tile/{z}/{y}/{x}',
           maximumLevel: 16,
         });
-        viewer.imageryLayers.addImageryProvider(oceanRef);
+        const oceanRefLayer = viewer.imageryLayers.addImageryProvider(oceanRef);
+        referenceOverlayLayersRef.current = [oceanRefLayer];
         viewer.scene.globe.baseColor = Color.fromCssColorString('#031024');
+        setBasemapGeneration((g) => g + 1);
         viewer.scene.requestRender();
         return;
       }
@@ -569,11 +747,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         url: 'https://services.arcgisonline.com/ArcGIS/rest/services/Canvas/World_Dark_Gray_Reference/MapServer/tile/{z}/{y}/{x}',
         maximumLevel: 16,
       });
-      viewer.imageryLayers.addImageryProvider(darkRef);
+      const darkRefLayer = viewer.imageryLayers.addImageryProvider(darkRef);
+      referenceOverlayLayersRef.current = [darkRefLayer];
       viewer.scene.globe.baseColor = Color.fromCssColorString('#0a0e17');
+      setBasemapGeneration((g) => g + 1);
       viewer.scene.requestRender();
     } catch {
-      // Graceful fallback
+      // Graceful fallback — offline Natural Earth II remains available
     }
   };
 
@@ -581,26 +761,118 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
   useEffect(() => {
     if (!containerRef.current || viewerRef.current) return;
 
-    const viewer = new Viewer(containerRef.current, {
-      animation: false,
-      timeline: false,
-      baseLayerPicker: false,
-      geocoder: IonGeocodeProviderType.GOOGLE,
-      homeButton: false,
-      sceneModePicker: false,
-      navigationHelpButton: false,
-      infoBox: false,
-      selectionIndicator: false,
-      targetFrameRate: 60,
-      requestRenderMode: false,
-    });
+    const webglCheck = detectWebglSupport();
+    if (!webglCheck.supported) {
+      setWebglStatus('unavailable');
+      setWebglErrorMessage('Hardware 3D WebGL acceleration is disabled or unavailable on this browser.');
+      return;
+    }
 
-    applyImageryLayers(viewer, basemapMode);
+    const isMobile = isMobileRef.current;
+    let viewer: Viewer;
+    try {
+      viewer = new Viewer(containerRef.current, {
+        animation: false,
+        timeline: false,
+        baseLayerPicker: false,
+        baseLayer: new ImageryLayer(createBundledEarthProvider()),
+        geocoder: false,
+        homeButton: false,
+        sceneModePicker: false,
+        navigationHelpButton: false,
+        infoBox: false,
+        selectionIndicator: false,
+        targetFrameRate: isMobile ? 45 : 60,
+        requestRenderMode: false,
+        msaaSamples: isMobile ? 1 : 4,
+        useBrowserRecommendedResolution: true,
+        contextOptions: {
+          requestWebgl1: forceWebgl1Retry || !webglCheck.hasWebgl2,
+          webgl: {
+            alpha: false,
+            depth: true,
+            stencil: false,
+            antialias: !isMobile,
+            powerPreference: isMobile ? 'low-power' : 'high-performance',
+            failIfMajorPerformanceCaveat: false,
+          },
+        },
+      });
+    } catch (initErr) {
+      console.error('Cesium Viewer initialization error:', initErr);
+      if (!forceWebgl1Retry && webglCheck.hasWebgl1 && webglCheck.hasWebgl2) {
+        setForceWebgl1Retry(true);
+        setViewerResetCounter((c) => c + 1);
+        return;
+      }
+      setWebglStatus('unavailable');
+      setWebglErrorMessage(
+        initErr instanceof Error ? initErr.message : 'Unable to initialize WebGL 3D globe.'
+      );
+      return;
+    }
+
+    setWebglStatus('ready');
+    setWebglErrorMessage(null);
+
+    viewer.resolutionScale = isMobile
+      ? Math.min(window.devicePixelRatio || 1, 1.0)
+      : Math.min(window.devicePixelRatio || 1, 1.5);
+    viewer.scene.globe.tileCacheSize = isMobile ? 250 : 1000;
+    viewer.scene.globe.maximumScreenSpaceError = isMobile ? 2.5 : 2.0;
+
+    const triggerGraphicsFallback = (reason: string) => {
+      if (!forceWebgl1Retry && webglCheck.hasWebgl1) {
+        setForceWebgl1Retry(true);
+        setViewerResetCounter((c) => c + 1);
+        return;
+      }
+      setWebglStatus('render-error');
+      setWebglErrorMessage(reason);
+    };
+
+    const onWebglContextLost = (event: globalThis.Event) => {
+      event.preventDefault();
+      triggerGraphicsFallback('Browser WebGL graphics session was lost.');
+    };
+    viewer.canvas.addEventListener('webglcontextlost', onWebglContextLost);
+
+    // Catch runtime WebGL / shader compilation errors cleanly inside the map viewport
+    const onSceneRenderError = (_scene: any, error: any) => {
+      console.error('Cesium scene renderError:', error);
+      triggerGraphicsFallback(
+        error instanceof Error ? error.message : 'WebGL shader or rendering failure occurred.'
+      );
+    };
+    viewer.scene.renderError.addEventListener(onSceneRenderError);
+
+    applyImageryLayers(viewer, surfaceMode);
     viewer.scene.globe.enableLighting = true;
-    if (viewer.scene.moon) viewer.scene.moon.show = true;
+    if (viewer.scene.moon) viewer.scene.moon.show = !isMobile;
     if (viewer.scene.sun) viewer.scene.sun.show = true;
 
-    // Cinematic Earth Atmosphere: Rayleigh Blue Light Scattering & Fog Depth
+    // Non-blocking world terrain loading (Cesium World Terrain with ArcGIS Elevation3D fallback)
+    const loadEsriTerrain = () =>
+      ArcGISTiledElevationTerrainProvider.fromUrl(
+        'https://elevation3d.arcgis.com/arcgis/rest/services/WorldElevation3D/Terrain3D/ImageServer'
+      );
+    terrainPromiseRef.current ??= Ion.defaultAccessToken
+      ? createWorldTerrainAsync().catch(loadEsriTerrain)
+      : loadEsriTerrain();
+    terrainPromiseRef.current
+      .then((terrainProvider) => {
+        if (!viewer.isDestroyed()) {
+          viewer.terrainProvider = terrainProvider;
+          viewer.scene.requestRender();
+        }
+      })
+      .catch(() => {
+        if (!viewer.isDestroyed()) {
+          setSurfaceNotice('Elevation unavailable · showing satellite imagery');
+        }
+      });
+
+    // Cinematic Earth Atmosphere: Rayleigh Blue Light Scattering & Gentle Horizon Haze
     viewer.scene.globe.showGroundAtmosphere = true;
     viewer.scene.globe.atmosphereLightIntensity = 10.0;
     viewer.scene.globe.atmosphereRayleighCoefficient = new Cartesian3(5.5e-6, 13.0e-6, 22.4e-6);
@@ -612,7 +884,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     }
     if (viewer.scene.fog) {
       viewer.scene.fog.enabled = true;
-      viewer.scene.fog.density = 0.00018;
+      viewer.scene.fog.density = 0.000035;
+      viewer.scene.fog.visualDensityScalar = 0.15;
       viewer.scene.fog.screenSpaceErrorFactor = 2.0;
     }
 
@@ -783,7 +1056,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
               destination: eyePos,
               orientation: {
                 heading: CesiumMath.toRadians(track),
-                pitch: CesiumMath.toRadians(-6.5),
+                pitch: CesiumMath.toRadians(-8.0),
                 roll: 0.0,
               },
             });
@@ -843,7 +1116,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         }
       }
 
-      // 4. Atmospheric Real-Time Wind Streamlines (Shooting Star Meteor Tails with Luminous White Highlights)
+      // 4. Illustrative Prevailing Wind Model (Thin flowing streamlines without bright dots)
       const windList = windParticlesRef.current;
       for (let i = 0; i < windList.length; i++) {
         const p = windList[i];
@@ -856,32 +1129,28 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           p.headingDeg = vec.headingDeg;
           p.speed = vec.speed;
         } else {
-          // Continuously track curved streamline vector along atmospheric currents
+          // Continuously track curved streamline vector along prevailing atmospheric currents
           const vec = getAtmosphericWindVector(p.lat, p.lon);
           p.headingDeg = vec.headingDeg;
           p.speed = vec.speed;
           const rad = (p.headingDeg * Math.PI) / 180.0;
-          p.lon += Math.sin(rad) * p.speed * dt * 26.0;
-          p.lat += Math.cos(rad) * p.speed * dt * 26.0;
+          p.lon += Math.sin(rad) * p.speed * dt * 22.0;
+          p.lat += Math.cos(rad) * p.speed * dt * 22.0;
           p.lon = ((p.lon + 540.0) % 360.0) - 180.0;
         }
 
-        // Direct aerodynamic streamline vector calculation (anti-wrapping guard prevents cross-globe chords)
         const rad = (p.headingDeg * Math.PI) / 180.0;
-        const tailDeg = Math.min(1.8, 0.4 + p.speed * 1.5);
+        const tailDeg = Math.min(2.2, 0.7 + p.speed * 2.4);
         const tailLon = p.lon - Math.sin(rad) * tailDeg;
         const tailLat = p.lat - Math.cos(rad) * tailDeg;
 
-        // Anti-wrapping guard: suppress when crossing antimeridian (-180°/+180°)
-        if (Math.abs(p.lon - tailLon) > 4.0 || Math.abs(p.lat - tailLat) > 4.0) {
+        // Anti-wrapping guard: suppress when crossing antimeridian (-180°/+180°) or in cockpit windshield
+        if (cockpitAircraftRef.current || Math.abs(p.lon - tailLon) > 4.0 || Math.abs(p.lat - tailLat) > 4.0) {
           p.line.show = false;
-          p.head.show = false;
           continue;
         }
 
         p.line.show = true;
-        p.head.show = true;
-
         const midLon = (p.lon + tailLon) / 2.0;
         const midLat = (p.lat + tailLat) / 2.0;
 
@@ -890,12 +1159,13 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           Cartesian3.fromDegrees(midLon, midLat, p.altMeters),
           Cartesian3.fromDegrees(tailLon, tailLat, p.altMeters),
         ];
-        p.head.position = Cartesian3.fromDegrees(p.lon, p.lat, p.altMeters);
 
-        // Smooth sinusoidal fade-in & fade-out creating aerodynamic meteor pulse
+        // Subtle smooth fade-in and fade-out opacity for natural flowing streamlines
         const lifecycleRatio = p.age / p.maxAge;
-        const alpha = Math.sin(lifecycleRatio * Math.PI);
-        p.head.color = Color.WHITE.withAlpha(Math.max(0.15, alpha * 0.95));
+        const alpha = Math.max(0.06, Math.sin(lifecycleRatio * Math.PI) * 0.48);
+        if (p.line.material?.uniforms?.color) {
+          p.line.material.uniforms.color = Color.fromCssColorString('#bae6fd').withAlpha(alpha);
+        }
       }
 
       // 5. Active Live Atmospheric Clouds: majestic planetary drift along prevailing wind currents
@@ -954,9 +1224,11 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewerRef.current = viewer;
 
     return () => {
+      canvas.removeEventListener('webglcontextlost', onWebglContextLost);
       canvas.removeEventListener('pointerdown', markInteraction);
       canvas.removeEventListener('wheel', markInteraction);
       window.removeEventListener('pointerup', endInteraction);
+      viewer.scene.renderError.removeEventListener(onSceneRenderError);
       viewer.scene.preRender.removeEventListener(onPreRenderAnim);
       viewer.camera.moveEnd.removeEventListener(emitCameraBounds);
       if (handlerRef.current) {
@@ -987,12 +1259,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         } catch {}
         windPolylinesRef.current = null;
       }
-      if (windPointsRef.current && !viewer.isDestroyed()) {
-        try {
-          viewer.scene.primitives.remove(windPointsRef.current);
-        } catch {}
-        windPointsRef.current = null;
-      }
       if (viewerRef.current === viewer) viewerRef.current = null;
       geojsonSourceRef.current = null;
       googleTilesetRef.current = null;
@@ -1010,7 +1276,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       }
       viewer.destroy();
     };
-  }, []);
+  }, [viewerResetCounter]);
 
   // Sync 3D Falling Rain Post-Processing FX with State
   useEffect(() => {
@@ -1019,27 +1285,16 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     }
   }, [rainFxEnabled]);
 
-  // Update imagery provider on basemapMode changes
+  // Switch to photographic satellite ground in Cockpit View and restore user basemap on exit
   useEffect(() => {
     if (viewerRef.current) {
-      applyImageryLayers(viewerRef.current, basemapMode);
-      if (basemapMode !== 'satellite-hybrid' && Ion.defaultAccessToken) {
-        terrainPromiseRef.current ??= createWorldTerrainAsync();
-        terrainPromiseRef.current
-          .then((terrainProvider) => {
-            const viewer = viewerRef.current;
-            if (viewer && !viewer.isDestroyed()) {
-              viewer.terrainProvider = terrainProvider;
-              viewer.scene.requestRender();
-            }
-          })
-          .catch(() => {});
-      }
+      applyImageryLayers(viewerRef.current, surfaceMode);
     }
-  }, [basemapMode]);
+  }, [surfaceMode]);
 
-  // Handle camera fly-to on targetLocation changes
+  // Handle camera fly-to on targetLocation changes (suppressed while locked inside Cockpit View)
   useEffect(() => {
+    if (cockpitAircraftRef.current) return;
     if (viewerRef.current && targetLocation) {
       const [lon, lat] = targetLocation.center;
       const zoom = targetLocation.zoom ?? 4.5;
@@ -1113,11 +1368,59 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           }
         }
         geojsonSourceRef.current = ds;
+        ds.show = !cockpitAircraftRef.current;
         viewer.dataSources.add(ds);
         viewer.scene.requestRender();
       })
       .catch(() => {});
-  }, [layers, geometries]);
+  }, [layers, geometries, webglStatus]);
+
+  // Synchronize UW–Madison SSEC RealEarth Hourly Infrared Cloud Layer (handles missing tiles cleanly)
+  useEffect(() => {
+    const viewer = viewerRef.current;
+    if (!viewer || viewer.isDestroyed()) return;
+
+    const cloudsEnabled = layers.find((l) => l.id === 'live-clouds')?.enabled ?? true;
+    onCloudTileErrorRef.current?.(0);
+
+    if (!cloudsEnabled || !cloudFrame) {
+      if (cloudImageryLayerRef.current) {
+        try {
+          viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+        } catch {}
+        cloudImageryLayerRef.current = null;
+        viewer.scene.requestRender();
+      }
+      return;
+    }
+
+    let tileErrors = 0;
+    const prevLayer = cloudImageryLayerRef.current;
+    try {
+      const cloudProvider = new UrlTemplateImageryProvider({
+        url: cloudFrame.tileUrlTemplate,
+        maximumLevel: 3,
+        credit: 'UW–Madison SSEC RealEarth Global Infrared',
+      });
+      cloudProvider.errorEvent.addEventListener(() => {
+        tileErrors += 1;
+        onCloudTileErrorRef.current?.(tileErrors);
+      });
+      const nextLayer = viewer.imageryLayers.addImageryProvider(cloudProvider);
+      nextLayer.alpha = 0.78;
+      nextLayer.brightness = 1.15;
+      nextLayer.contrast = 1.15;
+      cloudImageryLayerRef.current = nextLayer;
+      if (prevLayer && prevLayer !== nextLayer) {
+        try {
+          viewer.imageryLayers.remove(prevLayer);
+        } catch {}
+      }
+      viewer.scene.requestRender();
+    } catch (err) {
+      console.warn('RealEarth cloud layer error (leaving base globe active):', err);
+    }
+  }, [cloudFrame, layers, basemapGeneration, webglStatus]);
 
   // Keep RainViewer radar metadata updated
   useEffect(() => {
@@ -1157,12 +1460,17 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     };
 
     viewer.entities.removeAll();
+    viewer.entities.show = !cockpitAircraftRef.current;
     const layerMap = new Map(layers.map((l) => [l.id, l.enabled]));
 
     // Weather Radar Layer (RainViewer Live Doppler Radar)
     const radarEnabled = layerMap.get('weather-radar') ?? true;
     if (radarEnabled) {
-      if (!radarImageryLayerRef.current) {
+      if (
+        !radarImageryLayerRef.current ||
+        !viewer.imageryLayers.contains(radarImageryLayerRef.current)
+      ) {
+        radarImageryLayerRef.current = null;
         const framePath = radarFramePathRef.current || '/v2/radar/ce6b5686c092';
         try {
           const radarProvider = new UrlTemplateImageryProvider({
@@ -1182,84 +1490,30 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       radarImageryLayerRef.current = null;
     }
 
-    // 1. Live 3D Atmospheric Volumetric Clouds (Watermark-free, 100% crisp satellite clarity)
+    // 1. Live SSEC RealEarth Infrared Satellite Clouds (Hourly observation frames + Cockpit local cloud estimate)
     const cloudsEnabled = layerMap.get('live-clouds') ?? true;
-    if (cloudImageryLayerRef.current) {
-      viewer.imageryLayers.remove(cloudImageryLayerRef.current);
-      cloudImageryLayerRef.current = null;
-    }
-
     const cloudBillboards = cloudBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
     cloudBillboardsRef.current = cloudBillboards;
+    cloudBillboards.show = Boolean(cloudsEnabled && cockpitAircraftRef.current);
 
     if (!cloudsEnabled) {
       cloudBillboards.removeAll();
       cloudsListRef.current = [];
-    } else if (cloudsListRef.current.length === 0) {
-      const cloudTexture = getCloudTexture();
-      const cloudList: typeof cloudsListRef.current = [];
-
-      // A. Global Planetary Weather Formations (visible from space & orbital overview)
-      const planetaryCloudCount = 240;
-      for (let i = 0; i < planetaryCloudCount; i++) {
-        const lon = (Math.random() - 0.5) * 360;
-        const latBand = Math.random();
-        const lat = latBand < 0.45
-          ? (Math.random() - 0.5) * 26 // Tropical / ITCZ storm belt
-          : latBand < 0.75
-          ? 32 + Math.random() * 28 // Northern mid-latitude cyclone tracks
-          : -52 + Math.random() * 26; // Southern ocean storm tracks
-        const altMeters = 4000 + Math.random() * 6000;
-
-        const b = cloudBillboards.add({
-          position: Cartesian3.fromDegrees(lon, lat, altMeters),
-          image: cloudTexture,
-          width: 280000 + Math.random() * 200000,
-          height: 140000 + Math.random() * 100000,
-          sizeInMeters: true,
-          color: Color.WHITE.withAlpha(0.75 + Math.random() * 0.18),
-        });
-        cloudList.push({ billboard: b, lon, lat, altMeters, isLocal: false });
-      }
-
-      // B. Local Atmospheric Clouds for Close-Up & Cockpit View
-      const localCloudCount = 50;
-      const refLon = cockpitAircraft?.longitude ?? 20.0;
-      const refLat = cockpitAircraft?.latitude ?? 20.0;
-      const rawAlt = cockpitAircraft?.attributes?.geo_altitude || cockpitAircraft?.attributes?.baro_altitude || 10500;
-      for (let i = 0; i < localCloudCount; i++) {
-        const cLon = refLon + (Math.random() - 0.5) * 0.6;
-        const cLat = refLat + (Math.random() - 0.5) * 0.6;
-        const cAlt = Math.max(1500, rawAlt + (Math.random() - 0.5) * 4500);
-
-        const b = cloudBillboards.add({
-          position: Cartesian3.fromDegrees(cLon, cLat, cAlt),
-          image: cloudTexture,
-          width: 8000 + Math.random() * 14000,
-          height: 4000 + Math.random() * 7000,
-          sizeInMeters: true,
-          color: Color.WHITE.withAlpha(0.70 + Math.random() * 0.25),
-        });
-        cloudList.push({ billboard: b, lon: cLon, lat: cLat, altMeters: cAlt, isLocal: true });
-      }
-
-      cloudsListRef.current = cloudList;
     }
 
-    // 2. Global Wind Flow (Shooting Star Meteor Streamlines with Luminous Tapered Tails)
+    // 2. Illustrative Prevailing Wind Model (Thin flowing streamlines without dots or glow)
     const windEnabled = layerMap.get('wind-streamlines') ?? true;
-    const windPoints = windPointsRef.current ?? viewer.scene.primitives.add(new PointPrimitiveCollection());
     const windPolylines = windPolylinesRef.current ?? viewer.scene.primitives.add(new PolylineCollection());
-    windPointsRef.current = windPoints;
     windPolylinesRef.current = windPolylines;
+    windPolylines.show = Boolean(windEnabled && !cockpitAircraftRef.current);
 
     if (!windEnabled) {
-      windPoints.removeAll();
       windPolylines.removeAll();
       windParticlesRef.current = [];
     } else if (windParticlesRef.current.length === 0) {
       const particles = [];
-      const particleCount = 380;
+      const particleCount = isMobileRef.current ? 220 : 360;
+      const lineWidth = isMobileRef.current ? 1.1 : 1.4;
       for (let i = 0; i < particleCount; i++) {
         const lon = (Math.random() - 0.5) * 360;
         const lat = (Math.random() - 0.5) * 150;
@@ -1267,7 +1521,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const { headingDeg, speed } = getAtmosphericWindVector(lat, lon);
         const rad = (headingDeg * Math.PI) / 180.0;
 
-        const tailDeg = Math.min(1.8, 0.4 + speed * 1.5);
+        const tailDeg = Math.min(2.2, 0.7 + speed * 2.4);
         const tailLon = lon - Math.sin(rad) * tailDeg;
         const tailLat = lat - Math.cos(rad) * tailDeg;
         const midLon = (lon + tailLon) / 2.0;
@@ -1279,26 +1533,15 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           Cartesian3.fromDegrees(tailLon, tailLat, altMeters),
         ];
 
-        // Front glowing spark dot
-        const pt = windPoints.add({
-          position: initialCart[0],
-          color: Color.WHITE.withAlpha(0.9),
-          pixelSize: 3.5,
-        });
-
-        // Tapered luminous white neon tail
         const line = windPolylines.add({
           positions: initialCart,
-          width: 3.2,
-          material: Material.fromType(Material.PolylineGlowType, {
-            color: Color.WHITE,
-            glowPower: 0.35,
-            taperPower: 0.65,
+          width: lineWidth,
+          material: Material.fromType('Color', {
+            color: Color.fromCssColorString('#bae6fd').withAlpha(0.42),
           }),
         });
 
         particles.push({
-          head: pt,
           line,
           lon,
           lat,
@@ -1307,7 +1550,6 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           headingDeg,
           age: Math.random() * 6.0,
           maxAge: 4.5 + Math.random() * 3.5,
-          trail: [],
         });
       }
       windParticlesRef.current = particles;
@@ -2020,6 +2262,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     activeFlightPlan,
     discoveredPlaces,
     selectedPlace,
+    basemapGeneration,
+    webglStatus,
   ]);
 
   useEffect(() => {
@@ -2277,8 +2521,9 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.scene.requestRender();
   }, [selectedItem, satellites]);
 
-  // Cinematic 3D camera fly-to when a venue/stay is selected
+  // Cinematic 3D camera fly-to when a venue/stay is selected (suppressed in Cockpit View)
   useEffect(() => {
+    if (cockpitAircraftRef.current) return;
     const viewer = viewerRef.current;
     if (!viewer || !selectedPlace) return;
     viewer.camera.flyTo({
@@ -2387,5 +2632,42 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
     viewer.scene.requestRender();
   }, [userNavState]);
 
-  return <div ref={containerRef} className="globe-container-3d" />;
+  const handleRetryGlobe = () => {
+    setForceWebgl1Retry(false);
+    setWebglStatus('checking');
+    setWebglErrorMessage(null);
+    setViewerResetCounter((c) => c + 1);
+  };
+
+  return (
+    <div className="globe-stage-wrapper">
+      <div ref={containerRef} className="globe-container-3d" />
+      {surfaceNotice && (
+        <div className="terrain-status" role="status">
+          {surfaceNotice}
+        </div>
+      )}
+      {(webglStatus === 'unavailable' || webglStatus === 'render-error') && (
+        <div className="globe-recovery-overlay" role="alert" aria-live="polite">
+          <div className="globe-recovery-card">
+            <div className="globe-recovery-title">3D GLOBE RENDERING PAUSED</div>
+            <p className="globe-recovery-msg">
+              {webglErrorMessage ||
+                'Your browser could not initialize a WebGL 3D graphics context.'}
+            </p>
+            <p className="globe-recovery-sub">
+              Layer controls, place discovery, navigation, and Roger AI assistant remain fully usable.
+            </p>
+            <button
+              type="button"
+              className="globe-recovery-btn"
+              onClick={handleRetryGlobe}
+            >
+              Retry 3D Globe
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 };

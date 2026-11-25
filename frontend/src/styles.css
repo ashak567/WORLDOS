@@ -967,21 +967,6 @@ html, body, #root {
 }
 
 /* ==========================================================================
-   CESIUM ION WATERMARK / CREDIT BAR SUPPRESSION
-   ========================================================================== */
-.cesium-widget-credits,
-.cesium-credit-logoContainer,
-.cesium-credit-textContainer,
-.cesium-credit-expand-link {
-  display: none !important;
-  visibility: hidden !important;
-  opacity: 0 !important;
-  pointer-events: none !important;
-  height: 0 !important;
-  width: 0 !important;
-}
-
-/* ==========================================================================
    FLOATING LAYER DOCK TRIGGER BUTTON
    ========================================================================== */
 .layer-dock-floating-btn {
@@ -5783,6 +5768,348 @@ html, body, #root {
 
 .tcas-status-text.red {
   color: #ef4444;
+}
+
+/* ─── Globe Stage Wrapper & WebGL Recovery Overlay (Viewport-Scoped) ─── */
+.globe-stage-wrapper {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+}
+
+.globe-container-3d {
+  width: 100%;
+  height: 100%;
+}
+
+.globe-recovery-overlay {
+  position: absolute;
+  inset: 0;
+  z-index: 25;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: radial-gradient(circle at center, rgba(10, 20, 38, 0.92), rgba(4, 9, 18, 0.98));
+  pointer-events: auto;
+}
+
+.globe-recovery-card {
+  max-width: 400px;
+  width: 100%;
+  padding: 20px 22px;
+  border-radius: 10px;
+  border: 1px solid rgba(56, 189, 248, 0.35);
+  background: rgba(8, 15, 30, 0.95);
+  box-shadow: 0 12px 36px rgba(0, 0, 0, 0.65);
+  text-align: center;
+}
+
+.globe-recovery-title {
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.1em;
+  color: #38bdf8;
+  margin-bottom: 10px;
+}
+
+.globe-recovery-msg {
+  font-size: 13px;
+  line-height: 1.45;
+  color: #e2e8f0;
+  margin: 0 0 8px 0;
+}
+
+.globe-recovery-sub {
+  font-size: 11px;
+  line-height: 1.4;
+  color: #94a3b8;
+  margin: 0 0 14px 0;
+}
+
+.globe-recovery-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: 8px 16px;
+  border-radius: 6px;
+  border: 1px solid rgba(56, 189, 248, 0.6);
+  background: rgba(56, 189, 248, 0.18);
+  color: #f8fafc;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.globe-recovery-btn:hover {
+  background: rgba(56, 189, 248, 0.32);
+}
+
+.terrain-status {
+  position: absolute;
+  right: 16px;
+  bottom: 72px;
+  z-index: 26;
+  padding: 5px 10px;
+  border-radius: 6px;
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  background: rgba(10, 18, 32, 0.88);
+  color: #fde68a;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+/* ─── Satellite IR Clouds HUD (SSEC RealEarth) ─── */
+.satellite-clouds-hud {
+  position: fixed;
+  left: 50%;
+  bottom: 16px;
+  transform: translateX(-50%);
+  z-index: 42;
+  min-width: 280px;
+  max-width: 390px;
+  padding: 9px 12px;
+  border-radius: 9px;
+  border: 1px solid rgba(148, 163, 184, 0.28);
+  background: rgba(6, 12, 24, 0.88);
+  backdrop-filter: blur(12px);
+  color: #e2e8f0;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+}
+
+.sat-clouds-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.sat-clouds-title-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+.sat-clouds-title {
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  color: #e2e8f0;
+}
+
+.sat-clouds-stale-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 1px 6px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #fbbf24;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.sat-clouds-refresh-btn {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 22px;
+  height: 22px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.65);
+  color: #94a3b8;
+  cursor: pointer;
+}
+
+.sat-clouds-meta {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-top: 5px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.sat-clouds-time {
+  color: #38bdf8;
+  font-weight: 700;
+}
+
+.sat-clouds-age {
+  color: #94a3b8;
+}
+
+.sat-clouds-warning {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 6px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  background: rgba(245, 158, 11, 0.14);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fde68a;
+  font-size: 10px;
+}
+
+.sat-clouds-controls {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 7px;
+}
+
+.sat-clouds-btn,
+.sat-clouds-play-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 7px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.25);
+  background: rgba(15, 23, 42, 0.8);
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.sat-clouds-play-btn.playing {
+  border-color: rgba(56, 189, 248, 0.6);
+  background: rgba(56, 189, 248, 0.2);
+  color: #7dd3fc;
+}
+
+.sat-clouds-frame-dots {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-left: auto;
+}
+
+.sat-clouds-dot-btn {
+  padding: 3px 6px;
+  border-radius: 4px;
+  border: 1px solid rgba(148, 163, 184, 0.22);
+  background: transparent;
+  color: #94a3b8;
+  font-family: var(--font-mono);
+  font-size: 9px;
+  cursor: pointer;
+}
+
+.sat-clouds-dot-btn.active {
+  border-color: rgba(56, 189, 248, 0.65);
+  background: rgba(56, 189, 248, 0.18);
+  color: #f8fafc;
+}
+
+.cockpit-cloud-estimate-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 999px;
+  border: 1px solid rgba(148, 163, 184, 0.35);
+  background: rgba(15, 23, 42, 0.82);
+  color: #e2e8f0;
+  font-family: var(--font-mono);
+  font-size: 10px;
+}
+
+.spin-icon {
+  animation: spin-keyframes 1s linear infinite;
+}
+
+@keyframes spin-keyframes {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
+/* ─── Assistant Live Web & Tool Proof ─── */
+.assistant-web-results,
+.assistant-tool-proof {
+  margin-top: 8px;
+  padding: 8px 10px;
+  border-radius: 7px;
+  border: 1px solid rgba(56, 189, 248, 0.28);
+  background: rgba(8, 17, 34, 0.78);
+}
+
+.assistant-tool-proof-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+  color: #34d399;
+  margin-bottom: 6px;
+}
+
+.assistant-tool-proof-item {
+  font-size: 11px;
+  color: #cbd5e1;
+  padding: 5px 0;
+  border-top: 1px solid rgba(148, 163, 184, 0.14);
+}
+
+.assistant-tool-proof-item:first-of-type {
+  border-top: none;
+  padding-top: 0;
+}
+
+.assistant-tool-urls {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  margin-top: 4px;
+}
+
+.assistant-tool-url-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: #7dd3fc;
+  font-size: 10px;
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.assistant-tool-url-link:hover {
+  text-decoration: underline;
+}
+
+@media (max-width: 768px) {
+  .satellite-clouds-hud {
+    left: 10px;
+    right: 10px;
+    bottom: 64px;
+    transform: none;
+    min-width: 0;
+    max-width: none;
+  }
+
+  .cockpit-tactical-header {
+    flex-wrap: wrap;
+    gap: 6px;
+  }
+
+  .cockpit-cloud-estimate-badge {
+    font-size: 9px;
+    max-width: 100%;
+  }
 }
 
 

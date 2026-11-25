@@ -104,6 +104,52 @@ class AssistantTests(unittest.TestCase):
         # Non-UUID entity ID safely results in None in entity_ids list
         self.assertIsNone(call_kwargs["entity_ids"])
 
+    @patch("app.main.generate_travel_plan")
+    @patch("app.main.WorldRepository")
+    def test_assistant_map_context_preserves_web_intelligence_and_urls(
+        self, mock_repo_class: MagicMock, mock_travel_plan: MagicMock
+    ) -> None:
+        mock_repo = MagicMock()
+        mock_repo_class.return_value = mock_repo
+        mock_context = MagicMock()
+        mock_context.model_dump.return_value = {
+            "query_scope": {},
+            "entities": [],
+            "observations": [],
+            "events": [],
+            "geometries": [],
+            "relationships": [],
+            "claims": [],
+            "evidence": [],
+            "assumptions_or_limitations": [],
+        }
+        mock_repo.scoped_context.return_value = mock_context
+        mock_travel_plan.return_value = {
+            "destination": "Tokyo",
+            "summary": "Overview",
+            "spoken_summary": "Spoken",
+            "famous_attractions": [],
+            "local_food_recommendations": [],
+            "days": [],
+            "pro_tips": [],
+            "web_intelligence": [{"platform": "web", "title": "Tokyo Guide", "url": "https://example.com/tokyo"}],
+            "social_intelligence": [{"platform": "reddit", "title": "r/JapanTravel", "url": "https://reddit.com/r/JapanTravel/1"}],
+            "source": "Exa + Reddit",
+        }
+
+        req = AssistantMapContextRequest(
+            map_bounds=AssistantMapBounds(min_lon=139.0, min_lat=35.0, max_lon=140.0, max_lat=36.0),
+        )
+        res = assistant_map_context(req)
+        intel = res["travel_intelligence"]
+        self.assertEqual(len(intel["web_intelligence"]), 1)
+        self.assertEqual(len(intel["social_intelligence"]), 1)
+        self.assertEqual(
+            intel["source_urls"],
+            ["https://example.com/tokyo", "https://reddit.com/r/JapanTravel/1"],
+        )
+        self.assertEqual(intel["source"], "Exa + Reddit")
+
 
 if __name__ == "__main__":
     unittest.main()

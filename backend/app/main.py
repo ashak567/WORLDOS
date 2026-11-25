@@ -513,6 +513,13 @@ def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]
         interest_val = request.travel_preferences.photo_interest if request.travel_preferences and request.travel_preferences.photo_interest else ""
         try:
             plan = generate_travel_plan(destination=dest_guess, days=3, pace=pace_val, interest=interest_val)
+            web_intel = plan.get("web_intelligence") or []
+            social_intel = plan.get("social_intelligence") or []
+            source_urls = [
+                item.get("url")
+                for item in [*web_intel, *social_intel]
+                if isinstance(item, dict) and item.get("url")
+            ]
             result["travel_intelligence"] = {
                 "destination": plan["destination"],
                 "summary": plan["summary"],
@@ -521,6 +528,10 @@ def assistant_map_context(request: AssistantMapContextRequest) -> dict[str, Any]
                 "local_food_recommendations": plan["local_food_recommendations"],
                 "itinerary_days": plan["days"],
                 "pro_tips": plan["pro_tips"],
+                "web_intelligence": web_intel,
+                "social_intelligence": social_intel,
+                "source_urls": source_urls,
+                "source": plan.get("source", ""),
                 "assistant_instructions": (
                     "CRITICAL DIRECTIVE: DO NOT ask endless questions back to the user. "
                     f"The 3D globe viewport is currently near {plan['destination']}. "
