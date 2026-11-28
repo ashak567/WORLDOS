@@ -6119,3 +6119,10 @@ html, body, #root {
 
 
 
+
+.assistant-background-status {position:fixed;top:64px;left:50%;transform:translateX(-50%);z-index:1500;display:flex;align-items:center;gap:8px;padding:8px 12px;background:rgba(16,33,48,0.95);border:1px solid #4a6b80;border-radius:999px;color:#e2e8f0;max-width:calc(100vw - 36px);box-shadow:0 6px 20px rgba(0,0,0,0.45);font-size:12px;}
+.assistant-background-status button,.assistant-tour-controls button {background:#18384b;color:#e2e8f0;border:1px solid #487184;border-radius:8px;padding:8px;cursor:pointer;}
+.assistant-tour-controls button:disabled {opacity:.4;cursor:default;}
+.assistant-wake-controls,.assistant-tour-controls {display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:8px 0;}
+.assistant-wake-controls small {color:#a5b9c8;max-width:320px;}
+.assistant-tour-controls strong {width:100%;}

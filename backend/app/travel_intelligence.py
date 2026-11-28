@@ -3,10 +3,12 @@
 Queries Google Places API (New), Wikipedia, and curated travel intelligence to formulate
 concrete day-by-day travel plans, famous sights, and authentic local food hidden gems.
 """
+
 from __future__ import annotations
 
 import json
 import logging
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -59,6 +61,7 @@ def resolve_destination_from_coords(lat: float, lon: float) -> str:
             best_dist = dist
             best_city = name
     return best_city
+
 
 CURATED_DESTINATIONS: dict[str, dict[str, Any]] = {
     "tokyo": {
@@ -334,12 +337,14 @@ def fetch_wikipedia_summary(destination: str) -> dict[str, Any] | None:
                 "lat": coords.get("lat") if coords else None,
                 "lon": coords.get("lon") if coords else None,
             }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         logger.debug("Wikipedia summary lookup failed for %s: %s", cleaned, exc)
         return None
 
 
-def fetch_google_places_internet(text_query: str, limit: int = 4) -> list[dict[str, Any]]:
+def fetch_google_places_internet(
+    text_query: str, limit: int = 4
+) -> list[dict[str, Any]]:
     """Query live internet places via Google Places API (New) searchText endpoint."""
     api_key = _get_api_key("google_maps")
     if not api_key:
@@ -355,7 +360,9 @@ def fetch_google_places_internet(text_query: str, limit: int = 4) -> list[dict[s
             "places.rating,places.userRatingCount,places.editorialSummary,places.photos"
         ),
     }
-    req = urllib.request.Request(url, data=json.dumps(payload).encode("utf-8"), headers=headers)
+    req = urllib.request.Request(
+        url, data=json.dumps(payload).encode("utf-8"), headers=headers
+    )
     try:
         with urllib.request.urlopen(req, timeout=7.0) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -381,17 +388,28 @@ def fetch_google_places_internet(text_query: str, limit: int = 4) -> list[dict[s
                             f"https://places.googleapis.com/v1/{pref}/media?maxHeightPx=600&maxWidthPx=900&key={api_key}"
                         )
 
-                results.append({
-                    "name": name,
-                    "summary": summary,
-                    "lat": lat,
-                    "lon": lon,
-                    "rating": rating,
-                    "user_rating_count": count,
-                    "address": address,
-                    "photos": photos,
-                })
+                results.append(
+                    {
+                        "name": name,
+                        "summary": summary,
+                        "lat": lat,
+                        "lon": lon,
+                        "rating": rating,
+                        "user_rating_count": count,
+                        "address": address,
+                        "photos": photos,
+                    }
+                )
             return results
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode("utf-8", errors="replace")[:400]
+        logger.warning(
+            "Google Places searchText failed for '%s': HTTP %s %s",
+            text_query,
+            exc.code,
+            detail,
+        )
+        return []
     except Exception as exc:
         logger.warning("Google Places searchText failed for '%s': %s", text_query, exc)
         return []
@@ -417,15 +435,23 @@ def generate_travel_plan(
     curated = CURATED_DESTINATIONS.get(matched_key) if matched_key else None
 
     # 2. Fetch live internet intelligence from Google Places (New)
-    live_sights = fetch_google_places_internet(f"top attractions and landmarks in {cleaned_dest}", limit=6)
-    live_food = fetch_google_places_internet(f"best authentic local food hidden gems restaurants in {cleaned_dest}", limit=4)
+    live_sights = fetch_google_places_internet(
+        f"top attractions and landmarks in {cleaned_dest}", limit=6
+    )
+    live_food = fetch_google_places_internet(
+        f"best authentic local food hidden gems restaurants in {cleaned_dest}", limit=4
+    )
 
     # 3. Fetch Wikipedia summary
     wiki = fetch_wikipedia_summary(cleaned_dest)
 
     # 4. Fetch Live Social & Neural Intelligence (Reddit, Exa, Tavily)
-    social_intel = search_reddit_intelligence(f"{cleaned_dest} travel tips hidden gems itinerary", limit=3)
-    web_intel = search_web_intelligence(f"best places to visit in {cleaned_dest} sights and food", limit=3)
+    social_intel = search_reddit_intelligence(
+        f"{cleaned_dest} travel tips hidden gems itinerary", limit=3
+    )
+    web_intel = search_web_intelligence(
+        f"best places to visit in {cleaned_dest} sights and food", limit=3
+    )
 
     # Resolve center coordinates
     center_lon = 0.0
@@ -452,22 +478,25 @@ def generate_travel_plan(
         nm = s["name"].lower()
         if nm not in seen_names:
             seen_names.add(nm)
-            combined_sights.append({
-                "name": s["name"],
-                "summary": s["summary"] or f"Must-visit landmark in {dest_title}.",
-                "lat": s["lat"],
-                "lon": s["lon"],
-                "rating": s["rating"] or 4.6,
-                "type": "sight",
-                "address": s.get("address", ""),
-            })
+            combined_sights.append(
+                {
+                    "name": s["name"],
+                    "summary": s["summary"] or f"Must-visit landmark in {dest_title}.",
+                    "lat": s["lat"],
+                    "lon": s["lon"],
+                    "rating": s.get("rating"),
+                    "verified": True,
+                    "type": "sight",
+                    "address": s.get("address", ""),
+                }
+            )
 
     if curated:
         for s in curated.get("famous_attractions", []):
             nm = s["name"].lower()
             if nm not in seen_names:
                 seen_names.add(nm)
-                combined_sights.append(s)
+                combined_sights.append({**s, "verified": False})
 
     # Combine food & hidden gems
     combined_food: list[dict[str, Any]] = []
@@ -476,22 +505,26 @@ def generate_travel_plan(
         nm = f["name"].lower()
         if nm not in seen_food:
             seen_food.add(nm)
-            combined_food.append({
-                "name": f["name"],
-                "summary": f["summary"] or f"Authentic local dining spot in {dest_title}.",
-                "lat": f["lat"],
-                "lon": f["lon"],
-                "rating": f["rating"] or 4.7,
-                "type": "food",
-                "address": f.get("address", ""),
-            })
+            combined_food.append(
+                {
+                    "name": f["name"],
+                    "summary": f["summary"]
+                    or f"Authentic local dining spot in {dest_title}.",
+                    "lat": f["lat"],
+                    "lon": f["lon"],
+                    "rating": f.get("rating"),
+                    "verified": True,
+                    "type": "food",
+                    "address": f.get("address", ""),
+                }
+            )
 
     if curated:
         for f in curated.get("local_food", []):
             nm = f["name"].lower()
             if nm not in seen_food:
                 seen_food.add(nm)
-                combined_food.append(f)
+                combined_food.append({**f, "verified": False})
 
     # 4. Synthesize day-by-day itinerary
     itinerary_days: list[dict[str, Any]] = []
@@ -507,28 +540,46 @@ def generate_travel_plan(
 
     for d in range(1, day_count + 1):
         theme = themes[(d - 1) % len(themes)]
-        morning_sight = combined_sights[(d - 1) * 2 % max(1, len(combined_sights))] if combined_sights else {
-            "name": f"Historic Center & Main Square of {dest_title}",
-            "summary": "Begin with morning exploration of the central historic district.",
-            "lat": center_lat + 0.005,
-            "lon": center_lon + 0.005,
-            "rating": 4.6,
-        }
-        afternoon_sight = combined_sights[((d - 1) * 2 + 1) % max(1, len(combined_sights))] if len(combined_sights) > 1 else {
-            "name": f"Cultural Landmark & Grand Promenade",
-            "summary": "Explore iconic architecture and pedestrian plazas in the afternoon.",
-            "lat": center_lat - 0.005,
-            "lon": center_lon - 0.005,
-            "rating": 4.7,
-        }
-        lunch_spot = combined_food[(d - 1) % max(1, len(combined_food))] if combined_food else {
-            "name": f"Authentic Local Bistro & Market",
-            "summary": "Savor authentic regional cuisine and local specialties.",
-            "lat": center_lat + 0.002,
-            "lon": center_lon - 0.003,
-            "rating": 4.8,
-        }
+        morning_sight = (
+            combined_sights[(d - 1) * 2 % max(1, len(combined_sights))]
+            if combined_sights
+            else {
+                "name": f"Historic Center & Main Square of {dest_title}",
+                "summary": "Explore the central historic district (live place listings were unavailable).",
+                "lat": center_lat + 0.005,
+                "lon": center_lon + 0.005,
+                "rating": None,
+            }
+        )
+        afternoon_sight = (
+            combined_sights[((d - 1) * 2 + 1) % max(1, len(combined_sights))]
+            if len(combined_sights) > 1
+            else {
+                "name": f"Cultural District of {dest_title}",
+                "summary": "Explore pedestrian plazas and local architecture.",
+                "lat": center_lat - 0.005,
+                "lon": center_lon - 0.005,
+                "rating": None,
+            }
+        )
+        lunch_spot = (
+            combined_food[(d - 1) % max(1, len(combined_food))]
+            if combined_food
+            else {
+                "name": f"Central Food District ({dest_title})",
+                "summary": "Browse regional cuisine in the local food district.",
+                "lat": center_lat + 0.002,
+                "lon": center_lon - 0.003,
+                "rating": None,
+            }
+        )
 
+        lunch_rating = lunch_spot.get("rating")
+        lunch_rating_note = (
+            f" ({lunch_rating:.1f}★ Google rating)"
+            if isinstance(lunch_rating, (int, float))
+            else ""
+        )
         activities = [
             {
                 "time_of_day": "Morning",
@@ -537,46 +588,58 @@ def generate_travel_plan(
                 "location_name": morning_sight["name"],
                 "lat": morning_sight["lat"],
                 "lon": morning_sight["lon"],
-                "rating": morning_sight.get("rating", 4.6),
+                "rating": morning_sight.get("rating"),
                 "type": "sight",
             },
             {
                 "time_of_day": "Afternoon",
                 "title": f"Lunch at {lunch_spot['name']} & Tour {afternoon_sight['name']}",
-                "description": f"Enjoy local specialties at {lunch_spot['name']} ({lunch_spot.get('rating', 4.7)}★), then head to {afternoon_sight['name']}.",
+                "description": f"Enjoy local specialties at {lunch_spot['name']}{lunch_rating_note}, then head to {afternoon_sight['name']}.",
                 "location_name": afternoon_sight["name"],
                 "lat": afternoon_sight["lat"],
                 "lon": afternoon_sight["lon"],
-                "rating": afternoon_sight.get("rating", 4.7),
+                "rating": afternoon_sight.get("rating"),
                 "type": "food",
             },
             {
                 "time_of_day": "Evening",
-                "title": f"Sunset Panorama & Vibrant Evening Corridor",
-                "description": f"Cap off Day {d} with golden hour views and dinner at a recommended local venue in {dest_title}.",
+                "title": f"Evening Walk in {dest_title}",
+                "description": f"Finish Day {d} with evening views and local dining in {dest_title}.",
                 "location_name": f"{dest_title} Evening Vista",
                 "lat": morning_sight["lat"] + 0.003,
                 "lon": morning_sight["lon"] + 0.003,
-                "rating": 4.8,
+                "rating": None,
                 "type": "scenic",
             },
         ]
 
-        itinerary_days.append({
-            "day_number": d,
-            "theme": theme,
-            "activities": activities,
-        })
+        itinerary_days.append(
+            {
+                "day_number": d,
+                "theme": theme,
+                "activities": activities,
+            }
+        )
 
     # Pro-tips
-    pro_tips = curated.get("pro_tips", []) if curated else [
-        f"Use public metro and transit passes for fast traversal across {dest_title}.",
-        f"Early mornings (before 9 AM) offer crowd-free photography at major landmarks in {dest_title}.",
-        f"Look for dining spots with high local patron counts and multi-generational family menus.",
-    ]
+    pro_tips = (
+        curated.get("pro_tips", [])
+        if curated
+        else [
+            f"Use public metro and transit passes for fast traversal across {dest_title}.",
+            f"Early mornings (before 9 AM) offer crowd-free photography at major landmarks in {dest_title}.",
+            f"Look for dining spots with high local patron counts and multi-generational family menus.",
+        ]
+    )
 
-    overview_text = wiki.get("summary") if wiki else (
-        curated.get("summary") if curated else f"{dest_title} is one of the world's premier destinations with rich culture, historic landmarks, and exceptional culinary traditions."
+    overview_text = (
+        wiki.get("summary")
+        if wiki
+        else (
+            curated.get("summary")
+            if curated
+            else f"{dest_title} is one of the world's premier destinations with rich culture, historic landmarks, and exceptional culinary traditions."
+        )
     )
 
     # Formulate a spoken brief for ElevenLabs Conversational AI voice assistant
@@ -587,6 +650,19 @@ def generate_travel_plan(
         f"For authentic local food, I recommend {combined_food[0]['name'] if combined_food else 'the central food market'}. "
         f"I've loaded the interactive day-by-day itinerary with exact map coordinates onto your screen. Say 'fly to' any spot to zoom right in!"
     )
+
+    has_live_places = bool(live_sights or live_food)
+    sources_used = []
+    if web_intel:
+        sources_used.append("Exa Web Search")
+    if social_intel:
+        sources_used.append("Reddit Intelligence")
+    if has_live_places:
+        sources_used.append("Google Places (Verified)")
+    elif curated:
+        sources_used.append("Curated Offline Guide (Places Fallback)")
+    if wiki:
+        sources_used.append("Wikipedia")
 
     return {
         "status": "success",
@@ -602,5 +678,6 @@ def generate_travel_plan(
         "social_intelligence": social_intel,
         "web_intelligence": web_intel,
         "spoken_summary": spoken_summary,
-        "source": "Exa Neural Search · Reddit Intelligence · Google Places · Wikipedia",
+        "has_verified_places": has_live_places,
+        "source": " · ".join(sources_used) if sources_used else "Curated Offline Guide",
     }

@@ -806,6 +806,10 @@ export interface RoadRouteResponse {
   summary: string;
   steps: RoadRouteStep[];
   polyline: [number, number][]; // [[lon, lat], ...]
+  is_estimated?: boolean;
+  routing_provider?: string;
+  external_directions_url?: string | null;
+  limitation_note?: string | null;
 }
 
 export interface UserNavigationState {
@@ -1378,10 +1382,10 @@ export async function fetchDiscoveredPlaces(params: {
             category: params.category || 'stays',
             latitude: loc.latitude ?? params.latitude,
             longitude: loc.longitude ?? params.longitude,
-            rating: typeof p.rating === 'number' ? p.rating : 4.8,
-            user_rating_count: typeof p.userRatingCount === 'number' ? p.userRatingCount : 350,
-            price_level: p.priceLevel ? '$$$$' : '$$$',
-            price_display: 'Luxury',
+            rating: typeof p.rating === 'number' ? p.rating : null,
+            user_rating_count: typeof p.userRatingCount === 'number' ? p.userRatingCount : null,
+            price_level: p.priceLevel === 'PRICE_LEVEL_VERY_EXPENSIVE' ? '$$$$' : p.priceLevel === 'PRICE_LEVEL_EXPENSIVE' ? '$$$' : p.priceLevel === 'PRICE_LEVEL_MODERATE' ? '$$' : p.priceLevel === 'PRICE_LEVEL_INEXPENSIVE' ? '$' : null,
+            price_display: p.priceLevel ? String(p.priceLevel).replace('PRICE_LEVEL_', '').toLowerCase() : null,
             formatted_address: p.formattedAddress || 'Metropolitan District',
             summary: p.editorialSummary?.text || 'Prime architectural destination renowned for celebrated hospitality and skyline views.',
             photos: photosList.length > 0 ? photosList : ['https://images.unsplash.com/photo-1566073771259-6a8506099945?w=600'],

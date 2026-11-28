@@ -14,6 +14,7 @@ import math
 import os
 import re
 import time
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import asdict, dataclass
@@ -150,7 +151,7 @@ def _convert_price_level(raw: Any) -> tuple[str | None, str | None]:
         return "$$", "Moderate"
     if raw in ("PRICE_LEVEL_INEXPENSIVE", 1, "1"):
         return "$", "Budget"
-    return "$$$", "Upscale"
+    return None, None
 
 
 def search_places_nearby(
@@ -238,8 +239,8 @@ def search_places_nearby(
                 loc = p.get("location", {})
                 plat = float(loc.get("latitude", latitude))
                 plon = float(loc.get("longitude", longitude))
-                rating = float(p.get("rating")) if p.get("rating") is not None else 4.6
-                reviews = int(p.get("userRatingCount")) if p.get("userRatingCount") is not None else 250
+                rating = float(p["rating"]) if p.get("rating") is not None else None
+                reviews = int(p["userRatingCount"]) if p.get("userRatingCount") is not None else None
                 price_code, price_label = _convert_price_level(p.get("priceLevel"))
                 addr = p.get("formattedAddress") or "Downtown District"
                 summary = p.get("editorialSummary", {}).get("text") or (
@@ -284,6 +285,9 @@ def search_places_nearby(
                 _CACHE[cache_key] = (now, places)
                 return places
 
+    except urllib.error.HTTPError as err:
+        detail = err.read().decode("utf-8", errors="replace")[:400]
+        logger.error("Error querying Google Places API: HTTP %s %s", err.code, detail)
     except Exception as err:
         logger.error(f"Error querying Google Places API: {err}")
 
@@ -436,7 +440,7 @@ def _generate_fallback_places(lat: float, lon: float, category: PlaceCategory, l
             google_maps_url=f"https://www.google.com/maps/search/?api=1&query={urllib.parse.quote(name)}",
             website_url="https://worldos.internal/places",
             aerial_view_url=None,
-            verified=True,
+            verified=False,
         )
         res.append(item.to_dict())
 

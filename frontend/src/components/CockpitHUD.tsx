@@ -246,7 +246,7 @@ export const CockpitHUD: React.FC<CockpitHUDProps> = ({ aircraft, allAircraft = 
         {cloudEstimate && (
           <div
             className="cockpit-cloud-estimate-badge"
-            title="3D cloud layers rendered in cockpit view are visual height/density estimates derived from SSEC RealEarth satellite IR brightness."
+            title="3D cloud layers rendered in cockpit view are visual height/density estimates derived from EUMETSAT IR satellite brightness."
           >
             <Cloud size={12} color="#e2e8f0" />
             <span>

@@ -746,7 +746,7 @@ export default function App() {
         />
       </main>
 
-      {/* Hourly SSEC RealEarth Infrared Satellite Clouds HUD */}
+      {/* EUMETSAT 3-Hourly Infrared Satellite Clouds HUD */}
       <SatelliteClouds
         enabled={Boolean(layers.find((l) => l.id === 'live-clouds')?.enabled)}
         inCockpit={Boolean(cockpitAircraft)}
@@ -774,6 +774,7 @@ export default function App() {
             ...(selectedItem?.data?.entity_id ? { selected_entity_id: String(selectedItem.data.entity_id) } : {}),
             ...(viewportBbox ? { map_bounds: viewportBbox } : {}),
           }}
+          onWake={() => setIsAssistantOpen(true)}
           onClose={() => setIsAssistantOpen(false)}
           onAction={handleAssistantAction}
           onSearchStatusChange={setSearchHUD}

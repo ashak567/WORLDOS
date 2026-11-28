@@ -567,7 +567,8 @@ def search_intelligence_endpoint(
     """Execute live neural web or social intelligence search via Exa and Tavily."""
     results = search_web_intelligence(query=q, limit=limit, platform=platform)
     return {
-        "status": "success",
+        "status": "success" if results else "unavailable_or_no_results",
+        "checked_at": datetime.now(UTC).isoformat(),
         "query": q,
         "platform": platform,
         "count": len(results),
@@ -604,7 +605,10 @@ def geocode_endpoint(
 ) -> GeocodeResponse:
     """Geocode any place, landmark, city, or airport into exact geographic coordinates."""
     q_str = query if isinstance(query, str) else ""
-    return geocode_location(q_str)
+    try:
+        return geocode_location(q_str)
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
 
 
 @app.get("/navigation/road-route", response_model=RoadRouteResponse)

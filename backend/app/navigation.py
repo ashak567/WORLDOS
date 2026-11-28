@@ -10,16 +10,18 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
+import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Literal
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from .ingestion.flight_routes import (
-    WORLD_AIRPORTS,
     AIRPORTS_BY_IATA,
+    WORLD_AIRPORTS,
     Airport,
     haversine_distance_km,
 )
@@ -56,6 +58,10 @@ class RoadRouteResponse(BaseModel):
     summary: str
     steps: list[RoadRouteStep]
     polyline: list[list[float]]  # [[lon, lat], ...]
+    is_estimated: bool = False
+    routing_provider: str = "OSRM"
+    external_directions_url: str | None = None
+    limitation_note: str | None = None
 
 
 class GeocodeResponse(BaseModel):
@@ -856,17 +862,19 @@ def resolve_airport(query: str) -> Airport | None:
         "auckland": "NZAA",
     }
     for alias, icao in alias_map.items():
-        if alias == lower or (len(clean) >= 4 and alias in lower) or (len(clean) >= 4 and lower in alias):
-            if icao in WORLD_AIRPORTS:
-                return WORLD_AIRPORTS[icao]
+        if (
+            alias == lower
+            or (len(clean) >= 4 and (alias in lower or lower in alias))
+        ) and icao in WORLD_AIRPORTS:
+            return WORLD_AIRPORTS[icao]
 
     # 4. Search in WORLD_AIRPORTS (exact city or IATA match first)
-    for code, apt in WORLD_AIRPORTS.items():
+    for apt in WORLD_AIRPORTS.values():
         if lower == apt.city.lower() or lower == apt.iata.lower():
             return apt
 
     # Substring in city, name, or country
-    for code, apt in WORLD_AIRPORTS.items():
+    for apt in WORLD_AIRPORTS.values():
         if lower in apt.city.lower() or lower in apt.name.lower() or lower in apt.country.lower():
             return apt
 
@@ -1036,7 +1044,7 @@ def _generate_custom_corridor_flights(
     # Base cruising speed ~880 km/h + 30 min climb/approach
     direct_hours = round(max(0.8, (dist_km / 880.0) + 0.5), 1)
     dh = int(direct_hours)
-    dm = int(round((direct_hours - dh) * 60))
+    dm = round((direct_hours - dh) * 60)
     direct_dur_str = f"{dh}h {dm}m"
 
     waypoints_3d = _interpolate_geodesic_3d(
@@ -1144,7 +1152,7 @@ def _generate_custom_corridor_flights(
     # 3. Premier Global Super-Connector: Emirates (via DXB)
     conn_hours_1 = round(direct_hours + 2.4, 1)
     ch1 = int(conn_hours_1)
-    cm1 = int(round((conn_hours_1 - ch1) * 60))
+    cm1 = round((conn_hours_1 - ch1) * 60)
     flt_num_3 = f"EK{abs(hash(orig_apt.city + 'EK')) % 500 + 201}"
     plans.append(
         InboundFlightPlan(
@@ -1193,7 +1201,7 @@ def _generate_custom_corridor_flights(
 
     conn_hours_2 = round(direct_hours + 2.8, 1)
     ch2 = int(conn_hours_2)
-    cm2 = int(round((conn_hours_2 - ch2) * 60))
+    cm2 = round((conn_hours_2 - ch2) * 60)
     plans.append(
         InboundFlightPlan(
             flight_id=f"{alt_flt}-{orig_apt.iata}-{dest_apt.iata}",
@@ -1297,13 +1305,11 @@ def get_inbound_flight_plans(
     dest_apt = resolve_airport(destination) or resolve_destination_airport(destination)
 
     # Check if user specified a distinct custom origin airport
-    has_custom_origin = False
     if origin and isinstance(origin, str):
         clean_orig = origin.strip()
         if clean_orig and clean_orig.upper() not in ("ALL", "ANY", "WORLDWIDE"):
             orig_apt = resolve_airport(clean_orig)
             if orig_apt and orig_apt.icao != dest_apt.icao:
-                has_custom_origin = True
                 custom_flights = _generate_custom_corridor_flights(orig_apt, dest_apt)
                 return FlightPlansResponse(
                     destination=f"{orig_apt.iata} to {dest_apt.iata}",
@@ -1380,7 +1386,7 @@ def get_inbound_flight_plans(
         )
         est_hours = round(max(0.8, (dist_km / 880.0) + 0.5), 1)
         h = int(est_hours)
-        m = int(round((est_hours - h) * 60))
+        m = round((est_hours - h) * 60)
         dur_str = f"{h}h {m}m"
 
         # 3D waypoints for Cesium globe
@@ -1439,7 +1445,7 @@ def get_inbound_flight_plans(
             longitude=dest_apt.longitude,
         ),
         total_inbound_flights=len(flight_items),
-        origin_countries=sorted(list(seen_countries)),
+        origin_countries=sorted(seen_countries),
         flights=flight_items,
     )
 
@@ -1494,11 +1500,11 @@ def _format_maneuver_instruction(
 def _format_distance(meters: float) -> str:
     if meters >= 1000:
         return f"{meters / 1000.0:.1f} km"
-    return f"{int(round(meters))} m"
+    return f"{round(meters)} m"
 
 
 def _format_duration(seconds: float) -> str:
-    mins = int(round(seconds / 60.0))
+    mins = round(seconds / 60.0)
     if mins < 60:
         return f"{mins} min" if mins > 0 else "< 1 min"
     hrs = mins // 60
@@ -1633,22 +1639,47 @@ KNOWN_WORLD_LANDMARKS: dict[str, tuple[float, float, str]] = {
 }
 
 
+KNOWN_WORLD_COUNTRIES: dict[str, tuple[float, float, str]] = {
+    "japan": (36.2048, 138.2529, "Japan"),
+    "france": (46.2276, 2.2137, "France"),
+    "italy": (41.8719, 12.5674, "Italy"),
+    "united kingdom": (55.3781, -3.4360, "United Kingdom"),
+    "uk": (55.3781, -3.4360, "United Kingdom"),
+    "united states": (39.8283, -98.5795, "United States"),
+    "usa": (39.8283, -98.5795, "United States"),
+    "india": (20.5937, 78.9629, "India"),
+    "germany": (51.1657, 10.4515, "Germany"),
+    "spain": (40.4637, -3.7492, "Spain"),
+    "australia": (-25.2744, 133.7751, "Australia"),
+    "canada": (56.1304, -106.3468, "Canada"),
+    "brazil": (-14.2350, -51.9253, "Brazil"),
+    "switzerland": (46.8182, 8.2275, "Switzerland"),
+    "uae": (23.4241, 53.8478, "United Arab Emirates"),
+    "united arab emirates": (23.4241, 53.8478, "United Arab Emirates"),
+    "south korea": (35.9078, 127.7669, "South Korea"),
+    "china": (35.8617, 104.1954, "China"),
+    "thailand": (15.8700, 100.9925, "Thailand"),
+    "turkey": (38.9637, 35.2433, "Turkey"),
+    "egypt": (26.8206, 30.8025, "Egypt"),
+}
+
+
+def _contains_phrase(haystack: str, needle: str) -> bool:
+    escaped = re.escape(needle.strip())
+    return bool(escaped and re.search(rf"(?<![a-z0-9]){escaped}(?![a-z0-9])", haystack))
+
+
 def resolve_location_coordinates(query: str) -> tuple[float, float, str] | None:
-    """Resolve latitude, longitude, and descriptive name for any world city, landmark, or airport."""
+    """Resolve latitude, longitude, and descriptive name for any world city, landmark, country, or airport."""
     if not query or not isinstance(query, str):
         return None
     clean = query.strip()
-    if not clean:
+    if len(clean) < 2:
         return None
     lower = clean.lower()
     upper = clean.upper()
 
-    # 1. Match famous world landmarks
-    for k, (lat, lon, name) in KNOWN_WORLD_LANDMARKS.items():
-        if k in lower or lower in k:
-            return lat, lon, name
-
-    # 2. Match airports in WORLD_AIRPORTS catalog
+    # 1. Exact airport code/ICAO/name matches
     if upper in AIRPORTS_BY_IATA:
         a = AIRPORTS_BY_IATA[upper]
         return a.latitude, a.longitude, f"{a.name} ({a.iata})"
@@ -1656,22 +1687,41 @@ def resolve_location_coordinates(query: str) -> tuple[float, float, str] | None:
         a = WORLD_AIRPORTS[upper]
         return a.latitude, a.longitude, f"{a.name} ({a.iata})"
 
+    # 2. Exact match in cities, landmarks, or countries before any fuzzy match
+    if lower in KNOWN_WORLD_COUNTRIES:
+        return KNOWN_WORLD_COUNTRIES[lower]
+    if lower in KNOWN_WORLD_CITIES:
+        return KNOWN_WORLD_CITIES[lower]
+    if lower in KNOWN_WORLD_LANDMARKS:
+        return KNOWN_WORLD_LANDMARKS[lower]
+
+    # 3. Word-boundary landmark phrase matching (e.g. "Eiffel Tower, Paris" or "Senso-ji")
+    for k, coords in KNOWN_WORLD_LANDMARKS.items():
+        if _contains_phrase(lower, k):
+            return coords
+
+    # 4. Whole-word IATA / airport name matching (avoids matching countries like "india" to "Indira")
     for a in WORLD_AIRPORTS.values():
         if (
             f"({a.iata.lower()})" in lower
-            or f" {a.iata.lower()} " in f" {lower} "
-            or a.iata.lower() == lower
-            or clean.lower() == a.name.lower()
-            or (len(clean) >= 4 and clean.lower() in a.name.lower())
+            or _contains_phrase(lower, a.iata.lower())
+            or lower == a.name.lower()
+            or _contains_phrase(lower, a.name.lower())
         ):
             return a.latitude, a.longitude, f"{a.name} ({a.iata})"
 
-    # 3. Match major world cities
-    for k, (lat, lon, name) in KNOWN_WORLD_CITIES.items():
-        if k == lower or f" {k} " in f" {lower} " or k in lower:
-            return lat, lon, name
+    # 5. Word-boundary city matching (avoid partial substring false hits like "paris" in "parish")
+    for k, coords in KNOWN_WORLD_CITIES.items():
+        if _contains_phrase(lower, k):
+            return coords
 
-    # 4. Fallback online geocoding via OpenStreetMap Nominatim
+    # 6. Airport partial name match only if query mentions airport or is longer than a country/city single word
+    if "airport" in lower or len(lower) >= 6:
+        for a in WORLD_AIRPORTS.values():
+            if _contains_phrase(a.name.lower(), lower):
+                return a.latitude, a.longitude, f"{a.name} ({a.iata})"
+
+    # 7. Online geocoding via OpenStreetMap Nominatim
     try:
         encoded = urllib.parse.quote(clean)
         url = f"https://nominatim.openstreetmap.org/search?q={encoded}&format=json&limit=1"
@@ -1684,7 +1734,7 @@ def resolve_location_coordinates(query: str) -> tuple[float, float, str] | None:
                 display_name = data[0].get("display_name", clean)
                 short_name = ", ".join(display_name.split(",")[:3]).strip()
                 return lat, lon, short_name
-    except Exception as exc:
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         logger.debug("Online geocoding lookup failed for '%s': %s", clean, exc)
 
     return None
@@ -1702,12 +1752,18 @@ def geocode_location(query: str) -> GeocodeResponse:
             longitude=round(lon, 6),
             formatted_address=name,
         )
-    return GeocodeResponse(
-        query=query,
-        name=query,
-        latitude=35.6762,
-        longitude=139.6503,
-        formatted_address=query,
+    raise ValueError("Location not found; try a city, country or airport name")
+
+
+def _build_external_directions_url(
+    origin_lat: float,
+    origin_lon: float,
+    dest_lat: float,
+    dest_lon: float,
+) -> str:
+    return (
+        "https://www.openstreetmap.org/directions"
+        f"?engine=fossgis_osrm_car&route={origin_lat:.6f}%2C{origin_lon:.6f}%3B{dest_lat:.6f}%2C{dest_lon:.6f}"
     )
 
 
@@ -1719,12 +1775,12 @@ def _fallback_road_route(
     origin_name: str,
     dest_name: str,
 ) -> RoadRouteResponse:
-    """Generate high-fidelity deterministic road route geometry and steps if OSRM is offline."""
+    """Generate an explicitly labeled straight-line fallback estimate when OSRM is unavailable."""
     dist_km = haversine_distance_km(origin_lat, origin_lon, dest_lat, dest_lon) * 1.25
     # Average urban/suburban driving speed 42 km/h
     dur_min = max(3.0, (dist_km / 42.0) * 60.0)
 
-    # Interpolate intermediate waypoints with slight road bends
+    # Interpolate intermediate corridor points along a straight-line path
     num_pts = max(12, min(50, int(dist_km * 3)))
     polyline: list[list[float]] = []
 
@@ -1732,17 +1788,11 @@ def _fallback_road_route(
         f = i / float(num_pts)
         lat = origin_lat + f * (dest_lat - origin_lat)
         lon = origin_lon + f * (dest_lon - origin_lon)
-        # Add subtle orthogonal curvature to mimic real streets
-        bend = 0.003 * math.sin(f * math.pi * 2.0)
-        lat += bend
-        lon += bend * 0.5
         polyline.append([round(lon, 6), round(lat, 6)])
 
-    # Generate realistic turn steps
     p0 = polyline[0]
     p1 = polyline[len(polyline) // 4]
     p2 = polyline[len(polyline) // 2]
-    p3 = polyline[(3 * len(polyline)) // 4]
     pend = polyline[-1]
 
     step_dist_m = (dist_km * 1000.0) / 4.0
@@ -1754,9 +1804,9 @@ def _fallback_road_route(
     steps = [
         RoadRouteStep(
             step_number=1,
-            instruction=f"Depart from {orig_label} onto Main Arterial",
+            instruction=f"Estimated departure from {orig_label} toward {dest_label}",
             maneuver_type="depart",
-            street_name="Main Arterial",
+            street_name="Estimated corridor",
             distance_m=round(step_dist_m, 1),
             distance_formatted=_format_distance(step_dist_m),
             duration_s=round(step_dur_s, 1),
@@ -1765,9 +1815,9 @@ def _fallback_road_route(
         ),
         RoadRouteStep(
             step_number=2,
-            instruction="Take ramp onto Metropolitan Expressway / Corridor",
-            maneuver_type="ramp",
-            street_name="Metropolitan Expressway",
+            instruction=f"Continue along estimated straight-line corridor ({dist_km:.1f} km est.)",
+            maneuver_type="continue",
+            street_name="Estimated corridor",
             distance_m=round(step_dist_m, 1),
             distance_formatted=_format_distance(step_dist_m),
             duration_s=round(step_dur_s, 1),
@@ -1776,9 +1826,9 @@ def _fallback_road_route(
         ),
         RoadRouteStep(
             step_number=3,
-            instruction="Take exit toward City Center / Avenue",
-            maneuver_type="turn_right",
-            street_name="City Center Ave",
+            instruction="Live turn-by-turn road data unavailable; open external directions for real streets",
+            maneuver_type="continue",
+            street_name="Estimated corridor",
             distance_m=round(step_dist_m, 1),
             distance_formatted=_format_distance(step_dist_m),
             duration_s=round(step_dur_s, 1),
@@ -1787,9 +1837,9 @@ def _fallback_road_route(
         ),
         RoadRouteStep(
             step_number=4,
-            instruction=f"Turn left and arrive at {dest_label}",
+            instruction=f"Estimated arrival near {dest_label}",
             maneuver_type="arrive",
-            street_name="Destination Access",
+            street_name="Destination vicinity",
             distance_m=round(step_dist_m, 1),
             distance_formatted=_format_distance(step_dist_m),
             duration_s=round(step_dur_s, 1),
@@ -1807,11 +1857,17 @@ def _fallback_road_route(
         total_distance_km=round(dist_km, 1),
         total_distance_formatted=f"{dist_km:.1f} km",
         total_duration_min=round(dur_min, 1),
-        total_duration_formatted=f"{int(round(dur_min))} mins",
-        primary_roads=["Main Arterial", "Metropolitan Expressway", "City Center Ave"],
-        summary="via Metropolitan Expressway & City Center Ave",
+        total_duration_formatted=f"{round(dur_min)} mins",
+        primary_roads=["Straight-line corridor estimate"],
+        summary="Straight-line estimate (live road routing unavailable)",
         steps=steps,
         polyline=polyline,
+        is_estimated=True,
+        routing_provider="unavailable_straight_line_estimate",
+        external_directions_url=_build_external_directions_url(origin_lat, origin_lon, dest_lat, dest_lon),
+        limitation_note=(
+            "Live OSRM road routing is unavailable; distance, duration, and path are straight-line estimates only."
+        ),
     )
 
 
@@ -1931,13 +1987,16 @@ def calculate_road_route(
                         total_distance_km=round(total_dist_km, 1),
                         total_distance_formatted=f"{total_dist_km:.1f} km",
                         total_duration_min=round(total_dur_min, 1),
-                        total_duration_formatted=f"{int(round(total_dur_min))} mins",
+                        total_duration_formatted=f"{round(total_dur_min)} mins",
                         primary_roads=top_roads,
                         summary=summary_text,
                         steps=steps_list,
                         polyline=geometry,
+                        is_estimated=False,
+                        routing_provider="OSRM",
+                        external_directions_url=_build_external_directions_url(origin_lat, origin_lon, dest_lat, dest_lon),
                     )
-    except Exception as exc:
+    except (urllib.error.URLError, OSError, TimeoutError, ValueError, TypeError, KeyError, json.JSONDecodeError) as exc:
         logger.warning("OSRM routing call failed (%s); serving deterministic fallback route", exc)
 
     return _fallback_road_route(origin_lat, origin_lon, dest_lat, dest_lon, orig_label, dest_label)

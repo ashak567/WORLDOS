@@ -13,6 +13,7 @@ from app.main import (
     AssistantMapContextRequest,
     AssistantTravelPreferences,
     assistant_map_context,
+    search_intelligence_endpoint,
 )
 from pydantic import ValidationError
 
@@ -149,6 +150,26 @@ class AssistantTests(unittest.TestCase):
             ["https://example.com/tokyo", "https://reddit.com/r/JapanTravel/1"],
         )
         self.assertEqual(intel["source"], "Exa + Reddit")
+
+    @patch("app.main.search_web_intelligence", return_value=[])
+    def test_search_intelligence_empty_reports_unavailable_status(self, mock_search: MagicMock) -> None:
+        res = search_intelligence_endpoint(q="tokyo coffee", platform="auto", limit=5)
+        self.assertEqual(res["status"], "unavailable_or_no_results")
+        self.assertEqual(res["count"], 0)
+        self.assertEqual(res["results"], [])
+        self.assertTrue(isinstance(res["checked_at"], str) and len(res["checked_at"]) > 10)
+        mock_search.assert_called_once_with(query="tokyo coffee", limit=5, platform="auto")
+
+    @patch(
+        "app.main.search_web_intelligence",
+        return_value=[{"platform": "web", "title": "Kyoto Guide", "url": "https://example.com/kyoto"}],
+    )
+    def test_search_intelligence_non_empty_reports_success(self, mock_search: MagicMock) -> None:
+        res = search_intelligence_endpoint(q="kyoto coffee", platform="web", limit=3)
+        self.assertEqual(res["status"], "success")
+        self.assertEqual(res["count"], 1)
+        self.assertEqual(len(res["results"]), 1)
+        mock_search.assert_called_once_with(query="kyoto coffee", limit=3, platform="web")
 
 
 if __name__ == "__main__":

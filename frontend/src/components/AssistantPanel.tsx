@@ -1,3 +1,4 @@
+import { useWakeWord } from '../hooks/useWakeWord';
 import React, { FormEvent, useCallback, useEffect, useRef, useState } from 'react';
 import { ConversationProvider, useConversation } from '@elevenlabs/react';
 import {
@@ -25,6 +26,9 @@ import {
   fetchAssistantMapContext,
   getAssistantSession,
   fetchTravelPlan,
+  geocodeLocation,
+  fetchAirports,
+  fetchDiscoveredPlaces,
   fetchIntelligenceSearch,
   IntelligenceSearchResponse,
   TravelPlanResponse,
@@ -34,6 +38,7 @@ interface AssistantPanelProps {
   isOpen: boolean;
   context: AssistantContext;
   onClose: () => void;
+  onWake?: () => void;
   onAction: (action: AssistantAction) => void;
   onOpenNavigation?: (destination?: string) => void;
   onSearchStatusChange?: (status: { active: boolean; platform: string; query: string }) => void;
@@ -49,6 +54,25 @@ type ToolExecutionProof = {
   source: string;
   urls: Array<{ title: string; url: string }>;
 };
+
+function safeHttpUrl(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null;
+  const trimmed = raw.trim();
+  if (!trimmed) return null;
+  try {
+    const parsed = new URL(trimmed);
+    return parsed.protocol === 'https:' || parsed.protocol === 'http:' ? parsed.toString() : null;
+  } catch {
+    return null;
+  }
+}
+
+function clampText(raw: unknown, maxLen: number): string {
+  if (typeof raw !== 'string') return '';
+  const cleaned = raw.replace(/\s+/g, ' ').trim();
+  return cleaned.length > maxLen ? `${cleaned.slice(0, maxLen)}…` : cleaned;
+}
+
 const PREFERENCES_KEY = 'worldos-assistant-preferences-v1';
 const SAFE_LAYER_IDS = new Set([
   'country-boundaries', 'population-observations', 'aircraft-states', 'maritime-vessels',
@@ -206,10 +230,17 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   isOpen,
   context,
   onClose,
+  onWake,
   onAction,
   onOpenNavigation,
   onSearchStatusChange,
 }) => {
+  const agentName = import.meta.env.VITE_ASSISTANT_NAME || 'Rogers';
+  const [tourStops, setTourStops] = useState<Array<{name:string;latitude:number;longitude:number}>>([]);
+  const [tourIndex, setTourIndex] = useState(-1);
+  const tourRef = useRef({stops:tourStops,index:tourIndex});
+  tourRef.current={stops:tourStops,index:tourIndex};
+  const startingRef = useRef(false);
   const [question, setQuestion] = useState('');
   const [messages, setMessages] = useState<AssistantMessage[]>([]);
   const [evidence, setEvidence] = useState<NonNullable<Awaited<ReturnType<typeof fetchAssistantMapContext>>['evidence']>>([]);
@@ -229,6 +260,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   const preferencesRef = useRef(preferences);
   const onActionRef = useRef(onAction);
   const conversationRef = useRef<any>(null);
+  const wakeReleaseRef = useRef<(() => Promise<void>) | null>(null);
   contextRef.current = context;
   preferencesRef.current = preferences;
   onActionRef.current = onAction;
@@ -236,15 +268,19 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   const recordToolExecution = useCallback(
     (toolName: string, query: string, source: string, urls: Array<{ title: string; url: string }>) => {
       const cleanedUrls = urls
-        .filter((item) => Boolean(item?.url))
+        .map((item) => {
+          const validUrl = safeHttpUrl(item?.url);
+          return validUrl ? { title: clampText(item?.title || validUrl, 120) || validUrl, url: validUrl } : null;
+        })
+        .filter((item): item is { title: string; url: string } => Boolean(item))
         .slice(0, 6);
       setToolExecutions((prev) => [
         {
           id: `${toolName}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
           toolName,
-          query,
+          query: clampText(query, 120),
           timestamp: new Date().toLocaleTimeString(),
-          source,
+          source: clampText(source, 80),
           urls: cleanedUrls,
         },
         ...prev.slice(0, 5),
@@ -340,8 +376,10 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
 
     setMessages((current) => [...current.slice(-29), { role: item.role, message: displayMessage }]);
 
-    // Intelligent client-side intent interpreter for voice and text commands
-    if (item.role === 'user') {
+    // Client-side intent interpreter only runs in typed/disconnected mode.
+    // While live ElevenLabs voice is connected, Rogers executes registered client tools directly
+    // to prevent duplicated searches, double fly-tos, and unintended panel switches.
+    if (item.role === 'user' && conversationRef.current?.status !== 'connected') {
       const lower = item.message.toLowerCase();
 
       // Check if user is asking for a travel plan or recommendations
@@ -449,6 +487,204 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
     },
     onError: (error) => setMessage(error || 'The ElevenLabs conversation hit a snag.'),
     clientTools: {
+      navigate_to_place: async (args: { place: string }) => {
+        const query = typeof args?.place === 'string' ? args.place.trim() : '';
+        if (query.length < 2) {
+          return JSON.stringify({ success: false, error: 'Place name must be at least 2 characters.' });
+        }
+        try {
+          const place = await geocodeLocation(query);
+          if (!place || !Number.isFinite(place.latitude) || !Number.isFinite(place.longitude)) {
+            return JSON.stringify({ success: false, error: 'Place not found. Ask for a more specific city, country, or landmark.' });
+          }
+          if (place.latitude < -90 || place.latitude > 90 || place.longitude < -180 || place.longitude > 180) {
+            return JSON.stringify({ success: false, error: 'Returned coordinates were out of range.' });
+          }
+          onActionRef.current({ type: 'fly_to', center: [place.longitude, place.latitude], zoom: 6 });
+          recordToolExecution('navigate_to_place', place.name || query, 'WORLDOS Geocoder', []);
+          return JSON.stringify({ success: true, place });
+        } catch (err) {
+          return JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Geocoding failed' });
+        }
+      },
+      search_flights: async (args: { origin: string; destination: string; date?: string }) => {
+        const origin = typeof args?.origin === 'string' ? args.origin.trim() : '';
+        const destination = typeof args?.destination === 'string' ? args.destination.trim() : '';
+        if (origin.length < 2 || destination.length < 2) {
+          return JSON.stringify({ error: 'Both origin and destination are required.', availability: 'unverified' });
+        }
+        try {
+          const [origins, destinations, web] = await Promise.all([
+            fetchAirports(origin, 10).catch(() => []),
+            fetchAirports(destination, 10).catch(() => []),
+            runLiveWebSearch(
+              `flights from ${origin} to ${destination} ${args?.date ? String(args.date).trim() : 'upcoming'} airline schedule`,
+              'auto',
+              6
+            ).catch(() => null),
+          ]);
+          const safeResults = (web?.results || [])
+            .map((r) => ({
+              title: clampText(r.title, 140),
+              url: safeHttpUrl(r.url),
+              snippet: clampText(r.snippet, 220),
+            }))
+            .filter((r) => Boolean(r.url));
+          recordToolExecution(
+            'search_flights',
+            `${origin} -> ${destination}`,
+            'WORLDOS Airport Catalog + Web Leads',
+            safeResults.map((r) => ({ title: r.title, url: r.url! }))
+          );
+          return JSON.stringify({
+            origin_airports: origins,
+            destination_airports: destinations,
+            search: web ? { ...web, results: safeResults } : null,
+            availability: 'unverified',
+            checked_at: new Date().toISOString(),
+            instruction:
+              'Web results are leads only, not live seat inventory or fares. Never invent flight numbers, prices, or seat availability. Ask for date and preferred departure airport if missing, and offer directions via open_airport_directions.',
+          });
+        } catch (e) {
+          return JSON.stringify({ error: String(e), availability: 'unverified' });
+        }
+      },
+      open_airport_directions: async (args: { airport: string }) => {
+        const airportQuery = typeof args?.airport === 'string' ? args.airport.trim() : '';
+        if (airportQuery.length < 2) {
+          return JSON.stringify({ success: false, error: 'Airport name or code is required.' });
+        }
+        try {
+          const place = await geocodeLocation(airportQuery);
+          if (!place || !Number.isFinite(place.latitude) || !Number.isFinite(place.longitude)) {
+            return JSON.stringify({ success: false, error: 'Airport not found.' });
+          }
+          const externalUrl = `https://www.google.com/maps/dir/?api=1&destination=${place.latitude.toFixed(6)},${place.longitude.toFixed(6)}`;
+          onActionRef.current({ type: 'fly_to', center: [place.longitude, place.latitude], zoom: 12 });
+          onOpenNavigation?.(place.name);
+          recordToolExecution('open_airport_directions', place.name, 'WORLDOS Navigation Panel', [
+            { title: `Google Maps Directions to ${place.name}`, url: externalUrl },
+          ]);
+          return JSON.stringify({
+            success: true,
+            destination: place.name,
+            coordinates: [place.longitude, place.latitude],
+            external_directions_url: externalUrl,
+            route_calculated: false,
+            instruction:
+              'Navigation panel opened with this airport as destination. Route is NOT calculated yet — ask the user to enter a starting address or allow browser GPS location, or share external_directions_url.',
+          });
+        } catch (err) {
+          return JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Airport lookup failed' });
+        }
+      },
+      find_places_and_start_tour: async (args: {
+        location: string;
+        category?: 'scenery' | 'food' | 'stays' | 'nightlife';
+        append?: boolean;
+      }) => {
+        const locQuery = typeof args?.location === 'string' ? args.location.trim() : '';
+        if (locQuery.length < 2) {
+          return JSON.stringify({ success: false, error: 'Location is required to start a tour.' });
+        }
+        const allowedCategories = new Set(['scenery', 'food', 'stays', 'nightlife']);
+        const category = args?.category && allowedCategories.has(args.category) ? args.category : 'scenery';
+        try {
+          const center = await geocodeLocation(locQuery);
+          if (!center || !Number.isFinite(center.latitude) || !Number.isFinite(center.longitude)) {
+            return JSON.stringify({ success: false, error: 'Location not found.' });
+          }
+          const [places, local] = await Promise.all([
+            fetchDiscoveredPlaces({ latitude: center.latitude, longitude: center.longitude, category, limit: 8 }).catch(() => []),
+            runLiveWebSearch(`${locQuery} ${category} local recommendations`, 'reddit', 4).catch(() => null),
+          ]);
+          const verified = places
+            .filter(
+              (p) =>
+                p.verified === true &&
+                Number.isFinite(p.latitude) &&
+                Number.isFinite(p.longitude) &&
+                p.latitude >= -90 &&
+                p.latitude <= 90 &&
+                p.longitude >= -180 &&
+                p.longitude <= 180
+            )
+            .map((p) => ({
+              name: clampText(p.name, 120),
+              category: p.category,
+              latitude: p.latitude,
+              longitude: p.longitude,
+              formatted_address: clampText(p.formatted_address, 180),
+              google_rating: typeof p.rating === 'number' ? p.rating : null,
+              user_rating_count: typeof p.user_rating_count === 'number' ? p.user_rating_count : null,
+              google_maps_url: safeHttpUrl(p.google_maps_url),
+              source: 'google_places',
+            }));
+
+          const redditOpinions = (local?.results || [])
+            .map((r) => ({
+              title: clampText(r.title, 140),
+              url: safeHttpUrl(r.url),
+              snippet: clampText(r.snippet, 220),
+              source: 'reddit_discussion',
+            }))
+            .filter((r) => Boolean(r.url));
+
+          const newStops = verified.map((p) => ({ name: p.name, latitude: p.latitude, longitude: p.longitude }));
+          const mergedStops = args?.append ? [...tourRef.current.stops, ...newStops] : newStops;
+          const nextIdx = mergedStops.length
+            ? args?.append && tourRef.current.index >= 0
+              ? tourRef.current.index
+              : 0
+            : -1;
+          tourRef.current = { stops: mergedStops, index: nextIdx };
+          setTourStops(mergedStops);
+          setTourIndex(nextIdx);
+          if (newStops.length > 0 && !args?.append) {
+            onActionRef.current({ type: 'fly_to', center: [newStops[0].longitude, newStops[0].latitude], zoom: 15 });
+          }
+
+          recordToolExecution(
+            'find_places_and_start_tour',
+            `${locQuery} (${category})`,
+            verified.length > 0 ? 'Google Places Verified + Reddit' : 'Google Places Unavailable / Empty',
+            redditOpinions.map((r) => ({ title: r.title, url: r.url! }))
+          );
+
+          return JSON.stringify({
+            success: verified.length > 0 || redditOpinions.length > 0,
+            verified_places_count: verified.length,
+            google_places: verified,
+            reddit_opinions: redditOpinions,
+            total_tour_stops: mergedStops.length,
+            instruction:
+              'Keep Google ratings (google_places) strictly separate from Reddit opinions (reddit_opinions). Never assign a numeric star rating to Reddit threads. If google_places is empty, explain that verified place listings are unavailable right now and share only cited Reddit links if present. Use move_tour_stop to step through stops.',
+          });
+        } catch (err) {
+          return JSON.stringify({ success: false, error: err instanceof Error ? err.message : 'Tour lookup failed' });
+        }
+      },
+      move_tour_stop: async (args: { direction?: 'next' | 'previous'; stop_number?: number }) => {
+        const { stops, index } = tourRef.current;
+        if (!stops.length) {
+          return JSON.stringify({ success: false, message: 'No active tour stops. Run find_places_and_start_tour first.', total: 0 });
+        }
+        let next: number;
+        if (typeof args?.stop_number === 'number') {
+          next = Math.trunc(args.stop_number) - 1;
+        } else {
+          const base = index < 0 ? 0 : index;
+          next = args?.direction === 'previous' ? base - 1 : base + 1;
+        }
+        if (!Number.isInteger(next) || next < 0 || next >= stops.length) {
+          return JSON.stringify({ success: false, message: 'No stop at that position', current_index: index + 1, total: stops.length });
+        }
+        const stop = stops[next];
+        tourRef.current = { stops, index: next };
+        setTourIndex(next);
+        onActionRef.current({ type: 'fly_to', center: [stop.longitude, stop.latitude], zoom: 15 });
+        return JSON.stringify({ success: true, stop_number: next + 1, total: stops.length, stop });
+      },
       get_worldos_map_context: async () => {
         setEvidence([]);
         try {
@@ -482,7 +718,7 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
         return JSON.stringify({ success: true, message: `${args.layer_id} is now ${args.visible ? 'visible' : 'hidden'}.` });
       },
       fly_to_location: async (args: { longitude: number; latitude: number; zoom?: number }) => {
-        if (typeof args.longitude !== 'number' || typeof args.latitude !== 'number') {
+        if (!Number.isFinite(args.longitude) || !Number.isFinite(args.latitude)) {
           return JSON.stringify({ success: false, message: 'Invalid coordinates' });
         }
         if (args.longitude < -180 || args.longitude > 180 || args.latitude < -90 || args.latitude > 90) {
@@ -646,9 +882,6 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
 
   // Preserve messages and evidence across panel open/close so the user doesn't lose context
   useEffect(() => {
-    if (!isOpen && conversation.status !== 'disconnected') {
-      void conversation.endSession();
-    }
     if (!isOpen) {
       setQuestion('');
     }
@@ -662,9 +895,12 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
   }, [messages]);
 
   const startConversation = async () => {
+    if (startingRef.current || conversation.status !== 'disconnected') return;
+    startingRef.current = true;
     setIsStarting(true);
     setMessage('Connecting to your WORLDOS assistant…');
     try {
+      await wakeReleaseRef.current?.();
       const session = await getAssistantSession();
       if (session.signedUrl) {
         await conversation.startSession({ signedUrl: session.signedUrl });
@@ -677,9 +913,16 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
     } catch (error) {
       setMessage(error instanceof Error ? error.message : 'Could not connect to ElevenLabs.');
     } finally {
+      startingRef.current = false;
       setIsStarting(false);
     }
   };
+
+  const wake = useWakeWord(agentName, isStarting || conversation.status !== 'disconnected', () => {
+    onWake?.();
+    void startConversation();
+  });
+  wakeReleaseRef.current = wake.releaseMicrophone;
 
   const sendQuestion = (event: FormEvent) => {
     event.preventDefault();
@@ -715,7 +958,12 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
     } catch { setMessage('This browser could not update preferences.'); }
   };
 
-  if (!isOpen) return null;
+  if (!isOpen) return (wake.enabled || conversation.status !== 'disconnected') ? (
+    <div className="assistant-background-status" role="status">
+      <button onClick={onWake}>{agentName}: {conversation.status === 'connected' ? 'Voice active' : wake.status}</button>
+      <button onClick={() => {wake.setEnabled(false);void conversation.endSession();}}>Stop microphone</button>
+    </div>
+  ) : null;
 
   return (
     <section className="assistant-panel" aria-label="WORLDOS assistant" aria-modal="false">
@@ -817,7 +1065,9 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
                     <div className="assistant-plan-activity-item" key={i}>
                       <div className="assistant-act-header">
                         <span className="assistant-act-time">{act.time_of_day}</span>
-                        <span className="assistant-act-rating">★ {act.rating?.toFixed(1) || '4.6'}</span>
+                        {typeof act.rating === 'number' && (
+                          <span className="assistant-act-rating">★ {act.rating.toFixed(1)}</span>
+                        )}
                       </div>
                       <strong className="assistant-act-title">{act.title}</strong>
                       <p className="assistant-act-desc">{act.description}</p>
@@ -1044,6 +1294,25 @@ const AssistantPanelSession: React.FC<AssistantPanelProps> = ({
             <span><Volume2 size={14} /> {conversation.status}</span>
           </div>
         </form>
+        <div className="assistant-wake-controls">
+          <button type="button" className="assistant-control-button" disabled={!wake.supported}
+            onClick={() => wake.setEnabled(!wake.enabled)}>
+            {wake.enabled ? 'Disable wake word' : `Enable “Hey ${agentName}”`}
+          </button>
+          <small>{wake.supported ? (wake.enabled ? wake.status : 'Opt in to microphone listening while this page is visible. Your browser may use its speech service.') : 'Wake words are unavailable in this browser. Use Start voice.'}</small>
+        </div>
+        {tourStops.length > 0 && <div className="assistant-tour-controls">
+          <strong>Stop {tourIndex+1} of {tourStops.length}: {tourStops[tourIndex]?.name}</strong>
+          {(['previous','next'] as const).map(direction => {
+            const index=tourIndex+(direction==='next'?1:-1);
+            return <button type="button" key={direction} disabled={index<0||index>=tourStops.length} onClick={()=>{
+              tourRef.current={stops:tourStops,index};
+              setTourIndex(index); const stop=tourStops[index];
+              onActionRef.current({type:'fly_to',center:[stop.longitude,stop.latitude],zoom:15});
+            }}>{direction==='next'?'Next stop':'Previous stop'}</button>;
+          })}
+          <button type="button" onClick={()=>{tourRef.current={stops:[],index:-1};setTourStops([]);setTourIndex(-1);}}>Clear stops</button>
+        </div>}
         <div className="assistant-status" aria-live="polite">{message}</div>
       </div>
     </section>

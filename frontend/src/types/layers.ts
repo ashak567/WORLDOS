@@ -137,7 +137,7 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     description: 'USGS magnitude 2.5+ earthquake events from the past 24 hours, including the publisher tsunami flag where present.',
     source: 'USGS Real-Time GeoJSON Feed',
     color: '#f97316', // Orange
-    enabled: true,
+    enabled: false,
     count: 0,
     truthClass: 'OBSERVED',
     loading: false,
@@ -149,7 +149,7 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     description: 'NASA EONET point events and track endpoints plus GDACS alerts, including cyclones, tsunami alerts, volcanoes, floods, and wildfires.',
     source: 'NASA EONET · GDACS',
     color: '#fb7185',
-    enabled: true,
+    enabled: false,
     count: 0,
     truthClass: 'OBSERVED',
     loading: false,
@@ -161,7 +161,7 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
     description: 'NASA FIRMS satellite thermal anomalies with Fire Radiative Power and brightness; requires a free FIRMS map key. Keyless wildfire events are in Global Hazards & Alerts.',
     source: 'NASA FIRMS (VIIRS / MODIS) · key required',
     color: '#ef4444', // Red
-    enabled: true,
+    enabled: false,
     count: 0,
     truthClass: 'OBSERVED',
     loading: false,
@@ -192,10 +192,10 @@ export const INITIAL_LAYERS: LayerDefinition[] = [
   },
   {
     id: 'live-clouds',
-    name: 'Satellite Infrared Clouds (SSEC RealEarth)',
+    name: 'Satellite Infrared Clouds (EUMETSAT)',
     category: 'weather',
-    description: 'Hourly global infrared satellite cloud mosaic from UW–Madison SSEC RealEarth with 3-frame playback. Cockpit 3D cloud shapes are brightness-based estimates.',
-    source: 'UW–Madison SSEC RealEarth · Global Infrared',
+    description: '3-hourly global infrared satellite cloud mosaic from EUMETSAT Multimission (mumi:worldcloudmap_ir108) with 3-frame playback. Cockpit 3D cloud shapes are brightness-based estimates.',
+    source: 'EUMETSAT · Multimission Infrared (IR 10.8 μm)',
     color: '#e2e8f0', // Crisp Cloud White
     enabled: true,
     count: 1,

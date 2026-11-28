@@ -1,3 +1,4 @@
+import { loadCloudImage } from '../utils/cloudFrames';
 import React, { useEffect, useRef, useState } from 'react';
 import {
   ArcGISTiledElevationTerrainProvider,
@@ -17,6 +18,8 @@ import {
   GeoJsonDataSource,
   GoogleMaps,
   HeadingPitchRange,
+  HeightReference,
+  SingleTileImageryProvider,
   Ion,
   LabelStyle,
   Math as CesiumMath,
@@ -433,7 +436,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           },
         });
 
-        // Estimate local 3D clouds based on SSEC RealEarth satellite IR brightness at aircraft coordinates
+        // Estimate local 3D clouds based on EUMETSAT IR satellite brightness at aircraft coordinates
         if (cloudsEnabled) {
           void sampleSatelliteCloudBrightness(lon, lat, cloudFrameRef.current?.rawTime).then((estimate) => {
             if (!cockpitAircraftRef.current) return;
@@ -1375,18 +1378,21 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       .catch(() => {});
   }, [layers, geometries, webglStatus]);
 
-  // Synchronize UW–Madison SSEC RealEarth Hourly Infrared Cloud Layer (handles missing tiles cleanly)
+  const cloudsEnabled = layers.find((l) => l.id === 'live-clouds')?.enabled ?? true;
+
+  // Synchronize the latest complete EUMETSAT IR image; retain the previous image on failure
   useEffect(() => {
     const viewer = viewerRef.current;
     if (!viewer || viewer.isDestroyed()) return;
 
-    const cloudsEnabled = layers.find((l) => l.id === 'live-clouds')?.enabled ?? true;
     onCloudTileErrorRef.current?.(0);
 
     if (!cloudsEnabled || !cloudFrame) {
       if (cloudImageryLayerRef.current) {
         try {
-          viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+          if (viewer.imageryLayers.contains(cloudImageryLayerRef.current)) {
+            viewer.imageryLayers.remove(cloudImageryLayerRef.current);
+          }
         } catch {}
         cloudImageryLayerRef.current = null;
         viewer.scene.requestRender();
@@ -1394,33 +1400,25 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       return;
     }
 
-    let tileErrors = 0;
-    const prevLayer = cloudImageryLayerRef.current;
-    try {
-      const cloudProvider = new UrlTemplateImageryProvider({
-        url: cloudFrame.tileUrlTemplate,
-        maximumLevel: 3,
-        credit: 'UW–Madison SSEC RealEarth Global Infrared',
+    let cancelled = false;
+    void loadCloudImage(cloudFrame).then(async ({ url }) => {
+      const provider = await SingleTileImageryProvider.fromUrl(url, {
+        credit: 'Contains modified EUMETSAT / multimission infrared data ' + cloudFrame.utcIso.slice(0, 4),
       });
-      cloudProvider.errorEvent.addEventListener(() => {
-        tileErrors += 1;
-        onCloudTileErrorRef.current?.(tileErrors);
-      });
-      const nextLayer = viewer.imageryLayers.addImageryProvider(cloudProvider);
-      nextLayer.alpha = 0.78;
-      nextLayer.brightness = 1.15;
-      nextLayer.contrast = 1.15;
-      cloudImageryLayerRef.current = nextLayer;
-      if (prevLayer && prevLayer !== nextLayer) {
-        try {
-          viewer.imageryLayers.remove(prevLayer);
-        } catch {}
+      if (cancelled || viewer.isDestroyed()) return;
+      const previous = cloudImageryLayerRef.current;
+      const next = viewer.imageryLayers.addImageryProvider(provider);
+      next.alpha = 0.78;
+      cloudImageryLayerRef.current = next;
+      if (previous && previous !== next && viewer.imageryLayers.contains(previous)) {
+        viewer.imageryLayers.remove(previous);
       }
       viewer.scene.requestRender();
-    } catch (err) {
-      console.warn('RealEarth cloud layer error (leaving base globe active):', err);
-    }
-  }, [cloudFrame, layers, basemapGeneration, webglStatus]);
+    }).catch(() => {
+      if (!cancelled) onCloudTileErrorRef.current?.(1);
+    });
+    return () => { cancelled = true; };
+  }, [cloudsEnabled, cloudFrame, basemapGeneration, webglStatus]);
 
   // Keep RainViewer radar metadata updated
   useEffect(() => {
@@ -1490,7 +1488,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
       radarImageryLayerRef.current = null;
     }
 
-    // 1. Live SSEC RealEarth Infrared Satellite Clouds (Hourly observation frames + Cockpit local cloud estimate)
+    // 1. Live EUMETSAT Infrared Satellite Clouds (Cockpit local cloud estimate)
     const cloudsEnabled = layerMap.get('live-clouds') ?? true;
     const cloudBillboards = cloudBillboardsRef.current ?? viewer.scene.primitives.add(new BillboardCollection());
     cloudBillboardsRef.current = cloudBillboards;
@@ -1894,7 +1892,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
                 : Color.HOTPINK;
         const ent = viewer.entities.add({
           position: Cartesian3.fromDegrees(point[0], point[1], 0),
-          point: { pixelSize: 8, color, outlineColor: Color.WHITE, outlineWidth: 1 },
+          point: { heightReference: HeightReference.CLAMP_TO_GROUND, pixelSize: 8, color, outlineColor: Color.WHITE, outlineWidth: 1 },
         });
         (ent as any)._worldosType = 'event';
         (ent as any)._worldosData = event;
@@ -1942,6 +1940,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const ent = viewer.entities.add({
           position,
           billboard: {
+            heightReference: HeightReference.CLAMP_TO_GROUND,
             image: f.attributes?.confidence_level === 'high' ? FIRE_ICON_RED : FIRE_ICON_ORANGE,
             width: 24,
             height: 24,
@@ -1972,6 +1971,7 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
         const ent = viewer.entities.add({
           position: Cartesian3.fromDegrees(lon, lat, 0),
           point: {
+            heightReference: HeightReference.CLAMP_TO_GROUND,
             pixelSize: Math.max(6, Math.min(22, mag * 3)),
             color,
             outlineColor: Color.WHITE,
@@ -2043,8 +2043,8 @@ export const GlobeEngine3D: React.FC<GlobeEngine3DProps> = ({
           },
           label: {
             text: isSelected
-              ? `📍 ${place.name.toUpperCase()}\n★ ${place.rating ? place.rating.toFixed(1) : '4.8'} · ${place.category.toUpperCase()} · ${place.price_level || '$$$'}\n${place.formatted_address}`
-              : `${place.name} ★${place.rating ? place.rating.toFixed(1) : '4.8'}`,
+              ? `📍 ${place.name.toUpperCase()}\n${typeof place.rating === 'number' ? `★ ${place.rating.toFixed(1)} · ` : ''}${place.category.toUpperCase()}${place.price_level ? ` · ${place.price_level}` : ''}\n${place.formatted_address}`
+              : `${place.name}${typeof place.rating === 'number' ? ` ★${place.rating.toFixed(1)}` : ''}`,
             font: isSelected ? 'bold 12px "JetBrains Mono", sans-serif' : '10px "JetBrains Mono", sans-serif',
             fillColor: isSelected ? Color.fromCssColorString('#facc15') : Color.WHITE,
             outlineColor: Color.BLACK,

@@ -589,14 +589,14 @@ export const EntityDetailsPanel: React.FC<EntityDetailsPanelProps> = ({
     sourceName = 'Google Maps Platform · Places API (New)';
     previewImageUrl = data.photos && data.photos.length > 0 ? data.photos[0] : undefined;
     quickStats = [
-      { label: 'RATING', value: data.rating ? `★ ${data.rating.toFixed(1)}` : '★ 4.8', color: '#eab308' },
-      { label: 'REVIEWS', value: data.user_rating_count ? data.user_rating_count.toLocaleString() : '1k+', color: '#38bdf8' },
-      { label: 'PRICE', value: data.price_level || '$$$', color: '#10b981' },
+      { label: 'RATING', value: typeof data.rating === 'number' ? `★ ${data.rating.toFixed(1)}` : 'Unrated', color: '#eab308' },
+      { label: 'REVIEWS', value: typeof data.user_rating_count === 'number' ? data.user_rating_count.toLocaleString() : 'N/A', color: '#38bdf8' },
+      { label: 'PRICE', value: data.price_level || 'N/A', color: '#10b981' },
       { label: 'CATEGORY', value: data.category?.toUpperCase() || 'STAYS', color: '#a855f7' },
     ];
     properties = {
       'Formatted Address': data.formatted_address,
-      'Price Tier': `${data.price_level || '$$$'} (${data.price_display || 'Upscale'})`,
+      'Price Tier': data.price_level ? `${data.price_level} (${data.price_display || 'Verified'})` : undefined,
       'Editorial Summary': data.summary,
       'Google Maps URL': data.google_maps_url,
       'Coordinates': `[${data.latitude?.toFixed(4)}°, ${data.longitude?.toFixed(4)}°]`,

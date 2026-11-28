@@ -252,19 +252,23 @@ export const PlaceDiscoveryDeck: React.FC<PlaceDiscoveryDeckProps> = ({
                     <img src={heroPhoto} alt={place.name} className="places-card-img" loading="lazy" />
                     <div className="places-card-badge-top-left">
                       <span className="places-badge-price">
-                        {place.price_level || '$$$'} · {place.price_display || 'Upscale'}
+                        {place.price_level ? `${place.price_level}${place.price_display ? ` · ${place.price_display}` : ''}` : place.category.toUpperCase()}
                       </span>
                     </div>
 
-                    <div className="places-card-badge-top-right">
-                      <span className="places-badge-rating">
-                        <Star size={11} fill="#eab308" color="#eab308" />
-                        <span>{place.rating ? place.rating.toFixed(1) : '4.8'}</span>
-                        <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
-                          ({place.user_rating_count ? place.user_rating_count.toLocaleString() : '350+'})
+                    {typeof place.rating === 'number' && (
+                      <div className="places-card-badge-top-right">
+                        <span className="places-badge-rating">
+                          <Star size={11} fill="#eab308" color="#eab308" />
+                          <span>{place.rating.toFixed(1)}</span>
+                          {typeof place.user_rating_count === 'number' && (
+                            <span style={{ fontSize: '9px', color: 'var(--text-muted)' }}>
+                              ({place.user_rating_count.toLocaleString()})
+                            </span>
+                          )}
                         </span>
-                      </span>
-                    </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="places-card-body">

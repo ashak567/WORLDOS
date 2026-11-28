@@ -25,6 +25,7 @@ import {
   LocateFixed,
   Play,
   Radio,
+  ExternalLink,
 } from 'lucide-react';
 import {
   FlightPlansResponse,
@@ -881,6 +882,12 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
           {/* Active Road Route Summary */}
           {activeRoadRoute && (
             <div className="road-route-summary-card">
+              {activeRoadRoute.is_estimated && (
+                <div className="nav-error-banner" role="status" style={{ marginBottom: '8px' }}>
+                  {activeRoadRoute.limitation_note ||
+                    'Live road routing unavailable — showing straight-line distance estimate only.'}
+                </div>
+              )}
               <div className="road-summary-header">
                 <div>
                   <div className="road-metrics-row">
@@ -902,6 +909,19 @@ export const NavigationDeck: React.FC<NavigationDeckProps> = ({
                   <Trash2 size={14} />
                 </button>
               </div>
+
+              {activeRoadRoute.external_directions_url && (
+                <a
+                  href={activeRoadRoute.external_directions_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="nav-action-btn secondary full-width"
+                  style={{ display: 'inline-flex', alignItems: 'center', justifyContent: 'center', gap: '6px', marginBottom: '8px', textDecoration: 'none' }}
+                >
+                  <ExternalLink size={14} />
+                  <span>Open External Turn-by-Turn Directions</span>
+                </a>
+              )}
 
               {/* Start Live Navigation / Driving Mode Action */}
               <div className="nav-drive-mode-actions">
